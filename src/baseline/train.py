@@ -258,7 +258,7 @@ def parse_args():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=3,
+        default=5,
         help="Số epoch train",
     )
     parser.add_argument(
