@@ -1,30 +1,52 @@
+import argparse
 import json
 import os
-import argparse
-from typing import List, Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-
-from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 from torch.optim import AdamW
+from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import classification_report, accuracy_score
 from tqdm.auto import tqdm
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class AspectSentimentDataset(Dataset):
+    """
+    Dataset for Aspect Sentiment Classification (ASC).
+
+    Each JSON file is expected to be a dict of:
+        id: {
+            "sentence": str,
+            "term": str,
+            "polarity": str
+        }
+
+    This dataset:
+      1. Builds or uses a given label2id mapping.
+      2. Tokenizes both sentence and aspect term separately.
+    """
+
     def __init__(
         self,
         json_path: str,
         tokenizer,
         max_len_sent: int = 128,
         max_len_term: int = 16,
-        label2id: Dict[str, int] = None,
-    ):
+        label2id: Optional[Dict[str, int]] = None,
+    ) -> None:
+        """
+        Args:
+            json_path: Path to the JSON file with ASC samples.
+            tokenizer: Hugging Face tokenizer instance.
+            max_len_sent: Maximum sequence length for the full sentence.
+            max_len_term: Maximum sequence length for the aspect term.
+            label2id: Optional precomputed mapping from label string to id.
+        """
         self.tokenizer = tokenizer
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
@@ -34,17 +56,17 @@ class AspectSentimentDataset(Dataset):
 
         self.samples = list(raw.values())
 
-        # Nếu không truyền label2id thì tự build từ dữ liệu
+        # Build label mapping if not provided
         if label2id is None:
-            labels = sorted(list({s["polarity"] for s in self.samples}))
+            labels = sorted({s["polarity"] for s in self.samples})
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
         sentence = item["sentence"]
         term = item["term"]
@@ -52,7 +74,7 @@ class AspectSentimentDataset(Dataset):
 
         label = self.label2id[label_str]
 
-        # Encode sentence
+        # Encode full sentence
         sent_enc = self.tokenizer(
             sentence,
             truncation=True,
@@ -60,6 +82,7 @@ class AspectSentimentDataset(Dataset):
             max_length=self.max_len_sent,
             return_tensors="pt",
         )
+
         # Encode aspect term
         term_enc = self.tokenizer(
             term,
@@ -69,39 +92,74 @@ class AspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        out = {
+        return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "label": torch.tensor(label, dtype=torch.long),
         }
-        return out
 
 
 class BertConcatClassifier(nn.Module):
     """
-    BERT encoder dùng chung cho sentence và term.
-    Fusion: concat [CLS]_sent và [CLS]_term.
+    BERT based classifier for Aspect Sentiment Classification.
+
+    A single BERT encoder is shared for both the sentence and the aspect term.
+    Supported fusion methods for the two CLS embeddings:
+
+        1. "concat": [CLS_sent ; CLS_term]       → dim = 2 * hidden
+        2. "add":    CLS_sent + CLS_term         → dim = hidden
+        3. "mul":    CLS_sent * CLS_term         → dim = hidden (Hadamard product)
+
+    For "concat" we use a separate classifier head with input size 2 * hidden.
+    For "add" and "mul" we use a classifier head with input size hidden.
     """
 
-    def __init__(self, model_name: str, num_labels: int, dropout: float = 0.1):
+    def __init__(self, model_name: str, num_labels: int, dropout: float = 0.1) -> None:
+        """
+        Args:
+            model_name: Name of the pretrained model on Hugging Face hub.
+            num_labels: Number of sentiment labels.
+            dropout: Dropout probability for the classification head.
+        """
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
 
         self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(2 * hidden_size, num_labels)
+
+        # Classifier for concat fusion
+        self.classifier_concat = nn.Linear(2 * hidden_size, num_labels)
+
+        # Classifier for single hidden dimension fusions (add or mul)
+        self.classifier_single = nn.Linear(hidden_size, num_labels)
 
     def forward(
         self,
-        input_ids_sent,
-        attention_mask_sent,
-        input_ids_term,
-        attention_mask_term,
-        labels=None,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
         fusion_method: str = "concat",
-    ):
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass.
+
+        Args:
+            input_ids_sent: Token ids for the sentence.
+            attention_mask_sent: Attention mask for the sentence.
+            input_ids_term: Token ids for the aspect term.
+            attention_mask_term: Attention mask for the aspect term.
+            labels: Optional ground truth labels.
+            fusion_method: Fusion strategy, one of {"concat", "add", "mul"}.
+
+        Returns:
+            A dict with:
+                "logits": Tensor of shape [batch_size, num_labels].
+                "loss": Cross entropy loss if labels is provided, else None.
+        """
         # Encode sentence
         out_sent = self.encoder(
             input_ids=input_ids_sent,
@@ -114,16 +172,23 @@ class BertConcatClassifier(nn.Module):
             input_ids=input_ids_term,
             attention_mask=attention_mask_term,
         )
-        cls_term = out_term.last_hidden_state[:, 0, :]
+        cls_term = out_term.last_hidden_state[:, 0, :]  # [batch, hidden]
 
-        # Fusion concat
+        # Fusion
         if fusion_method == "concat":
-            fused = torch.cat([cls_sent, cls_term], dim=-1)  # [batch, 2*hidden]
+            fused = torch.cat([cls_sent, cls_term], dim=-1)  # [batch, 2 * hidden]
+            logits = self.classifier_concat(self.dropout(fused))
+
+        elif fusion_method == "add":
+            fused = cls_sent + cls_term  # [batch, hidden]
+            logits = self.classifier_single(self.dropout(fused))
+
+        elif fusion_method == "mul":
+            fused = cls_sent * cls_term  # [batch, hidden]
+            logits = self.classifier_single(self.dropout(fused))
+
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
-
-        fused = self.dropout(fused)
-        logits = self.classifier(fused)
 
         loss = None
         if labels is not None:
@@ -133,12 +198,31 @@ class BertConcatClassifier(nn.Module):
         return {"loss": loss, "logits": logits}
 
 
-def train_one_epoch(model, dataloader, optimizer, scheduler=None, fusion_method: str = "concat"):
+def train_one_epoch(
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler=None,
+    fusion_method: str = "concat",
+) -> float:
+    """
+    Train the model for one epoch.
+
+    Args:
+        model: The classification model.
+        dataloader: Training dataloader.
+        optimizer: Optimizer instance.
+        scheduler: Optional learning rate scheduler.
+        fusion_method: Fusion strategy passed to the model.
+
+    Returns:
+        Average training loss over the epoch.
+    """
     model.train()
     total_loss = 0.0
+
     for batch in tqdm(dataloader, desc="Training"):
-        for k in batch:
-            batch[k] = batch[k].to(DEVICE)
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
             input_ids_sent=batch["input_ids_sent"],
@@ -154,22 +238,42 @@ def train_one_epoch(model, dataloader, optimizer, scheduler=None, fusion_method:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
         if scheduler is not None:
             scheduler.step()
 
         total_loss += loss.item()
+
     return total_loss / len(dataloader)
 
 
-def eval_model(model, dataloader, id2label=None, verbose_report=False, fusion_method: str = "concat"):
+def eval_model(
+    model: nn.Module,
+    dataloader: DataLoader,
+    id2label: Optional[Dict[int, str]] = None,
+    verbose_report: bool = False,
+    fusion_method: str = "concat",
+) -> float:
+    """
+    Evaluate the model and compute accuracy.
+
+    Args:
+        model: The classification model.
+        dataloader: Evaluation dataloader.
+        id2label: Optional mapping from label id to label string.
+        verbose_report: If True, print a full classification report.
+        fusion_method: Fusion strategy passed to the model.
+
+    Returns:
+        Accuracy on the given dataloader.
+    """
     model.eval()
     all_preds = []
     all_labels = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating"):
-            for k in batch:
-                batch[k] = batch[k].to(DEVICE)
+            batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
             outputs = model(
                 input_ids_sent=batch["input_ids_sent"],
@@ -195,9 +299,12 @@ def eval_model(model, dataloader, id2label=None, verbose_report=False, fusion_me
     return acc
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command line arguments for ASC training script.
+    """
     parser = argparse.ArgumentParser(
-        description="BERT classifier for Aspect Sentiment Classification with sentence term concat fusion"
+        description="BERT classifier for Aspect Sentiment Classification with sentence term fusion"
     )
 
     # Model and tokenizer
@@ -205,7 +312,7 @@ def parse_args():
         "--model_name",
         type=str,
         default="bert-base-uncased",
-        help="Tên pretrained model trong HuggingFace",
+        help="Name of the pretrained model on Hugging Face",
     )
 
     # Data paths
@@ -213,33 +320,33 @@ def parse_args():
         "--train_path",
         type=str,
         default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/train.json",
-        help="Đường dẫn file train json",
+        help="Path to training JSON file",
     )
     parser.add_argument(
         "--val_path",
         type=str,
         default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/dev.json",
-        help="Đường dẫn file validation json",
+        help="Path to validation JSON file",
     )
     parser.add_argument(
         "--test_path",
         type=str,
         default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/test.json",
-        help="Đường dẫn file test json",
+        help="Path to test JSON file",
     )
 
-    # Sequence length
+    # Sequence lengths
     parser.add_argument(
         "--max_len_sent",
         type=int,
         default=128,
-        help="Max length cho câu",
+        help="Maximum length for the full sentence",
     )
     parser.add_argument(
         "--max_len_term",
         type=int,
         default=16,
-        help="Max length cho aspect term",
+        help="Maximum length for the aspect term",
     )
 
     # Training hyperparameters
@@ -247,19 +354,19 @@ def parse_args():
         "--train_batch_size",
         type=int,
         default=16,
-        help="Batch size cho train",
+        help="Batch size for training",
     )
     parser.add_argument(
         "--eval_batch_size",
         type=int,
         default=32,
-        help="Batch size cho val và test",
+        help="Batch size for validation and test",
     )
     parser.add_argument(
         "--epochs",
         type=int,
         default=5,
-        help="Số epoch train",
+        help="Number of training epochs",
     )
     parser.add_argument(
         "--lr",
@@ -271,22 +378,22 @@ def parse_args():
         "--dropout",
         type=float,
         default=0.1,
-        help="Dropout cho classifier",
+        help="Dropout probability for the classifier",
     )
     parser.add_argument(
         "--warmup_ratio",
         type=float,
         default=0.1,
-        help="Tỉ lệ warmup trên tổng số step",
+        help="Warmup ratio over total training steps",
     )
 
-    # Fusion method (hiện tại mới hỗ trợ concat)
+    # Fusion method
     parser.add_argument(
         "--fusion_method",
         type=str,
         default="concat",
-        choices=["concat"],
-        help="Phương pháp fusion giữa sentence và term representation",
+        choices=["concat", "add", "mul"],
+        help="Fusion method between sentence and term representations",
     )
 
     # Saving
@@ -294,42 +401,50 @@ def parse_args():
         "--output_dir",
         type=str,
         default="saved_model",
-        help="Thư mục lưu checkpoint",
+        help="Directory to save the model checkpoint",
     )
     parser.add_argument(
         "--output_name",
         type=str,
         default="bert_concat_asc.pt",
-        help="Tên file model state_dict",
+        help="Filename for the saved model state_dict",
     )
 
     # Misc
     parser.add_argument(
         "--verbose_report",
         action="store_true",
-        help="In classification report trên test set",
+        help="Print detailed classification report on the test set",
     )
 
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
-def main(args):
+def main(args: argparse.Namespace) -> None:
+    """
+    Main training and evaluation pipeline.
+
+    Steps:
+        1. Load tokenizer and build datasets.
+        2. Initialize model and optimizer.
+        3. Train for several epochs and track best validation accuracy.
+        4. Evaluate the best model on the test set.
+        5. Save the best model state_dict to disk.
+    """
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
-    # Tạo dataset train trước để lấy label2id
-    temp_train_dataset = AspectSentimentDataset(
+    # Build training dataset first to obtain label2id
+    train_dataset = AspectSentimentDataset(
         json_path=args.train_path,
         tokenizer=tokenizer,
         max_len_sent=args.max_len_sent,
         max_len_term=args.max_len_term,
         label2id=None,
     )
-    label2id = temp_train_dataset.label2id
+    label2id = train_dataset.label2id
     id2label = {v: k for k, v in label2id.items()}
     print("Label mapping:", label2id)
 
-    train_dataset = temp_train_dataset
     val_dataset = AspectSentimentDataset(
         json_path=args.val_path,
         tokenizer=tokenizer,
@@ -345,9 +460,21 @@ def main(args):
         label2id=label2id,
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.eval_batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.train_batch_size,
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+    )
 
     model = BertConcatClassifier(
         model_name=args.model_name,
@@ -355,10 +482,9 @@ def main(args):
         dropout=args.dropout,
     ).to(DEVICE)
 
-    epochs = args.epochs
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    total_steps = len(train_loader) * epochs
+    total_steps = len(train_loader) * args.epochs
     warmup_steps = int(args.warmup_ratio * total_steps)
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
@@ -369,8 +495,8 @@ def main(args):
     best_val_acc = 0.0
     best_state_dict = None
 
-    for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
+    for epoch in range(args.epochs):
+        print(f"Epoch {epoch + 1}/{args.epochs}")
         avg_loss = train_one_epoch(
             model,
             train_loader,
@@ -394,7 +520,7 @@ def main(args):
             best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             print("New best model on validation, saving in memory")
 
-    # Load best model theo val
+    # Load best model according to validation accuracy
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         model.to(DEVICE)
@@ -412,7 +538,7 @@ def main(args):
     )
     print(f"Test accuracy: {test_acc:.4f}")
 
-    # Lưu model ra file
+    # Save model to file
     os.makedirs(args.output_dir, exist_ok=True)
     save_path = os.path.join(args.output_dir, args.output_name)
     torch.save(model.state_dict(), save_path)
@@ -420,5 +546,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    cli_args = parse_args()
+    main(cli_args)
