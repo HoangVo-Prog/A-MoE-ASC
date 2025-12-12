@@ -16,21 +16,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class AspectSentimentDataset(Dataset):
-    """
-    Dataset for Aspect Sentiment Classification (ASC).
-
-    Each JSON file is expected to be a dict of:
-        id: {
-            "sentence": str,
-            "term": str,
-            "polarity": str
-        }
-
-    This dataset:
-      1. Builds or uses a given label2id mapping.
-      2. Tokenizes both sentence and aspect term separately.
-    """
-
     def __init__(
         self,
         json_path: str,
@@ -39,26 +24,21 @@ class AspectSentimentDataset(Dataset):
         max_len_term: int = 16,
         label2id: Optional[Dict[str, int]] = None,
     ) -> None:
-        """
-        Args:
-            json_path: Path to the JSON file with ASC samples.
-            tokenizer: Hugging Face tokenizer instance.
-            max_len_sent: Maximum sequence length for the full sentence.
-            max_len_term: Maximum sequence length for the aspect term.
-            label2id: Optional precomputed mapping from label string to id.
-        """
         self.tokenizer = tokenizer
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
 
         with open(json_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+            self.samples = json.load(f)
 
-        self.samples = list(raw.values())
+        # sanity check
+        for i, s in enumerate(self.samples[:5]):
+            if not {"sentence", "aspect", "sentiment"} <= s.keys():
+                raise ValueError(f"Invalid sample at index {i}: {s}")
 
-        # Build label mapping if not provided
+        # build label mapping from TRAIN only
         if label2id is None:
-            labels = sorted({s["polarity"] for s in self.samples})
+            labels = sorted({s["sentiment"] for s in self.samples})
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
@@ -68,13 +48,11 @@ class AspectSentimentDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
+
         sentence = item["sentence"]
-        term = item["term"]
-        label_str = item["polarity"]
+        term = item["aspect"]
+        label = self.label2id[item["sentiment"]]
 
-        label = self.label2id[label_str]
-
-        # Encode full sentence
         sent_enc = self.tokenizer(
             sentence,
             truncation=True,
@@ -83,7 +61,6 @@ class AspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        # Encode aspect term
         term_enc = self.tokenizer(
             term,
             truncation=True,
@@ -99,6 +76,7 @@ class AspectSentimentDataset(Dataset):
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "label": torch.tensor(label, dtype=torch.long),
         }
+
 
 
 class BertConcatClassifier(nn.Module):
