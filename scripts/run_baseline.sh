@@ -1,4 +1,4 @@
-!python src/baseline/train.py \
+python src/baseline/train.py \
     --model_name roberta-base \
     --train_path dataset/asc/rest14/train.json \
     --test_path dataset/asc/rest14/test.json \

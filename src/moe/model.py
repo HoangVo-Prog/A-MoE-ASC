@@ -54,15 +54,20 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
             head_mask=None,
             encoder_hidden_states=None,
             encoder_attention_mask=None,
-            past_key_value=None,
             output_attentions=False,
+            **kwargs,
         ):
+            # transformers có thể truyền past_key_value hoặc past_key_values tùy version
+            past = kwargs.get("past_key_value", None)
+            if past is None:
+                past = kwargs.get("past_key_values", None)
+
             self_attention_outputs = self.attention(
                 hidden_states,
                 attention_mask,
                 head_mask,
                 output_attentions=output_attentions,
-                past_key_value=past_key_value,
+                past_key_value=past,  # attention module dùng key này
             )
             attention_output = self_attention_outputs[0]
             outputs = self_attention_outputs[1:]
@@ -79,18 +84,15 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
                 attention_output = cross_attention_outputs[0]
                 outputs = outputs + cross_attention_outputs[1:]
 
+            # token_mask 2D cho route mask pad, tránh dùng extended mask 4D
             token_mask = None
             if attention_mask is not None:
-                # HF BERT passes extended mask: [B,1,1,T], keep tokens are 0, masked are negative
                 if attention_mask.dim() == 4:
-                    token_mask = (attention_mask[:, 0, 0, :] == 0).to(dtype=torch.long)  # [B,T]
+                    token_mask = (attention_mask[:, 0, 0, :] == 0).to(dtype=torch.long)
                 elif attention_mask.dim() == 2:
-                    token_mask = attention_mask.to(dtype=torch.long)  # already [B,T]
-                else:
-                    token_mask = None
+                    token_mask = attention_mask.to(dtype=torch.long)
 
             layer_output = self.moe_ffn(attention_output, token_mask=token_mask)
-
             return (layer_output,) + outputs
 
         layer.forward = new_forward.__get__(layer, layer.__class__)
