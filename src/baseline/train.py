@@ -78,7 +78,6 @@ class AspectSentimentDataset(Dataset):
         }
 
 
-
 class BertConcatClassifier(nn.Module):
     """
     BERT based classifier for Aspect Sentiment Classification.

@@ -19,12 +19,16 @@ class AspectSentimentDataset(Dataset):
         self.max_len_term = max_len_term
 
         with open(json_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+            self.samples = json.load(f)
 
-        self.samples = list(raw.values())
+        # sanity check
+        for i, s in enumerate(self.samples[:5]):
+            if not {"sentence", "aspect", "sentiment"} <= s.keys():
+                raise ValueError(f"Invalid sample at index {i}: {s}")
 
+        # build label mapping from TRAIN only
         if label2id is None:
-            labels = sorted({s["polarity"] for s in self.samples})
+            labels = sorted({s["sentiment"] for s in self.samples})
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
@@ -32,13 +36,12 @@ class AspectSentimentDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
-        sentence = item["sentence"]
-        term = item["term"]
-        label_str = item["polarity"]
 
-        label = self.label2id[label_str]
+        sentence = item["sentence"]
+        term = item["aspect"]
+        label = self.label2id[item["sentiment"]]
 
         sent_enc = self.tokenizer(
             sentence,
@@ -47,6 +50,7 @@ class AspectSentimentDataset(Dataset):
             max_length=self.max_len_sent,
             return_tensors="pt",
         )
+
         term_enc = self.tokenizer(
             term,
             truncation=True,
