@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoModel
 
-from .moe import MoEConfig, MoEFFN, moe_load_balance_loss
+from moe import MoEConfig, MoEFFN, moe_load_balance_loss
 
 
 def _get_act_fn_from_intermediate(intermediate_module: nn.Module):

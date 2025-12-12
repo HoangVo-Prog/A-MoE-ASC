@@ -10,10 +10,10 @@ from sklearn.metrics import classification_report, accuracy_score
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 
-from .data import AspectSentimentDataset
-from .model import BertConcatClassifier
-from .moe import MoEConfig
-from .utils import get_device
+from data import AspectSentimentDataset
+from model import BertConcatClassifier
+from moe import MoEConfig
+from utils import get_device
 
 
 def train_one_epoch(model: nn.Module, dataloader: DataLoader, optimizer, scheduler=None, fusion_method: str = "concat", device: str = "cpu") -> float:
