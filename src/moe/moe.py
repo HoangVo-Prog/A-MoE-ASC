@@ -97,24 +97,30 @@ class MoEFFN(nn.Module):
             return token_idx
         return token_idx[:max_tokens]
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, token_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         bsz, seqlen, h = hidden_states.shape
         x = hidden_states
         flat = x.reshape(-1, h)  # [N, H]
         n_tokens = flat.size(0)
 
         logits = self.router(flat)  # [N, E]
-        if self.training and self.moe_cfg.router_jitter and self.moe_cfg.router_jitter > 0:
-            logits = logits + torch.randn_like(logits) * self.moe_cfg.router_jitter
-
-        # route mask for pad tokens
         active_idx = None
-        if self.moe_cfg.route_mask_pad_tokens and attention_mask is not None:
-            mask_flat = attention_mask.reshape(-1).to(dtype=torch.bool)  # [N]
+        if self.moe_cfg.route_mask_pad_tokens and token_mask is not None:
+            # token_mask: [B,T] with 1 for real tokens, 0 for pad
+            mask_flat = token_mask.reshape(-1).to(dtype=torch.bool)  # [N]
             active_idx = torch.nonzero(mask_flat, as_tuple=False).squeeze(-1)  # [Na]
-            logits_active = logits.index_select(0, active_idx)
+
+            # Nếu batch hiếm khi toàn pad (Na == 0) thì bypass MoE, trả về residual+LN
+            if active_idx.numel() == 0:
+                out = self.layer_norm(hidden_states + 0.0)
+                # cache empty để aux loss không crash
+                self.last_router_logits = logits[:0]
+                self.last_topk_idx = torch.empty((0, self.moe_cfg.top_k), device=logits.device, dtype=torch.long)
+                return out
+
+            logits_active = logits.index_select(0, active_idx)  # [Na, E]
         else:
-            logits_active = logits
+            logits_active = logits  # [N, E]
 
         topk_vals, topk_idx = torch.topk(logits_active, k=self.moe_cfg.top_k, dim=-1)  # [Na, K] or [N, K]
         topk_w = F.softmax(topk_vals, dim=-1)
@@ -140,7 +146,11 @@ class MoEFFN(nn.Module):
                 tok_pos = self._apply_capacity(tok_pos, max_tokens_per_expert)
                 k_pos = k_pos[: tok_pos.numel()]
 
-            x_e = (flat.index_select(0, active_idx).index_select(0, tok_pos)) if active_idx is not None else flat.index_select(0, tok_pos)
+            if active_idx is not None:
+                flat_active = flat.index_select(0, active_idx)  # [Na,H]
+                x_e = flat_active.index_select(0, tok_pos)      # [M,H]
+            else:
+                x_e = flat.index_select(0, tok_pos)
             w_e = topk_w[tok_pos, k_pos].unsqueeze(-1)
 
             y = self.expert_dense1[e](x_e)

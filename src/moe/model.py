@@ -79,7 +79,18 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
                 attention_output = cross_attention_outputs[0]
                 outputs = outputs + cross_attention_outputs[1:]
 
-            layer_output = self.moe_ffn(attention_output, attention_mask=attention_mask)
+            token_mask = None
+            if attention_mask is not None:
+                # HF BERT passes extended mask: [B,1,1,T], keep tokens are 0, masked are negative
+                if attention_mask.dim() == 4:
+                    token_mask = (attention_mask[:, 0, 0, :] == 0).to(dtype=torch.long)  # [B,T]
+                elif attention_mask.dim() == 2:
+                    token_mask = attention_mask.to(dtype=torch.long)  # already [B,T]
+                else:
+                    token_mask = None
+
+            layer_output = self.moe_ffn(attention_output, token_mask=token_mask)
+
             return (layer_output,) + outputs
 
         layer.forward = new_forward.__get__(layer, layer.__class__)
