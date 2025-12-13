@@ -7,7 +7,7 @@ from sklearn.metrics import accuracy_score, classification_report, f1_score
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .constants import DEVICE
+from constants import DEVICE
 
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:

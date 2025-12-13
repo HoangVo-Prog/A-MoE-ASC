@@ -9,12 +9,12 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from config import TrainConfig
-from .constants import DEVICE
-from .datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from .engine import eval_model, run_training_loop
-from .model import BertConcatClassifier
-from .optim import build_optimizer_and_scheduler
-from .cli import parse_args
+from constants import DEVICE
+from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
+from engine import eval_model, run_training_loop
+from model import BertConcatClassifier
+from optim import build_optimizer_and_scheduler
+from cli import parse_args
 
 def build_train_config(args) -> TrainConfig:
     return TrainConfig(
