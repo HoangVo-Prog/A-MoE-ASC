@@ -249,7 +249,7 @@ def eval_model(
     all_labels = []
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
+        for batch in dataloader:
             batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
             outputs = model(

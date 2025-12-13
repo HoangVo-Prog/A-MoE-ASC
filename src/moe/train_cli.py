@@ -51,7 +51,7 @@ def eval_model(model: nn.Module, dataloader: DataLoader, id2label: Optional[Dict
     all_preds = []
     all_labels = []
 
-    for batch in tqdm(dataloader, desc="Evaluating"):
+    for batch in dataloader:
         batch = {k: v.to(device) for k, v in batch.items()}
 
         outputs = model(
