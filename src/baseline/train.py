@@ -338,7 +338,6 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
     plt.figure()
     plt.plot(epochs, history["train_loss"], label="train")
     plt.plot(epochs, history["val_loss"], label="val")
-    plt.plot(epochs, history["test_loss"], label="test")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss per epoch")
@@ -353,7 +352,6 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
     plt.figure()
     plt.plot(epochs, history["train_f1"], label="train")
     plt.plot(epochs, history["val_f1"], label="val")
-    plt.plot(epochs, history["test_f1"], label="test")
     plt.xlabel("Epoch")
     plt.ylabel("F1")
     plt.title("F1 per epoch")
@@ -363,6 +361,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, _name("f1_curve.png")), dpi=150, bbox_inches="tight")
     plt.show()
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -496,6 +495,28 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for CV split and training reproducibility",
     )
+    
+    parser.add_argument(
+        "--rolling_k",
+        type=int,
+        default=3,
+        help="Window size for rolling average val macro-F1",
+    )
+
+    parser.add_argument(
+        "--early_stop_patience",
+        type=int,
+        default=3,
+        help="Early stopping patience on rolling val macro-F1 (2 or 3 recommended)",
+    )
+
+    parser.add_argument(
+        "--freeze_epochs",
+        type=int,
+        default=0,
+        help="Freeze encoder for first N epochs (0 disables)",
+    )
+
 
 
     return parser.parse_args()
@@ -524,6 +545,20 @@ def build_optimizer_and_scheduler(
         num_training_steps=total_steps,
     )
     return optimizer, scheduler
+
+
+def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
+    # model is BertConcatClassifier, has model.encoder
+    for p in model.encoder.parameters():
+        p.requires_grad = trainable
+
+
+def maybe_freeze_encoder(model: nn.Module, epoch_idx_0based: int, freeze_epochs: int) -> None:
+    # freeze for epochs: 0..freeze_epochs-1
+    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
+        set_encoder_trainable(model, False)
+    else:
+        set_encoder_trainable(model, True)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -575,16 +610,29 @@ def main(args: argparse.Namespace) -> None:
         model = build_model(args, num_labels=len(label2id))
         optimizer, scheduler = build_optimizer_and_scheduler(args, model, train_loader)
 
-        history = {"train_loss": [], "val_loss": [], "test_loss": [], "train_f1": [], "val_f1": [], "test_f1": []}
+        history = {
+            "train_loss": [], "val_loss": [],
+            "train_f1": [], "val_f1": [],
+        }
 
-        rolling_k = 3
+        rolling_k = args.rolling_k
         val_f1_window = deque(maxlen=rolling_k)
+
         best_val_f1_rolling = -1.0
         best_state_dict = None
         best_epoch = -1
 
+        patience = args.early_stop_patience
+        epochs_no_improve = 0
+
         for epoch in range(args.epochs):
             print(f"Epoch {epoch + 1}/{args.epochs}")
+
+            maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=args.freeze_epochs)
+            if args.freeze_epochs > 0 and epoch < args.freeze_epochs:
+                print(f"Encoder frozen (epoch {epoch + 1}/{args.freeze_epochs})")
+            elif args.freeze_epochs > 0 and epoch == args.freeze_epochs:
+                print("Encoder unfrozen")
 
             train_metrics = train_one_epoch(
                 model, train_loader, optimizer, scheduler,
@@ -594,39 +642,39 @@ def main(args: argparse.Namespace) -> None:
                 model, val_loader, id2label,
                 verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
             )
-            test_metrics = eval_model(
-                model, test_loader, id2label,
-                verbose_report=args.verbose_report, fusion_method=args.fusion_method, f1_average="macro"
-            )
+
+            history["train_loss"].append(train_metrics["loss"])
+            history["val_loss"].append(val_metrics["loss"])
+            history["train_f1"].append(train_metrics["f1"])
+            history["val_f1"].append(val_metrics["f1"])
+
+            val_f1_window.append(val_metrics["f1"])
+            val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
 
             print(
                 f"Train loss {train_metrics['loss']:.4f} F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f} | "
                 f"Val loss {val_metrics['loss']:.4f} F1 {val_metrics['f1']:.4f} acc {val_metrics['acc']:.4f} | "
-                f"Test loss {test_metrics['loss']:.4f} F1 {test_metrics['f1']:.4f} acc {test_metrics['acc']:.4f}"
+                f"Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
             )
-
-            history["train_loss"].append(train_metrics["loss"])
-            history["val_loss"].append(val_metrics["loss"])
-            history["test_loss"].append(test_metrics["loss"])
-            history["train_f1"].append(train_metrics["f1"])
-            history["val_f1"].append(val_metrics["f1"])
-            history["test_f1"].append(test_metrics["f1"])
-
-            val_f1_window.append(val_metrics["f1"])
-            val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
-            print(f"Val macro-F1 rolling({rolling_k}) = {val_f1_rolling:.4f}")
 
             if val_f1_rolling > best_val_f1_rolling:
                 best_val_f1_rolling = val_f1_rolling
                 best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch + 1
+                epochs_no_improve = 0
                 print("New best model on rolling val macro-F1, saving in memory")
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f"Early stopping triggered: no improvement in rolling val F1 for {patience} epochs")
+                    break
 
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
             model.to(DEVICE)
             print(f"Loaded best model at epoch {best_epoch} with rolling val macro-F1 = {best_val_f1_rolling:.4f}")
 
+        # evaluate test once at the end
         final_test = eval_model(
             model, test_loader, id2label,
             verbose_report=args.verbose_report, fusion_method=args.fusion_method, f1_average="macro"
@@ -639,9 +687,8 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model saved to {save_path}")
 
         plot_history(history, save_dir=args.output_dir, prefix="")
-
         return
-
+    
     # =========================
     # K-fold cross validation
     # =========================
@@ -654,8 +701,6 @@ def main(args: argparse.Namespace) -> None:
 
     fold_val_f1 = []
     fold_test_f1 = []
-
-    os.makedirs(args.output_dir, exist_ok=True)
 
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
         print(f"\n===== Fold {fold_idx}/{args.k_folds} =====")
@@ -676,16 +721,29 @@ def main(args: argparse.Namespace) -> None:
         model = build_model(args, num_labels=len(label2id))
         optimizer, scheduler = build_optimizer_and_scheduler(args, model, train_loader)
 
-        history = {"train_loss": [], "val_loss": [], "test_loss": [], "train_f1": [], "val_f1": [], "test_f1": []}
+        history = {
+            "train_loss": [], "val_loss": [],
+            "train_f1": [], "val_f1": [],
+        }
 
-        rolling_k = 3
+        rolling_k = args.rolling_k
         val_f1_window = deque(maxlen=rolling_k)
+
         best_val_f1_rolling = -1.0
         best_state_dict = None
         best_epoch = -1
 
+        patience = args.early_stop_patience
+        epochs_no_improve = 0
+
         for epoch in range(args.epochs):
             print(f"Fold {fold_idx} Epoch {epoch + 1}/{args.epochs}")
+
+            maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=args.freeze_epochs)
+            if args.freeze_epochs > 0 and epoch < args.freeze_epochs:
+                print(f"Encoder frozen (epoch {epoch + 1}/{args.freeze_epochs})")
+            elif args.freeze_epochs > 0 and epoch == args.freeze_epochs:
+                print("Encoder unfrozen")
 
             train_metrics = train_one_epoch(
                 model, train_loader, optimizer, scheduler,
@@ -695,17 +753,11 @@ def main(args: argparse.Namespace) -> None:
                 model, val_loader, id2label,
                 verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
             )
-            test_metrics = eval_model(
-                model, test_loader, id2label,
-                verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
-            )
 
             history["train_loss"].append(train_metrics["loss"])
             history["val_loss"].append(val_metrics["loss"])
-            history["test_loss"].append(test_metrics["loss"])
             history["train_f1"].append(train_metrics["f1"])
             history["val_f1"].append(val_metrics["f1"])
-            history["test_f1"].append(test_metrics["f1"])
 
             val_f1_window.append(val_metrics["f1"])
             val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
@@ -713,7 +765,6 @@ def main(args: argparse.Namespace) -> None:
             print(
                 f"Train loss {train_metrics['loss']:.4f} F1 {train_metrics['f1']:.4f} | "
                 f"Val loss {val_metrics['loss']:.4f} F1 {val_metrics['f1']:.4f} | "
-                f"Test loss {test_metrics['loss']:.4f} F1 {test_metrics['f1']:.4f} | "
                 f"Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
             )
 
@@ -721,6 +772,12 @@ def main(args: argparse.Namespace) -> None:
                 best_val_f1_rolling = val_f1_rolling
                 best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch + 1
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f"Early stopping triggered: no improvement in rolling val F1 for {patience} epochs")
+                    break
 
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
@@ -740,17 +797,17 @@ def main(args: argparse.Namespace) -> None:
 
         print(
             f"Fold {fold_idx} best epoch {best_epoch} | "
+            f"Best rolling Val F1 {best_val_f1_rolling:.4f} | "
             f"Best Val F1 {best_val['f1']:.4f} | Best Test F1 {best_test['f1']:.4f}"
         )
 
-        # save fold model
         fold_name = f"fold{fold_idx}_{args.output_name}"
         save_path = os.path.join(args.output_dir, fold_name)
         torch.save(model.state_dict(), save_path)
         print(f"Saved fold model to {save_path}")
 
-        # plot fold curves
         plot_history(history, save_dir=args.output_dir, prefix=f"fold{fold_idx}_")
+
 
     # Summary
     import numpy as np
