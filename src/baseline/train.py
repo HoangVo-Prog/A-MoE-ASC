@@ -154,7 +154,7 @@ class BertConcatClassifier(nn.Module):
             dropout: Dropout probability for the classification head.
         """
         super().__init__()
-        self.encoder = AutoModel.from_pretrained(model_name)
+        self.encoder = AutoModel.from_pretrained(model_name, add_pooling_layer=False)
         hidden_size = self.encoder.config.hidden_size
 
         self.dropout = nn.Dropout(dropout)
