@@ -60,7 +60,7 @@ def build_config(args):
 def build_model(*, cfg: TrainConfig, moe_cfg: MoEConfig, num_labels: int):
     return BertConcatClassifier(
         model_name=cfg.model_name,
-        num_labels=len(num_labels),
+        num_labels=num_labels,
         dropout=cfg.dropout,
         use_moe=bool(cfg.use_moe),
         moe_cfg=moe_cfg,
