@@ -8,6 +8,8 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import classification_report, accuracy_score, f1_score
+import matplotlib.pyplot as plt
+from collections import deque
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 
@@ -181,22 +183,15 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     scheduler=None,
     fusion_method: str = "concat",
-) -> float:
+    f1_average: str = "macro",
+) -> Dict[str, float]:
     """
-    Train the model for one epoch.
-
-    Args:
-        model: The classification model.
-        dataloader: Training dataloader.
-        optimizer: Optimizer instance.
-        scheduler: Optional learning rate scheduler.
-        fusion_method: Fusion strategy passed to the model.
-
-    Returns:
-        Average training loss over the epoch.
+    Train for one epoch and return metrics: loss, acc, f1.
     """
     model.train()
     total_loss = 0.0
+    all_preds = []
+    all_labels = []
 
     for batch in tqdm(dataloader, desc="Training"):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
@@ -210,6 +205,7 @@ def train_one_epoch(
             fusion_method=fusion_method,
         )
         loss = outputs["loss"]
+        logits = outputs["logits"]
 
         optimizer.zero_grad()
         loss.backward()
@@ -221,7 +217,15 @@ def train_one_epoch(
 
         total_loss += loss.item()
 
-    return total_loss / len(dataloader)
+        preds = torch.argmax(logits, dim=-1)
+        all_preds.extend(preds.detach().cpu().tolist())
+        all_labels.extend(batch["label"].detach().cpu().tolist())
+
+    avg_loss = total_loss / max(1, len(dataloader))
+    acc = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average=f1_average)
+
+    return {"loss": avg_loss, "acc": acc, "f1": f1}
 
 
 def eval_model(
@@ -230,15 +234,13 @@ def eval_model(
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
     fusion_method: str = "concat",
-    f1_average: str = "macro",   # "macro" (khuyên dùng), hoặc "weighted"
+    f1_average: str = "macro",
 ) -> Dict[str, float]:
     """
-    Evaluate the model and compute accuracy + F1.
-
-    Returns:
-        dict: {"acc": ..., "f1": ...}
+    Evaluate and return metrics: loss, acc, f1.
     """
     model.eval()
+    total_loss = 0.0
     all_preds = []
     all_labels = []
 
@@ -251,15 +253,19 @@ def eval_model(
                 attention_mask_sent=batch["attention_mask_sent"],
                 input_ids_term=batch["input_ids_term"],
                 attention_mask_term=batch["attention_mask_term"],
-                labels=None,
+                labels=batch["label"],  # compute loss on eval too
                 fusion_method=fusion_method,
             )
+            loss = outputs["loss"]
             logits = outputs["logits"]
-            preds = torch.argmax(logits, dim=-1)
 
+            total_loss += float(loss.item()) if loss is not None else 0.0
+
+            preds = torch.argmax(logits, dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
 
+    avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average=f1_average)
 
@@ -268,7 +274,46 @@ def eval_model(
         print("Classification report:")
         print(classification_report(all_labels, all_preds, target_names=target_names, digits=4))
 
-    return {"acc": acc, "f1": f1}
+    return {"loss": avg_loss, "acc": acc, "f1": f1}
+
+
+def plot_history(history: Dict[str, list], save_dir: Optional[str] = None) -> None:
+    """
+    history keys expected:
+      train_loss, val_loss, test_loss,
+      train_f1, val_f1, test_f1
+    """
+    epochs = list(range(1, len(history["train_loss"]) + 1))
+
+    # Loss plot
+    plt.figure()
+    plt.plot(epochs, history["train_loss"], label="train")
+    plt.plot(epochs, history["val_loss"], label="val")
+    plt.plot(epochs, history["test_loss"], label="test")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Loss per epoch")
+    plt.legend()
+    plt.grid(True)
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, "loss_curve.png"), dpi=150, bbox_inches="tight")
+    plt.show()
+
+    # F1 plot
+    plt.figure()
+    plt.plot(epochs, history["train_f1"], label="train")
+    plt.plot(epochs, history["val_f1"], label="val")
+    plt.plot(epochs, history["test_f1"], label="test")
+    plt.xlabel("Epoch")
+    plt.ylabel("F1")
+    plt.title("F1 per epoch")
+    plt.legend()
+    plt.grid(True)
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, "f1_curve.png"), dpi=150, bbox_inches="tight")
+    plt.show()
 
 
 def parse_args() -> argparse.Namespace:
@@ -464,19 +509,37 @@ def main(args: argparse.Namespace) -> None:
         num_training_steps=total_steps,
     )
 
-    best_val_f1 = -1.0
+    history = {
+        "train_loss": [],
+        "val_loss": [],
+        "test_loss": [],
+        "train_f1": [],
+        "val_f1": [],
+        "test_f1": [],
+    }
+
+    rolling_k = 3
+    val_f1_window = deque(maxlen=rolling_k)
+    best_val_f1_rolling = -1.0
     best_state_dict = None
+    best_epoch = -1
 
     for epoch in range(args.epochs):
         print(f"Epoch {epoch + 1}/{args.epochs}")
-        avg_loss = train_one_epoch(
+
+        train_metrics = train_one_epoch(
             model,
             train_loader,
             optimizer,
             scheduler,
             fusion_method=args.fusion_method,
+            f1_average="macro",
         )
-        print(f"Average train loss: {avg_loss:.4f}")
+        print(
+            f"Train loss: {train_metrics['loss']:.4f} | "
+            f"Train macro-F1: {train_metrics['f1']:.4f} | "
+            f"Train acc: {train_metrics['acc']:.4f}"
+        )
 
         val_metrics = eval_model(
             model,
@@ -486,7 +549,11 @@ def main(args: argparse.Namespace) -> None:
             fusion_method=args.fusion_method,
             f1_average="macro",
         )
-        print(f"Validation accuracy: {val_metrics['acc']:.4f} | Validation macro-F1: {val_metrics['f1']:.4f}")
+        print(
+            f"Val loss: {val_metrics['loss']:.4f} | "
+            f"Val macro-F1: {val_metrics['f1']:.4f} | "
+            f"Val acc: {val_metrics['acc']:.4f}"
+        )
 
         test_metrics = eval_model(
             model,
@@ -496,19 +563,37 @@ def main(args: argparse.Namespace) -> None:
             fusion_method=args.fusion_method,
             f1_average="macro",
         )
-        print(f"Test accuracy: {test_metrics['acc']:.4f} | Test macro-F1: {test_metrics['f1']:.4f}")
+        print(
+            f"Test loss: {test_metrics['loss']:.4f} | "
+            f"Test macro-F1: {test_metrics['f1']:.4f} | "
+            f"Test acc: {test_metrics['acc']:.4f}"
+        )
 
-        # chọn best theo val F1
-        if val_metrics["f1"] > best_val_f1:
-            best_val_f1 = val_metrics["f1"]
+        # log history
+        history["train_loss"].append(train_metrics["loss"])
+        history["val_loss"].append(val_metrics["loss"])
+        history["test_loss"].append(test_metrics["loss"])
+        history["train_f1"].append(train_metrics["f1"])
+        history["val_f1"].append(val_metrics["f1"])
+        history["test_f1"].append(test_metrics["f1"])
+
+        # rolling avg val f1 on last 3 epochs
+        val_f1_window.append(val_metrics["f1"])
+        val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
+
+        print(f"Val macro-F1 rolling({rolling_k}) = {val_f1_rolling:.4f}")
+
+        # save best by rolling average (only starts being stable after 3 epochs, but still works with len<3)
+        if val_f1_rolling > best_val_f1_rolling:
+            best_val_f1_rolling = val_f1_rolling
             best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            print("New best model on validation macro-F1, saving in memory")
-
+            best_epoch = epoch + 1
+            print("New best model on rolling val macro-F1, saving in memory")
 
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         model.to(DEVICE)
-        print(f"Loaded best model with val macro-F1 = {best_val_f1:.4f}")
+        print(f"Loaded best model at epoch {best_epoch} with rolling val macro-F1 = {best_val_f1_rolling:.4f}")
     else:
         print("Warning: no best_state_dict saved, using last epoch model")
 
@@ -521,7 +606,11 @@ def main(args: argparse.Namespace) -> None:
         fusion_method=args.fusion_method,
         f1_average="macro",
     )
-    print(f"Test accuracy: {test_metrics['acc']:.4f} | Test macro-F1: {test_metrics['f1']:.4f}")
+    print(
+        f"Test loss: {test_metrics['loss']:.4f} | "
+        f"Test macro-F1: {test_metrics['f1']:.4f} | "
+        f"Test acc: {test_metrics['acc']:.4f}"
+    )
 
     # Save model to file
     os.makedirs(args.output_dir, exist_ok=True)
@@ -529,6 +618,8 @@ def main(args: argparse.Namespace) -> None:
     torch.save(model.state_dict(), save_path)
     print(f"Model saved to {save_path}")
 
+    # Plot curves
+    plot_history(history, save_dir=args.output_dir)
 
 if __name__ == "__main__":
     cli_args = parse_args()
