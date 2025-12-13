@@ -3,6 +3,7 @@ import torch.nn as nn
 from transformers import AutoModel
 from typing import Dict, Optional
 
+
 class MLPHead(nn.Module):
     def __init__(self, in_dim: int, num_labels: int, dropout: float):
         super().__init__()
@@ -21,21 +22,26 @@ class MLPHead(nn.Module):
         x = self.fc2(x)
         return x
 
+
 class BertConcatClassifier(nn.Module):
-    def __init__(self, model_name: str, num_labels: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self, model_name: str, 
+        num_labels: int, 
+        dropout: float = 0.1
+    ) -> None:
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name, add_pooling_layer=False)
-        h = self.encoder.config.hidden_size
+        hidden_size = self.encoder.config.hidden_size
 
         # Cross-domain attention: term (query) attends over sentence (key/value)
         # Choose a num_heads that divides hidden size to avoid runtime error
         _candidates = [8, 4, 2, 1]
-        num_heads = next((x for x in _candidates if h % x == 0), 1)
-        self.cross_attn = nn.MultiheadAttention(embed_dim=h, num_heads=num_heads, dropout=dropout, batch_first=True)
+        num_heads = next((x for x in _candidates if hidden_size % x == 0), 1)
+        self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, dropout=dropout, batch_first=True)
 
         self.dropout = nn.Dropout(dropout)
-        self.head_concat = MLPHead(2 * h, num_labels, dropout)
-        self.head_single = MLPHead(h, num_labels, dropout)
+        self.head_concat = MLPHead(2 * hidden_size, num_labels, dropout)
+        self.head_single = MLPHead(hidden_size, num_labels, dropout)
 
     def forward(
         self,

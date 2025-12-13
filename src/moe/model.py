@@ -116,6 +116,25 @@ def freeze_all_but_moe_and_heads(model: nn.Module) -> None:
                     p.requires_grad = True
 
 
+class MLPHead(nn.Module):
+    def __init__(self, in_dim: int, num_labels: int, dropout: float):
+        super().__init__()
+        hidden = in_dim
+        self.norm = nn.LayerNorm(in_dim)
+        self.fc1 = nn.Linear(in_dim, hidden)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(hidden, num_labels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        return x
+
+
 class BertConcatClassifier(nn.Module):
     def __init__(
         self,
@@ -130,10 +149,16 @@ class BertConcatClassifier(nn.Module):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
+        
+        # Cross-domain attention: term (query) attends over sentence (key/value)
+        # Choose a num_heads that divides hidden size to avoid runtime error
+        _candidates = [8, 4, 2, 1]
+        num_heads = next((x for x in _candidates if hidden_size % x == 0), 1)
+        self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, dropout=dropout, batch_first=True)
 
         self.dropout = nn.Dropout(dropout)
-        self.classifier_concat = nn.Linear(2 * hidden_size, num_labels)
-        self.classifier_single = nn.Linear(hidden_size, num_labels)
+        self.head_concat = MLPHead(2 * hidden_size, num_labels, dropout)
+        self.head_single = MLPHead(hidden_size, num_labels, dropout)
 
         self.use_moe = use_moe
         self.aux_loss_weight = aux_loss_weight
@@ -186,13 +211,25 @@ class BertConcatClassifier(nn.Module):
 
         if fusion_method == "concat":
             fused = torch.cat([cls_sent, cls_term], dim=-1)
-            logits = self.classifier_concat(self.dropout(fused))
+            logits = self.head_concat(self.dropout(fused))
         elif fusion_method == "add":
             fused = cls_sent + cls_term
-            logits = self.classifier_single(self.dropout(fused))
+            logits = self.head_single(self.dropout(fused))
         elif fusion_method == "mul":
             fused = cls_sent * cls_term
-            logits = self.classifier_single(self.dropout(fused))
+            logits = self.head_single(self.dropout(fused))
+        elif fusion_method == "cross":
+            # term embedding as query, sentence token embeddings as key/value
+            # query: [B, 1, H], key/value: [B, Ls, H]
+            query = out_term.last_hidden_state[:, 0:1, :]
+            key = out_sent.last_hidden_state
+            value = out_sent.last_hidden_state
+
+            # key_padding_mask expects True for positions that should be ignored (pads)
+            key_padding_mask = attention_mask_sent.eq(0)
+            attn_out, _ = self.cross_attn(query, key, value, key_padding_mask=key_padding_mask)
+            fused = attn_out.squeeze(1)  # [B, H]
+            logits = self.head_single(self.dropout(fused))
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 

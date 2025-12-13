@@ -16,6 +16,7 @@ from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
 
+
 def build_train_config(args) -> TrainConfig:
     return TrainConfig(
         model_name=args.model_name,
@@ -40,7 +41,11 @@ def build_train_config(args) -> TrainConfig:
 
 
 def build_model(*, cfg: TrainConfig, num_labels: int):
-    return BertConcatClassifier(cfg.model_name, num_labels=num_labels, dropout=cfg.dropout).to(DEVICE)
+    return BertConcatClassifier(
+        cfg.model_name, 
+        num_labels=num_labels, 
+        dropout=cfg.dropout
+    ).to(DEVICE)
 
 
 def train_full_then_test(

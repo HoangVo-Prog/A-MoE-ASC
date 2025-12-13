@@ -66,3 +66,52 @@ class AspectSentimentDataset(Dataset):
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "label": torch.tensor(label, dtype=torch.long),
         }
+
+
+class AspectSentimentDatasetFromSamples(Dataset):
+    def __init__(
+        self,
+        samples: list,
+        tokenizer,
+        max_len_sent: int,
+        max_len_term: int,
+        label2id: Dict[str, int],
+    ) -> None:
+        self.samples = samples
+        self.tokenizer = tokenizer
+        self.max_len_sent = max_len_sent
+        self.max_len_term = max_len_term
+        self.label2id = label2id
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        item = self.samples[idx]
+        sentence = item["sentence"]
+        term = item["aspect"]
+        label = self.label2id[item["sentiment"]]
+
+        sent_enc = self.tokenizer(
+            sentence,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_len_sent,
+            return_tensors="pt",
+        )
+
+        term_enc = self.tokenizer(
+            term,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_len_term,
+            return_tensors="pt",
+        )
+
+        return {
+            "input_ids_sent": sent_enc["input_ids"].squeeze(0),
+            "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
+            "input_ids_term": term_enc["input_ids"].squeeze(0),
+            "attention_mask_term": term_enc["attention_mask"].squeeze(0),
+            "label": torch.tensor(label, dtype=torch.long),
+        }
