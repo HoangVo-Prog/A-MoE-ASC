@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
 
-    parser.add_argument("--fusion_method", type=str, default="concat", choices=["concat", "add", "mul"])
+    parser.add_argument("--fusion_method", type=str, default="concat", choices=["concat", "add", "mul", "cross"])
 
     parser.add_argument("--output_dir", type=str, default="saved_model")
     parser.add_argument("--output_name", type=str, default="bert_concat_asc.pt")

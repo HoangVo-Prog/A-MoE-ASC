@@ -27,6 +27,12 @@ class BertConcatClassifier(nn.Module):
         self.encoder = AutoModel.from_pretrained(model_name, add_pooling_layer=False)
         h = self.encoder.config.hidden_size
 
+        # Cross-domain attention: term (query) attends over sentence (key/value)
+        # Choose a num_heads that divides hidden size to avoid runtime error
+        _candidates = [8, 4, 2, 1]
+        num_heads = next((x for x in _candidates if h % x == 0), 1)
+        self.cross_attn = nn.MultiheadAttention(embed_dim=h, num_heads=num_heads, dropout=dropout, batch_first=True)
+
         self.dropout = nn.Dropout(dropout)
         self.head_concat = MLPHead(2 * h, num_labels, dropout)
         self.head_single = MLPHead(h, num_labels, dropout)
@@ -54,6 +60,18 @@ class BertConcatClassifier(nn.Module):
             logits = self.head_single(self.dropout(fused))
         elif fusion_method == "mul":
             fused = cls_sent * cls_term
+            logits = self.head_single(self.dropout(fused))
+        elif fusion_method == "cross":
+            # term embedding as query, sentence token embeddings as key/value
+            # query: [B, 1, H], key/value: [B, Ls, H]
+            query = out_term.last_hidden_state[:, 0:1, :]
+            key = out_sent.last_hidden_state
+            value = out_sent.last_hidden_state
+
+            # key_padding_mask expects True for positions that should be ignored (pads)
+            key_padding_mask = attention_mask_sent.eq(0)
+            attn_out, _ = self.cross_attn(query, key, value, key_padding_mask=key_padding_mask)
+            fused = attn_out.squeeze(1)  # [B, H]
             logits = self.head_single(self.dropout(fused))
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
