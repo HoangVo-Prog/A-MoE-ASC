@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from constants import DEVICE
+from moe_info import print_moe_debug
 
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
@@ -36,7 +37,7 @@ def train_one_epoch(
     all_preds = []
     all_labels = []
 
-    for batch in tqdm(dataloader, desc="Training"):
+    for step, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc="Training"):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
@@ -63,6 +64,9 @@ def train_one_epoch(
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
+        
+        if step > 0 and step % 50 == 0:
+            model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
