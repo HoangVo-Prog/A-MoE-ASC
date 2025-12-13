@@ -1,6 +1,11 @@
-python src/baseline/train.py \
+python src/baseline/runner.py \
     --model_name roberta-base \
-    --train_path dataset/asc/rest14/train.json \
-    --test_path dataset/asc/rest14/test.json \
-    --val_path dataset/asc/rest14/dev.json \
+    --epochs 10 \
+    --k_folds 5 \
+    --rolling_k 3 \
+    --early_stop_patience 3 \
+    --freeze_epochs 3 \
+    --train_path dataset/atsa/laptop14/train.json \
+    --test_path dataset/atsa/laptop14/test.json \
+    --val_path dataset/atsa/laptop14/val.json \
     --fusion_method concat

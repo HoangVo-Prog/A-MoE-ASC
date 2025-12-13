@@ -22,8 +22,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, _name("loss_curve.png")), dpi=150, bbox_inches="tight")
-    plt.show()
-
+        
     plt.figure()
     plt.plot(epochs, history["train_f1"], label="train")
     if len(history["val_f1"]) > 0:
@@ -36,4 +35,4 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, _name("f1_curve.png")), dpi=150, bbox_inches="tight")
-    plt.show()
+        
