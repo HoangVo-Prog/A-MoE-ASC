@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from collections import deque
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
+from sklearn.model_selection import StratifiedKFold
+
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -51,6 +53,55 @@ class AspectSentimentDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
 
+        sentence = item["sentence"]
+        term = item["aspect"]
+        label = self.label2id[item["sentiment"]]
+
+        sent_enc = self.tokenizer(
+            sentence,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_len_sent,
+            return_tensors="pt",
+        )
+
+        term_enc = self.tokenizer(
+            term,
+            truncation=True,
+            padding="max_length",
+            max_length=self.max_len_term,
+            return_tensors="pt",
+        )
+
+        return {
+            "input_ids_sent": sent_enc["input_ids"].squeeze(0),
+            "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
+            "input_ids_term": term_enc["input_ids"].squeeze(0),
+            "attention_mask_term": term_enc["attention_mask"].squeeze(0),
+            "label": torch.tensor(label, dtype=torch.long),
+        }
+
+
+class AspectSentimentDatasetFromSamples(Dataset):
+    def __init__(
+        self,
+        samples: list,
+        tokenizer,
+        max_len_sent: int,
+        max_len_term: int,
+        label2id: Dict[str, int],
+    ) -> None:
+        self.samples = samples
+        self.tokenizer = tokenizer
+        self.max_len_sent = max_len_sent
+        self.max_len_term = max_len_term
+        self.label2id = label2id
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        item = self.samples[idx]
         sentence = item["sentence"]
         term = item["aspect"]
         label = self.label2id[item["sentiment"]]
@@ -277,13 +328,11 @@ def eval_model(
     return {"loss": avg_loss, "acc": acc, "f1": f1}
 
 
-def plot_history(history: Dict[str, list], save_dir: Optional[str] = None) -> None:
-    """
-    history keys expected:
-      train_loss, val_loss, test_loss,
-      train_f1, val_f1, test_f1
-    """
+def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefix: str = "") -> None:
     epochs = list(range(1, len(history["train_loss"]) + 1))
+
+    def _name(x: str) -> str:
+        return f"{prefix}{x}" if prefix else x
 
     # Loss plot
     plt.figure()
@@ -297,7 +346,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None) -> No
     plt.grid(True)
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "loss_curve.png"), dpi=150, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, _name("loss_curve.png")), dpi=150, bbox_inches="tight")
     plt.show()
 
     # F1 plot
@@ -312,7 +361,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None) -> No
     plt.grid(True)
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "f1_curve.png"), dpi=150, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, _name("f1_curve.png")), dpi=150, bbox_inches="tight")
     plt.show()
 
 
@@ -433,74 +482,40 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print detailed classification report on the test set",
     )
+    
+    parser.add_argument(
+        "--k_folds",
+        type=int,
+        default=0,
+        help="If > 1, run Stratified K-fold CV on train_path and ignore val_path",
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for CV split and training reproducibility",
+    )
+
 
     return parser.parse_args()
 
 
-def main(args: argparse.Namespace) -> None:
-    """
-    Main training and evaluation pipeline.
-
-    Steps:
-        1. Load tokenizer and build datasets.
-        2. Initialize model and optimizer.
-        3. Train for several epochs and track best validation accuracy.
-        4. Evaluate the best model on the test set.
-        5. Save the best model state_dict to disk.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-
-    # Build training dataset first to obtain label2id
-    train_dataset = AspectSentimentDataset(
-        json_path=args.train_path,
-        tokenizer=tokenizer,
-        max_len_sent=args.max_len_sent,
-        max_len_term=args.max_len_term,
-        label2id=None,
-    )
-    label2id = train_dataset.label2id
-    id2label = {v: k for k, v in label2id.items()}
-    print("Label mapping:", label2id)
-
-    val_dataset = AspectSentimentDataset(
-        json_path=args.val_path,
-        tokenizer=tokenizer,
-        max_len_sent=args.max_len_sent,
-        max_len_term=args.max_len_term,
-        label2id=label2id,
-    )
-    test_dataset = AspectSentimentDataset(
-        json_path=args.test_path,
-        tokenizer=tokenizer,
-        max_len_sent=args.max_len_sent,
-        max_len_term=args.max_len_term,
-        label2id=label2id,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.train_batch_size,
-        shuffle=True,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.eval_batch_size,
-        shuffle=False,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.eval_batch_size,
-        shuffle=False,
-    )
-
+def build_model(args: argparse.Namespace, num_labels: int) -> nn.Module:
     model = BertConcatClassifier(
         model_name=args.model_name,
-        num_labels=len(label2id),
+        num_labels=num_labels,
         dropout=args.dropout,
     ).to(DEVICE)
+    return model
 
+
+def build_optimizer_and_scheduler(
+    args: argparse.Namespace,
+    model: nn.Module,
+    train_loader: DataLoader,
+):
     optimizer = AdamW(model.parameters(), lr=args.lr)
-
     total_steps = len(train_loader) * args.epochs
     warmup_steps = int(args.warmup_ratio * total_steps)
     scheduler = get_linear_schedule_with_warmup(
@@ -508,118 +523,246 @@ def main(args: argparse.Namespace) -> None:
         num_warmup_steps=warmup_steps,
         num_training_steps=total_steps,
     )
+    return optimizer, scheduler
 
-    history = {
-        "train_loss": [],
-        "val_loss": [],
-        "test_loss": [],
-        "train_f1": [],
-        "val_f1": [],
-        "test_f1": [],
-    }
 
-    rolling_k = 3
-    val_f1_window = deque(maxlen=rolling_k)
-    best_val_f1_rolling = -1.0
-    best_state_dict = None
-    best_epoch = -1
+def main(args: argparse.Namespace) -> None:
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
-    for epoch in range(args.epochs):
-        print(f"Epoch {epoch + 1}/{args.epochs}")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
-        train_metrics = train_one_epoch(
-            model,
-            train_loader,
-            optimizer,
-            scheduler,
-            fusion_method=args.fusion_method,
-            f1_average="macro",
-        )
-        print(
-            f"Train loss: {train_metrics['loss']:.4f} | "
-            f"Train macro-F1: {train_metrics['f1']:.4f} | "
-            f"Train acc: {train_metrics['acc']:.4f}"
-        )
-
-        val_metrics = eval_model(
-            model,
-            val_loader,
-            id2label,
-            verbose_report=False,
-            fusion_method=args.fusion_method,
-            f1_average="macro",
-        )
-        print(
-            f"Val loss: {val_metrics['loss']:.4f} | "
-            f"Val macro-F1: {val_metrics['f1']:.4f} | "
-            f"Val acc: {val_metrics['acc']:.4f}"
-        )
-
-        test_metrics = eval_model(
-            model,
-            test_loader,
-            id2label,
-            verbose_report=args.verbose_report,
-            fusion_method=args.fusion_method,
-            f1_average="macro",
-        )
-        print(
-            f"Test loss: {test_metrics['loss']:.4f} | "
-            f"Test macro-F1: {test_metrics['f1']:.4f} | "
-            f"Test acc: {test_metrics['acc']:.4f}"
-        )
-
-        # log history
-        history["train_loss"].append(train_metrics["loss"])
-        history["val_loss"].append(val_metrics["loss"])
-        history["test_loss"].append(test_metrics["loss"])
-        history["train_f1"].append(train_metrics["f1"])
-        history["val_f1"].append(val_metrics["f1"])
-        history["test_f1"].append(test_metrics["f1"])
-
-        # rolling avg val f1 on last 3 epochs
-        val_f1_window.append(val_metrics["f1"])
-        val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
-
-        print(f"Val macro-F1 rolling({rolling_k}) = {val_f1_rolling:.4f}")
-
-        # save best by rolling average (only starts being stable after 3 epochs, but still works with len<3)
-        if val_f1_rolling > best_val_f1_rolling:
-            best_val_f1_rolling = val_f1_rolling
-            best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            best_epoch = epoch + 1
-            print("New best model on rolling val macro-F1, saving in memory")
-
-    if best_state_dict is not None:
-        model.load_state_dict(best_state_dict)
-        model.to(DEVICE)
-        print(f"Loaded best model at epoch {best_epoch} with rolling val macro-F1 = {best_val_f1_rolling:.4f}")
-    else:
-        print("Warning: no best_state_dict saved, using last epoch model")
-
-    print("Evaluation best model on test set:")
-    test_metrics = eval_model(
-        model,
-        test_loader,
-        id2label,
-        verbose_report=args.verbose_report,
-        fusion_method=args.fusion_method,
-        f1_average="macro",
+    # Load train.json to get label2id and also raw samples for K-fold
+    train_dataset_full = AspectSentimentDataset(
+        json_path=args.train_path,
+        tokenizer=tokenizer,
+        max_len_sent=args.max_len_sent,
+        max_len_term=args.max_len_term,
+        label2id=None,
     )
-    print(
-        f"Test loss: {test_metrics['loss']:.4f} | "
-        f"Test macro-F1: {test_metrics['f1']:.4f} | "
-        f"Test acc: {test_metrics['acc']:.4f}"
+    label2id = train_dataset_full.label2id
+    id2label = {v: k for k, v in label2id.items()}
+    print("Label mapping:", label2id)
+
+    # Fixed test set
+    test_dataset = AspectSentimentDataset(
+        json_path=args.test_path,
+        tokenizer=tokenizer,
+        max_len_sent=args.max_len_sent,
+        max_len_term=args.max_len_term,
+        label2id=label2id,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
     )
 
-    # Save model to file
+    # If not using CV, keep your original behavior with val_path
+    if args.k_folds <= 1:
+        val_dataset = AspectSentimentDataset(
+            json_path=args.val_path,
+            tokenizer=tokenizer,
+            max_len_sent=args.max_len_sent,
+            max_len_term=args.max_len_term,
+            label2id=label2id,
+        )
+
+        train_loader = DataLoader(train_dataset_full, batch_size=args.train_batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
+
+        model = build_model(args, num_labels=len(label2id))
+        optimizer, scheduler = build_optimizer_and_scheduler(args, model, train_loader)
+
+        history = {"train_loss": [], "val_loss": [], "test_loss": [], "train_f1": [], "val_f1": [], "test_f1": []}
+
+        rolling_k = 3
+        val_f1_window = deque(maxlen=rolling_k)
+        best_val_f1_rolling = -1.0
+        best_state_dict = None
+        best_epoch = -1
+
+        for epoch in range(args.epochs):
+            print(f"Epoch {epoch + 1}/{args.epochs}")
+
+            train_metrics = train_one_epoch(
+                model, train_loader, optimizer, scheduler,
+                fusion_method=args.fusion_method, f1_average="macro"
+            )
+            val_metrics = eval_model(
+                model, val_loader, id2label,
+                verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
+            )
+            test_metrics = eval_model(
+                model, test_loader, id2label,
+                verbose_report=args.verbose_report, fusion_method=args.fusion_method, f1_average="macro"
+            )
+
+            print(
+                f"Train loss {train_metrics['loss']:.4f} F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f} | "
+                f"Val loss {val_metrics['loss']:.4f} F1 {val_metrics['f1']:.4f} acc {val_metrics['acc']:.4f} | "
+                f"Test loss {test_metrics['loss']:.4f} F1 {test_metrics['f1']:.4f} acc {test_metrics['acc']:.4f}"
+            )
+
+            history["train_loss"].append(train_metrics["loss"])
+            history["val_loss"].append(val_metrics["loss"])
+            history["test_loss"].append(test_metrics["loss"])
+            history["train_f1"].append(train_metrics["f1"])
+            history["val_f1"].append(val_metrics["f1"])
+            history["test_f1"].append(test_metrics["f1"])
+
+            val_f1_window.append(val_metrics["f1"])
+            val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
+            print(f"Val macro-F1 rolling({rolling_k}) = {val_f1_rolling:.4f}")
+
+            if val_f1_rolling > best_val_f1_rolling:
+                best_val_f1_rolling = val_f1_rolling
+                best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch + 1
+                print("New best model on rolling val macro-F1, saving in memory")
+
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+            model.to(DEVICE)
+            print(f"Loaded best model at epoch {best_epoch} with rolling val macro-F1 = {best_val_f1_rolling:.4f}")
+
+        final_test = eval_model(
+            model, test_loader, id2label,
+            verbose_report=args.verbose_report, fusion_method=args.fusion_method, f1_average="macro"
+        )
+        print(f"Final Test: loss {final_test['loss']:.4f} F1 {final_test['f1']:.4f} acc {final_test['acc']:.4f}")
+
+        os.makedirs(args.output_dir, exist_ok=True)
+        save_path = os.path.join(args.output_dir, args.output_name)
+        torch.save(model.state_dict(), save_path)
+        print(f"Model saved to {save_path}")
+
+        plot_history(history, save_dir=args.output_dir, prefix="")
+
+        return
+
+    # =========================
+    # K-fold cross validation
+    # =========================
+    print(f"Running StratifiedKFold with k={args.k_folds}. Using train_path only. Ignoring val_path.")
+
+    samples = train_dataset_full.samples
+    y = [label2id[s["sentiment"]] for s in samples]
+
+    skf = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=args.seed)
+
+    fold_val_f1 = []
+    fold_test_f1 = []
+
     os.makedirs(args.output_dir, exist_ok=True)
-    save_path = os.path.join(args.output_dir, args.output_name)
-    torch.save(model.state_dict(), save_path)
-    print(f"Model saved to {save_path}")
 
-    # Plot curves
-    plot_history(history, save_dir=args.output_dir)
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
+        print(f"\n===== Fold {fold_idx}/{args.k_folds} =====")
+
+        train_samples = [samples[i] for i in train_idx]
+        val_samples = [samples[i] for i in val_idx]
+
+        train_ds = AspectSentimentDatasetFromSamples(
+            train_samples, tokenizer, args.max_len_sent, args.max_len_term, label2id
+        )
+        val_ds = AspectSentimentDatasetFromSamples(
+            val_samples, tokenizer, args.max_len_sent, args.max_len_term, label2id
+        )
+
+        train_loader = DataLoader(train_ds, batch_size=args.train_batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=args.eval_batch_size, shuffle=False)
+
+        model = build_model(args, num_labels=len(label2id))
+        optimizer, scheduler = build_optimizer_and_scheduler(args, model, train_loader)
+
+        history = {"train_loss": [], "val_loss": [], "test_loss": [], "train_f1": [], "val_f1": [], "test_f1": []}
+
+        rolling_k = 3
+        val_f1_window = deque(maxlen=rolling_k)
+        best_val_f1_rolling = -1.0
+        best_state_dict = None
+        best_epoch = -1
+
+        for epoch in range(args.epochs):
+            print(f"Fold {fold_idx} Epoch {epoch + 1}/{args.epochs}")
+
+            train_metrics = train_one_epoch(
+                model, train_loader, optimizer, scheduler,
+                fusion_method=args.fusion_method, f1_average="macro"
+            )
+            val_metrics = eval_model(
+                model, val_loader, id2label,
+                verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
+            )
+            test_metrics = eval_model(
+                model, test_loader, id2label,
+                verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
+            )
+
+            history["train_loss"].append(train_metrics["loss"])
+            history["val_loss"].append(val_metrics["loss"])
+            history["test_loss"].append(test_metrics["loss"])
+            history["train_f1"].append(train_metrics["f1"])
+            history["val_f1"].append(val_metrics["f1"])
+            history["test_f1"].append(test_metrics["f1"])
+
+            val_f1_window.append(val_metrics["f1"])
+            val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
+
+            print(
+                f"Train loss {train_metrics['loss']:.4f} F1 {train_metrics['f1']:.4f} | "
+                f"Val loss {val_metrics['loss']:.4f} F1 {val_metrics['f1']:.4f} | "
+                f"Test loss {test_metrics['loss']:.4f} F1 {test_metrics['f1']:.4f} | "
+                f"Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
+            )
+
+            if val_f1_rolling > best_val_f1_rolling:
+                best_val_f1_rolling = val_f1_rolling
+                best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch + 1
+
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+            model.to(DEVICE)
+
+        best_val = eval_model(
+            model, val_loader, id2label,
+            verbose_report=False, fusion_method=args.fusion_method, f1_average="macro"
+        )
+        best_test = eval_model(
+            model, test_loader, id2label,
+            verbose_report=args.verbose_report, fusion_method=args.fusion_method, f1_average="macro"
+        )
+
+        fold_val_f1.append(best_val["f1"])
+        fold_test_f1.append(best_test["f1"])
+
+        print(
+            f"Fold {fold_idx} best epoch {best_epoch} | "
+            f"Best Val F1 {best_val['f1']:.4f} | Best Test F1 {best_test['f1']:.4f}"
+        )
+
+        # save fold model
+        fold_name = f"fold{fold_idx}_{args.output_name}"
+        save_path = os.path.join(args.output_dir, fold_name)
+        torch.save(model.state_dict(), save_path)
+        print(f"Saved fold model to {save_path}")
+
+        # plot fold curves
+        plot_history(history, save_dir=args.output_dir, prefix=f"fold{fold_idx}_")
+
+    # Summary
+    import numpy as np
+    val_mean = float(np.mean(fold_val_f1))
+    val_std = float(np.std(fold_val_f1, ddof=0))
+    test_mean = float(np.mean(fold_test_f1))
+    test_std = float(np.std(fold_test_f1, ddof=0))
+
+    print("\n===== CV Summary =====")
+    print(f"Val macro-F1 mean {val_mean:.4f} std {val_std:.4f}")
+    print(f"Test macro-F1 mean {test_mean:.4f} std {test_std:.4f}")
+
 
 if __name__ == "__main__":
     cli_args = parse_args()
