@@ -296,19 +296,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train_path",
         type=str,
-        default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/train.json",
+        default="dataset/atsa/laptop14/train.json",
         help="Path to training JSON file",
     )
     parser.add_argument(
         "--val_path",
         type=str,
-        default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/dev.json",
+        default="dataset/atsa/laptop14/val.json",
         help="Path to validation JSON file",
     )
     parser.add_argument(
         "--test_path",
         type=str,
-        default="/kaggle/working/A-MoE-ASC/dataset/asc/laptop/test.json",
+        default="dataset/atsa/laptop14/test.json",
         help="Path to test JSON file",
     )
 

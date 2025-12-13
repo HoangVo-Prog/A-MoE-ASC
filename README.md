@@ -1,6 +1,19 @@
 # A-MoE-ASC
 
 
+## SOTA
+
+
+| Model            | Lapt14    | Rest14    | Rest15    | Rest16    | Avg.      |
+| ---------------- | --------- | --------- | --------- | --------- | --------- |
+| Dual-MRC         | 79.90     | 83.73     | 74.50     | 83.33     | 80.37     |
+| BARTABSA         | 80.55     | 85.38     | 80.52     | 87.92     | 83.59     |
+| InstructABSA2    | 77.16     | 81.08     | 81.34     | 83.27     | 80.71     |
+| PFInstruct-RE    | **84.04** | 90.10     | **89.56** | 88.51     | 88.05     |
+| PFInstruct-NER   | 83.4      | 91.47     | 89.11     | **92.08** | **89.02** |
+| PFInstruct-Noise | 81.06     | **91.00** | 87.56     | 90.70     | 87.58     |
+
+
 ## Baseline
 
 | Model                 | Dataset      | Fusion | Train loss | Val Acc | Test Acc |

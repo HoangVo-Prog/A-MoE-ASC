@@ -3,74 +3,67 @@
 
 import argparse
 import json
-import random
 from pathlib import Path
-from typing import Dict, List, Tuple
+from collections import Counter, defaultdict
+
+from sklearn.model_selection import train_test_split
 
 
-def read_json(path: Path) -> List[Dict]:
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a JSON list in {path}, got {type(data)}")
-    return data
+def read_json(p: Path):
+    with p.open("r", encoding="utf-8") as f:
+        x = json.load(f)
+    if not isinstance(x, list):
+        raise ValueError(f"{p} must be a JSON list")
+    return x
 
 
-def write_json(path: Path, data: List[Dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+def write_json(p: Path, data):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def norm(x) -> str:
-    if x is None:
-        return ""
-    return str(x).strip().lower()
+    return str(x).strip().lower() if x is not None else ""
 
 
-def sentences_to_drop_due_to_conflict(rows: List[Dict]) -> set:
-    drop = set()
+def conflict_sentence_set(rows):
+    s = set()
+    for r in rows:
+        sent = r.get("sentence")
+        if isinstance(sent, str) and sent.strip() and norm(r.get("polarity")) == "conflict":
+            s.add(sent)
+    return s
+
+
+def drop_sentences(rows, drop_set):
+    return [r for r in rows if r.get("sentence") not in drop_set]
+
+
+def sentence_majority_label(rows):
+    """
+    Trả về dict: sentence -> label (majority polarity)
+    Nếu hòa: label = "tie"
+    """
+    sent2pols = defaultdict(list)
     for r in rows:
         sent = r.get("sentence")
         if not isinstance(sent, str) or not sent.strip():
             continue
-        if norm(r.get("polarity")) == "conflict":
-            drop.add(sent)
-    return drop
+        pol = norm(r.get("polarity"))
+        if pol:
+            sent2pols[sent].append(pol)
+
+    sent2label = {}
+    for sent, pols in sent2pols.items():
+        c = Counter(pols)
+        best_cnt = c.most_common(1)[0][1]
+        best = [k for k, v in c.items() if v == best_cnt]
+        sent2label[sent] = best[0] if len(best) == 1 else "tie"
+    return sent2label
 
 
-def drop_sentences(rows: List[Dict], drop_set: set) -> List[Dict]:
-    return [r for r in rows if r.get("sentence") not in drop_set]
-
-
-def split_sentences(
-    sentences: List[str],
-    val_ratio: float,
-    seed: int,
-) -> Tuple[set, set]:
-    if not 0.0 < val_ratio < 1.0:
-        raise ValueError("val_ratio must be between 0 and 1")
-
-    rng = random.Random(seed)
-    sentences = list(sentences)
-    rng.shuffle(sentences)
-
-    if len(sentences) == 0:
-        return set(), set()
-
-    n_val = max(1, int(round(len(sentences) * val_ratio)))
-    val_sents = set(sentences[:n_val])
-    train_sents = set(sentences[n_val:])
-    return train_sents, val_sents
-
-
-def uniq_sentence_count(rows: List[Dict]) -> int:
-    return len(
-        {r.get("sentence") for r in rows if isinstance(r.get("sentence"), str)}
-    )
-
-
-def main() -> None:
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", type=str, required=True)
     ap.add_argument("--val_ratio", type=float, default=0.1)
@@ -79,48 +72,42 @@ def main() -> None:
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
-    train_path = data_dir / "train.json"
-    test_path = data_dir / "test.json"
-
     out_dir = Path(args.out_dir) if args.out_dir else data_dir
 
-    train_rows = read_json(train_path)
-    test_rows = read_json(test_path)
+    train_rows = read_json(data_dir / "train.json")
+    test_rows = read_json(data_dir / "test.json")
 
-    # 1) collect sentences to drop (polarity = conflict)
-    drop_set = (
-        sentences_to_drop_due_to_conflict(train_rows)
-        | sentences_to_drop_due_to_conflict(test_rows)
-    )
-
-    # 2) drop sentences
+    # 1) Drop sentence nếu có conflict ở train hoặc test
+    drop_set = conflict_sentence_set(train_rows) | conflict_sentence_set(test_rows)
     train_clean = drop_sentences(train_rows, drop_set)
     test_clean = drop_sentences(test_rows, drop_set)
 
-    # 3) split train -> train / val by sentence
-    train_sentences = sorted(
-        {r.get("sentence") for r in train_clean if isinstance(r.get("sentence"), str)}
+    # 2) Sentence labels để stratify (trên train_clean)
+    sent2label = sentence_majority_label(train_clean)
+    sentences = list(sent2label.keys())
+    labels = [sent2label[s] for s in sentences]
+
+    # 3) Stratified split theo sentence
+    train_sents, val_sents = train_test_split(
+        sentences,
+        test_size=args.val_ratio,
+        random_state=args.seed,
+        stratify=labels,
     )
-    train_sents, val_sents = split_sentences(
-        train_sentences,
-        args.val_ratio,
-        args.seed,
-    )
+    train_sents = set(train_sents)
+    val_sents = set(val_sents)
 
     train_out = [r for r in train_clean if r.get("sentence") in train_sents]
     val_out = [r for r in train_clean if r.get("sentence") in val_sents]
 
-    # 4) write output
+    # 4) Write outputs
     write_json(out_dir / "train.json", train_out)
     write_json(out_dir / "val.json", val_out)
     write_json(out_dir / "test.json", test_clean)
 
-    # 5) stats
-    print("==== Done ====")
-    print(f"Drop sentences (conflict): {len(drop_set)}")
-    print(f"Train rows: {len(train_out)} | uniq sentences: {uniq_sentence_count(train_out)}")
-    print(f"Val rows: {len(val_out)} | uniq sentences: {uniq_sentence_count(val_out)}")
-    print(f"Test rows: {len(test_clean)} | uniq sentences: {uniq_sentence_count(test_clean)}")
+    print("Done")
+    print("Dropped conflict sentences:", len(drop_set))
+    print("Train sentences:", len(train_sents), "Val sentences:", len(val_sents))
 
 
 if __name__ == "__main__":
