@@ -491,6 +491,16 @@ def main(args: argparse.Namespace) -> None:
             fusion_method=args.fusion_method,
         )
         print(f"Validation accuracy: {val_acc:.4f}")
+        
+        test_acc = eval_model(
+            model,
+            test_loader,
+            id2label,
+            verbose_report=args.verbose_report,
+            fusion_method=args.fusion_method,
+        )
+        print(f"Test accuracy: {test_acc:.4f}")
+
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
