@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, f1_score
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 
@@ -230,19 +230,13 @@ def eval_model(
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
     fusion_method: str = "concat",
-) -> float:
+    f1_average: str = "macro",   # "macro" (khuyên dùng), hoặc "weighted"
+) -> Dict[str, float]:
     """
-    Evaluate the model and compute accuracy.
-
-    Args:
-        model: The classification model.
-        dataloader: Evaluation dataloader.
-        id2label: Optional mapping from label id to label string.
-        verbose_report: If True, print a full classification report.
-        fusion_method: Fusion strategy passed to the model.
+    Evaluate the model and compute accuracy + F1.
 
     Returns:
-        Accuracy on the given dataloader.
+        dict: {"acc": ..., "f1": ...}
     """
     model.eval()
     all_preds = []
@@ -267,13 +261,14 @@ def eval_model(
             all_labels.extend(batch["label"].cpu().tolist())
 
     acc = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average=f1_average)
 
     if verbose_report and id2label is not None:
         target_names = [id2label[i] for i in range(len(id2label))]
         print("Classification report:")
-        print(classification_report(all_labels, all_preds, target_names=target_names))
+        print(classification_report(all_labels, all_preds, target_names=target_names, digits=4))
 
-    return acc
+    return {"acc": acc, "f1": f1}
 
 
 def parse_args() -> argparse.Namespace:
@@ -469,7 +464,7 @@ def main(args: argparse.Namespace) -> None:
         num_training_steps=total_steps,
     )
 
-    best_val_acc = 0.0
+    best_val_f1 = -1.0
     best_state_dict = None
 
     for epoch in range(args.epochs):
@@ -483,47 +478,50 @@ def main(args: argparse.Namespace) -> None:
         )
         print(f"Average train loss: {avg_loss:.4f}")
 
-        val_acc = eval_model(
+        val_metrics = eval_model(
             model,
             val_loader,
             id2label,
             verbose_report=False,
             fusion_method=args.fusion_method,
+            f1_average="macro",
         )
-        print(f"Validation accuracy: {val_acc:.4f}")
-        
-        test_acc = eval_model(
+        print(f"Validation accuracy: {val_metrics['acc']:.4f} | Validation macro-F1: {val_metrics['f1']:.4f}")
+
+        test_metrics = eval_model(
             model,
             test_loader,
             id2label,
             verbose_report=args.verbose_report,
             fusion_method=args.fusion_method,
+            f1_average="macro",
         )
-        print(f"Test accuracy: {test_acc:.4f}")
+        print(f"Test accuracy: {test_metrics['acc']:.4f} | Test macro-F1: {test_metrics['f1']:.4f}")
 
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # chọn best theo val F1
+        if val_metrics["f1"] > best_val_f1:
+            best_val_f1 = val_metrics["f1"]
             best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            print("New best model on validation, saving in memory")
+            print("New best model on validation macro-F1, saving in memory")
 
-    # Load best model according to validation accuracy
+
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         model.to(DEVICE)
-        print(f"Loaded best model with val acc = {best_val_acc:.4f}")
+        print(f"Loaded best model with val macro-F1 = {best_val_f1:.4f}")
     else:
         print("Warning: no best_state_dict saved, using last epoch model")
 
-    print("Evaluation on test set:")
-    test_acc = eval_model(
+    print("Evaluation best model on test set:")
+    test_metrics = eval_model(
         model,
         test_loader,
         id2label,
         verbose_report=args.verbose_report,
         fusion_method=args.fusion_method,
+        f1_average="macro",
     )
-    print(f"Test accuracy: {test_acc:.4f}")
+    print(f"Test accuracy: {test_metrics['acc']:.4f} | Test macro-F1: {test_metrics['f1']:.4f}")
 
     # Save model to file
     os.makedirs(args.output_dir, exist_ok=True)
