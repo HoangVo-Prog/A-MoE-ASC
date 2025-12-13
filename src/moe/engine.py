@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from constants import DEVICE
-from moe_info import print_moe_debug
 
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
