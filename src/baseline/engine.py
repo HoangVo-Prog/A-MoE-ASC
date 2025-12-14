@@ -37,13 +37,14 @@ def train_one_epoch(
     scheduler=None,
     fusion_method: str = "concat",
     f1_average: str = "macro",
+    step_print_moe: float = 100
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
     all_preds = []
     all_labels = []
 
-    for batch in tqdm(dataloader, desc="Training"):
+    for step, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc="Training"):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
@@ -70,58 +71,56 @@ def train_one_epoch(
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
+        
+        if step > 0 and step % step_print_moe == 0:
+            model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average=f1_average)
     return {"loss": avg_loss, "acc": acc, "f1": f1}
 
-def _plot_confusion_matrix(
+
+def _print_confusion_matrix(
     y_true,
     y_pred,
     *,
     id2label: Optional[Dict[int, str]] = None,
     normalize: bool = True,
+    digits: int = 3,
 ):
     cm = confusion_matrix(y_true, y_pred)
 
     if normalize:
-        cm = cm.astype(np.float32) / cm.sum(axis=1, keepdims=True)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    im = ax.imshow(cm)
-
-    plt.colorbar(im, ax=ax)
+        cm = cm.astype(np.float32)
+        cm = cm / cm.sum(axis=1, keepdims=True)
 
     if id2label is not None:
         labels = [id2label[i] for i in range(len(id2label))]
-        ax.set_xticks(np.arange(len(labels)))
-        ax.set_yticks(np.arange(len(labels)))
-        ax.set_xticklabels(labels, rotation=45, ha="right")
-        ax.set_yticklabels(labels)
     else:
-        ax.set_xticks(np.arange(cm.shape[1]))
-        ax.set_yticks(np.arange(cm.shape[0]))
+        labels = [str(i) for i in range(cm.shape[0])]
 
-    ax.set_xlabel("Predicted label")
-    ax.set_ylabel("True label")
-    ax.set_title("Confusion Matrix" + (" (normalized)" if normalize else ""))
+    max_label_len = max(len(l) for l in labels)
 
-    thresh = cm.max() * 0.5
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(
-                j,
-                i,
-                f"{cm[i, j]:.2f}" if normalize else int(cm[i, j]),
-                ha="center",
-                va="center",
-                color="white" if cm[i, j] > thresh else "black",
-            )
+    header = " " * (max_label_len + 2)
+    for lbl in labels:
+        header += f"{lbl:>{max_label_len+2}}"
+    print(header)
 
-    plt.tight_layout()
-    plt.show()
+    for i, row in enumerate(cm):
+        row_str = f"{labels[i]:>{max_label_len}} |"
+        for val in row:
+            if normalize:
+                row_str += f"{val:>{max_label_len+2}.{digits}f}"
+            else:
+                row_str += f"{int(val):>{max_label_len+2}d}"
+        print(row_str)
 
+    print()
+    print("Rows: True labels")
+    print("Cols: Predicted labels")
+    if normalize:
+        print("Values are row normalized")
 
 
 def eval_model(
@@ -130,7 +129,7 @@ def eval_model(
     dataloader: DataLoader,
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
-    plot_confusion: bool = False,
+    print_confusion_matrix: bool = True,
     fusion_method: str = "concat",
     f1_average: str = "macro",
 ) -> Dict[str, float]:
@@ -178,8 +177,8 @@ def eval_model(
             )
         )
 
-    if plot_confusion:
-        _plot_confusion_matrix(
+    if print_confusion_matrix:
+        _print_confusion_matrix(
             all_labels,
             all_preds,
             id2label=id2label,
@@ -207,6 +206,7 @@ def run_training_loop(
     early_stop_patience: int,
     id2label: Dict[int, str],
     tag: str = "",
+    step_print_moe: float = 100,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -233,6 +233,7 @@ def run_training_loop(
             scheduler=scheduler,
             fusion_method=fusion_method,
             f1_average="macro",
+            step_print_moe=step_print_moe,
         )
         history["train_loss"].append(train_metrics["loss"])
         history["train_f1"].append(train_metrics["f1"])
@@ -248,6 +249,7 @@ def run_training_loop(
                 model=model,
                 dataloader=val_loader,
                 id2label=id2label,
+                print_confusion_matrix=True,
                 verbose_report=False,
                 fusion_method=fusion_method,
                 f1_average="macro",

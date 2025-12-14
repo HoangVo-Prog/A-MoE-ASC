@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 from config import TrainConfig
 from constants import DEVICE
 from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from engine import eval_model, run_training_loop
+from engine import eval_model, run_training_loop, _print_confusion_matrix
 from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
@@ -57,6 +57,7 @@ def train_full_then_test(
     test_loader: DataLoader,
     label2id: Dict[str, int],
     id2label: Dict[int, str],
+    print_confusion_matrix: bool
 ):
     print("\n===== Train FULL then Test =====")
 
@@ -106,6 +107,14 @@ def train_full_then_test(
             preds = torch.argmax(outputs["logits"], dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
+             
+    if print_confusion_matrix:
+        _print_confusion_matrix(
+            all_labels,
+            all_preds,
+            id2label=id2label,
+            normalize=True,
+        )
 
     print("\nClassification report (TEST):")
     target_names = [id2label[i] for i in range(len(id2label))]
@@ -294,6 +303,7 @@ def main(args) -> None:
         test_loader=test_loader,
         label2id=label2id,
         id2label=id2label,
+        print_confusion_matrix=True
     )
 
 if __name__ == "__main__":
