@@ -40,8 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--moe_top_k", type=int, default=1)
     parser.add_argument("--aux_loss_weight", type=float, default=0.01)
 
-    # flags bạn yêu cầu
     parser.add_argument("--freeze_base", action="store_true")
     parser.add_argument("--route_mask_pad_tokens", action="store_true")
+    parser.add_argument("--step_print_moe", type=float, default=100)
 
     return parser.parse_args()

@@ -30,6 +30,7 @@ def train_one_epoch(
     scheduler=None,
     fusion_method: str = "concat",
     f1_average: str = "macro",
+    step_print_moe: float = 100
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -64,7 +65,7 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
         
-        if step > 0 and step % 50 == 0:
+        if step > 0 and step % step_print_moe == 0:
             model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
@@ -133,6 +134,7 @@ def run_training_loop(
     early_stop_patience: int,
     id2label: Dict[int, str],
     tag: str = "",
+    step_print_moe: float = 100
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -159,6 +161,7 @@ def run_training_loop(
             scheduler=scheduler,
             fusion_method=fusion_method,
             f1_average="macro",
+            step_print_moe=step_print_moe
         )
         history["train_loss"].append(train_metrics["loss"])
         history["train_f1"].append(train_metrics["f1"])

@@ -30,6 +30,8 @@ class TrainConfig:
     use_moe: bool = False
     freeze_base: bool = False 
     aux_loss_weight: float = 0.01
+    
+    step_print_moe: float = 100
 
 
 @dataclass

@@ -43,7 +43,8 @@ def build_config(args):
         verbose_report=bool(args.verbose_report),
         use_moe=bool(args.use_moe),
         freeze_base=bool(args.freeze_base),
-        aux_loss_weight=float(args.aux_loss_weight)
+        aux_loss_weight=float(args.aux_loss_weight),
+        step_print_moe=float(args.step_print_moe)
     )
 
     moe_cfg = None
@@ -77,6 +78,7 @@ def train_full_then_test(
     test_loader: DataLoader,
     label2id: Dict[str, int],
     id2label: Dict[int, str],
+    step_print_moe: float
 ):
     print("\n===== Train FULL then Test =====")
 
@@ -101,6 +103,7 @@ def train_full_then_test(
         early_stop_patience=cfg.early_stop_patience,
         id2label=id2label,
         tag="[FULL] ",
+        step_print_moe=step_print_moe,
     )
 
     if out["best_state_dict"] is not None:
@@ -201,6 +204,7 @@ def main(args: argparse.Namespace) -> None:
             early_stop_patience=cfg.early_stop_patience,
             id2label=id2label,
             tag="",
+            step_print_moe=cfg.step_print_moe
         )
 
         if out["best_state_dict"] is not None:
@@ -269,6 +273,7 @@ def main(args: argparse.Namespace) -> None:
             early_stop_patience=cfg.early_stop_patience,
             id2label=id2label,
             tag=f"[Fold {fold_idx}] ",
+            step_print_moe=cfg.step_print_moe
         )
 
         if out["best_state_dict"] is not None:
