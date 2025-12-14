@@ -334,7 +334,7 @@ def main(args: argparse.Namespace) -> None:
         test_loader=test_loader,
         label2id=label2id,
         id2label=id2label,
-        step_print_moe=cfg.step_print_moe
+        step_print_moe=cfg.step_print_moe,
         print_confusion_matrix=True
     )
 
