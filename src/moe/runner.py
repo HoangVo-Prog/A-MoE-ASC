@@ -22,6 +22,7 @@ from optim import build_optimizer_and_scheduler
 
 
 def build_config(args):
+    print(args)
     train_cfg = TrainConfig(
         model_name=args.model_name,
         fusion_method=args.fusion_method,
@@ -45,7 +46,7 @@ def build_config(args):
         freeze_base=bool(args.freeze_base),
         aux_loss_weight=float(args.aux_loss_weight),
         step_print_moe=float(args.step_print_moe),
-        train_full_only=bool(args.train_full_only)
+        train_full_only=args.train_full_only
     )
 
     moe_cfg = None
