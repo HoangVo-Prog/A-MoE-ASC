@@ -37,13 +37,14 @@ def train_one_epoch(
     scheduler=None,
     fusion_method: str = "concat",
     f1_average: str = "macro",
+    step_print_moe: float = 100
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
     all_preds = []
     all_labels = []
 
-    for batch in tqdm(dataloader, desc="Training"):
+    for step, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc="Training"):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
@@ -70,6 +71,9 @@ def train_one_epoch(
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
+        
+        if step > 0 and step % step_print_moe == 0:
+            model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
