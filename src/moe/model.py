@@ -263,7 +263,7 @@ class BertConcatClassifier(nn.Module):
         if not stats:
             print("[MoE] No stats yet (maybe first batch not run or last_router_logits missing).")
             return
-
+        print()
         for s in stats:
             usage = s["usage"]
             topv, topi = torch.topk(usage, k=min(topn, usage.numel()))

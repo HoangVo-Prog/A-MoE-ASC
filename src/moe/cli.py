@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--freeze_base", action="store_true")
     parser.add_argument("--route_mask_pad_tokens", action="store_true")
-    parser.add_argument("--step_print_moe", type=float, default=100)
+    parser.add_argument("--step_print_moe", type=float, default=200)
     
     parser.add_argument("--train_full_only", action="store_true")
 
