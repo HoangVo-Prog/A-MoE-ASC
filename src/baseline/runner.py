@@ -37,6 +37,7 @@ def build_train_config(args) -> TrainConfig:
         output_dir=args.output_dir,
         output_name=args.output_name,
         verbose_report=args.verbose_report,
+        train_full_only=args.train_full_only,
         head_type=args.head_type,
     )
 
@@ -212,90 +213,91 @@ def main(args) -> None:
         print(f"Model saved to {save_path}")
         return
 
-    # Case 2: k fold CV
-    print(f"Running StratifiedKFold with k={cfg.k_folds}")
+    if not cfg.train_full_only:
+        # Case 2: k fold CV
+        print(f"Running StratifiedKFold with k={cfg.k_folds}")
 
-    samples = train_dataset_full.samples
-    y = [label2id[s["sentiment"]] for s in samples]
+        samples = train_dataset_full.samples
+        y = [label2id[s["sentiment"]] for s in samples]
 
-    skf = StratifiedKFold(n_splits=cfg.k_folds, shuffle=True, random_state=cfg.seed)
+        skf = StratifiedKFold(n_splits=cfg.k_folds, shuffle=True, random_state=cfg.seed)
 
-    fold_val_f1, fold_test_f1 = [], []
+        fold_val_f1, fold_test_f1 = [], []
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
-        print(f"\n===== Fold {fold_idx}/{cfg.k_folds} =====")
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
+            print(f"\n===== Fold {fold_idx}/{cfg.k_folds} =====")
 
-        train_samples = [samples[i] for i in train_idx]
-        val_samples = [samples[i] for i in val_idx]
+            train_samples = [samples[i] for i in train_idx]
+            val_samples = [samples[i] for i in val_idx]
 
-        train_ds = AspectSentimentDatasetFromSamples(
-            train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
-        )
-        val_ds = AspectSentimentDatasetFromSamples(
-            val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
-        )
+            train_ds = AspectSentimentDatasetFromSamples(
+                train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+            )
+            val_ds = AspectSentimentDatasetFromSamples(
+                val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+            )
 
-        train_loader = DataLoader(train_ds, batch_size=cfg.train_batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
+            train_loader = DataLoader(train_ds, batch_size=cfg.train_batch_size, shuffle=True)
+            val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
-        model = build_model(cfg=cfg, num_labels=len(label2id))
-        total_steps = len(train_loader) * cfg.epochs
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-        )
+            model = build_model(cfg=cfg, num_labels=len(label2id))
+            total_steps = len(train_loader) * cfg.epochs
+            optimizer, scheduler = build_optimizer_and_scheduler(
+                model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
+            )
 
-        out = run_training_loop(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            epochs=cfg.epochs,
-            fusion_method=cfg.fusion_method,
-            freeze_epochs=cfg.freeze_epochs,
-            rolling_k=cfg.rolling_k,
-            early_stop_patience=cfg.early_stop_patience,
-            id2label=id2label,
-            tag=f"[Fold {fold_idx}] ",
-        )
+            out = run_training_loop(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epochs=cfg.epochs,
+                fusion_method=cfg.fusion_method,
+                freeze_epochs=cfg.freeze_epochs,
+                rolling_k=cfg.rolling_k,
+                early_stop_patience=cfg.early_stop_patience,
+                id2label=id2label,
+                tag=f"[Fold {fold_idx}] ",
+            )
 
-        if out["best_state_dict"] is not None:
-            model.load_state_dict(out["best_state_dict"])
-            model.to(DEVICE)
+            if out["best_state_dict"] is not None:
+                model.load_state_dict(out["best_state_dict"])
+                model.to(DEVICE)
 
-        best_val = eval_model(
-            model=model,
-            dataloader=val_loader,
-            id2label=id2label,
-            verbose_report=False,
-            fusion_method=cfg.fusion_method,
-            f1_average="macro",
-        )
-        best_test = eval_model(
-            model=model,
-            dataloader=test_loader,
-            id2label=id2label,
-            verbose_report=False,
-            fusion_method=cfg.fusion_method,
-            f1_average="macro",
-        )
+            best_val = eval_model(
+                model=model,
+                dataloader=val_loader,
+                id2label=id2label,
+                verbose_report=False,
+                fusion_method=cfg.fusion_method,
+                f1_average="macro",
+            )
+            best_test = eval_model(
+                model=model,
+                dataloader=test_loader,
+                id2label=id2label,
+                verbose_report=False,
+                fusion_method=cfg.fusion_method,
+                f1_average="macro",
+            )
 
-        fold_val_f1.append(best_val["f1"])
-        fold_test_f1.append(best_test["f1"])
+            fold_val_f1.append(best_val["f1"])
+            fold_test_f1.append(best_test["f1"])
 
-        print(
-            f"Fold {fold_idx} | Best rolling Val F1 {out['best_val_f1_rolling']:.4f} | "
-            f"Val F1 {best_val['f1']:.4f} | Test F1 {best_test['f1']:.4f}"
-        )
+            print(
+                f"Fold {fold_idx} | Best rolling Val F1 {out['best_val_f1_rolling']:.4f} | "
+                f"Val F1 {best_val['f1']:.4f} | Test F1 {best_test['f1']:.4f}"
+            )
 
-        os.makedirs(cfg.output_dir, exist_ok=True)
-        save_path = os.path.join(cfg.output_dir, f"fold{fold_idx}_{cfg.output_name}")
-        torch.save(model.state_dict(), save_path)
-        print(f"Saved fold model to {save_path}")
+            os.makedirs(cfg.output_dir, exist_ok=True)
+            save_path = os.path.join(cfg.output_dir, f"fold{fold_idx}_{cfg.output_name}")
+            torch.save(model.state_dict(), save_path)
+            print(f"Saved fold model to {save_path}")
 
-    print("\n===== CV Summary =====")
-    print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
-    print(f"Test macro-F1 mean {np.mean(fold_test_f1):.4f} std {np.std(fold_test_f1):.4f}")
+        print("\n===== CV Summary =====")
+        print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
+        print(f"Test macro-F1 mean {np.mean(fold_test_f1):.4f} std {np.std(fold_test_f1):.4f}")
 
     train_full_then_test(
         cfg=cfg,
