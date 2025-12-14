@@ -4,6 +4,32 @@ from transformers import AutoModel
 from typing import Dict, Optional
 
 
+def build_head(head_type: str, in_dim: int, num_labels: int, dropout: float) -> nn.Module:
+    head_type = head_type.lower().strip()
+    if head_type in {"linear", "lin"}:
+        return LinearHead(in_dim, num_labels, dropout)
+    if head_type in {"mlp", "2layer", "two_layer"}:
+        return MLPHead(in_dim, num_labels, dropout)
+    raise ValueError(f"Unsupported head_type: {head_type}. Use 'linear' or 'mlp'.")
+
+
+class LinearHead(nn.Module):
+    """
+    Linear head with LayerNorm + Dropout for stability.
+    """
+    def __init__(self, in_dim: int, num_labels: int, dropout: float):
+        super().__init__()
+        self.norm = nn.LayerNorm(in_dim)
+        self.drop = nn.Dropout(dropout)
+        self.fc = nn.Linear(in_dim, num_labels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.drop(x)
+        x = self.fc(x)
+        return x
+
+
 class MLPHead(nn.Module):
     def __init__(self, in_dim: int, num_labels: int, dropout: float):
         super().__init__()
@@ -27,7 +53,8 @@ class BertConcatClassifier(nn.Module):
     def __init__(
         self, model_name: str, 
         num_labels: int, 
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        head_type: str = "linear",  # "linear" or "mlp"
     ) -> None:
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name, add_pooling_layer=False)
@@ -40,8 +67,11 @@ class BertConcatClassifier(nn.Module):
         self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, dropout=dropout, batch_first=True)
 
         self.dropout = nn.Dropout(dropout)
-        self.head_concat = MLPHead(2 * hidden_size, num_labels, dropout)
-        self.head_single = MLPHead(hidden_size, num_labels, dropout)
+        
+        self.head_type = head_type
+        self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
+        self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
+
 
     def forward(
         self,

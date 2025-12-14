@@ -25,3 +25,5 @@ class TrainConfig:
     output_dir: str
     output_name: str
     verbose_report: bool
+    
+    head_type: str = "linear" # "linear" or "mlp"

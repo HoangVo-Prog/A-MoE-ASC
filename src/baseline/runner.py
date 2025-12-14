@@ -37,6 +37,7 @@ def build_train_config(args) -> TrainConfig:
         output_dir=args.output_dir,
         output_name=args.output_name,
         verbose_report=args.verbose_report,
+        head_type=args.head_type,
     )
 
 
@@ -44,7 +45,8 @@ def build_model(*, cfg: TrainConfig, num_labels: int):
     return BertConcatClassifier(
         cfg.model_name, 
         num_labels=num_labels, 
-        dropout=cfg.dropout
+        dropout=cfg.dropout,
+        head_type=cfg.head_type,
     ).to(DEVICE)
 
 

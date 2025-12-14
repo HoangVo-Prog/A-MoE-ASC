@@ -34,5 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rolling_k", type=int, default=3)
     parser.add_argument("--early_stop_patience", type=int, default=3)
     parser.add_argument("--freeze_epochs", type=int, default=0)
+    
+    parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp"])
 
     return parser.parse_args()
