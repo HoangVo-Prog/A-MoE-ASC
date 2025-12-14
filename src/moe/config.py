@@ -32,6 +32,8 @@ class TrainConfig:
     aux_loss_weight: float = 0.01
     
     step_print_moe: float = 100
+    
+    train_full_only: bool = False
 
 
 @dataclass
