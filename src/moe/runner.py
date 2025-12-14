@@ -17,7 +17,7 @@ from model import BertConcatClassifier
 from constants import DEVICE
 from cli import parse_args
 from config import TrainConfig, MoEConfig
-from engine import eval_model, run_training_loop
+from engine import eval_model, run_training_loop, _print_confusion_matrix
 from optim import build_optimizer_and_scheduler
 
 
@@ -81,7 +81,8 @@ def train_full_then_test(
     test_loader: DataLoader,
     label2id: Dict[str, int],
     id2label: Dict[int, str],
-    step_print_moe: float
+    step_print_moe: float,
+    print_confusion_matrix: bool
 ):
     print("\n===== Train FULL then Test =====")
 
@@ -132,6 +133,14 @@ def train_full_then_test(
             preds = torch.argmax(outputs["logits"], dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
+            
+    if print_confusion_matrix:
+        _print_confusion_matrix(
+            all_labels,
+            all_preds,
+            id2label=id2label,
+            normalize=True,
+        )
 
     print("\nClassification report (TEST):")
     target_names = [id2label[i] for i in range(len(id2label))]
@@ -326,6 +335,7 @@ def main(args: argparse.Namespace) -> None:
         label2id=label2id,
         id2label=id2label,
         step_print_moe=cfg.step_print_moe
+        print_confusion_matrix=True
     )
 
 if __name__ == "__main__":
