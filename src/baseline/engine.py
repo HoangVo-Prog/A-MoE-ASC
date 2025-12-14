@@ -3,11 +3,18 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score, classification_report, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+)
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from constants import DEVICE
+import matplotlib.pyplot as plt
+import numpy as np 
 
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
@@ -69,6 +76,53 @@ def train_one_epoch(
     f1 = f1_score(all_labels, all_preds, average=f1_average)
     return {"loss": avg_loss, "acc": acc, "f1": f1}
 
+def _plot_confusion_matrix(
+    y_true,
+    y_pred,
+    *,
+    id2label: Optional[Dict[int, str]] = None,
+    normalize: bool = True,
+):
+    cm = confusion_matrix(y_true, y_pred)
+
+    if normalize:
+        cm = cm.astype(np.float32) / cm.sum(axis=1, keepdims=True)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    im = ax.imshow(cm)
+
+    plt.colorbar(im, ax=ax)
+
+    if id2label is not None:
+        labels = [id2label[i] for i in range(len(id2label))]
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+    else:
+        ax.set_xticks(np.arange(cm.shape[1]))
+        ax.set_yticks(np.arange(cm.shape[0]))
+
+    ax.set_xlabel("Predicted label")
+    ax.set_ylabel("True label")
+    ax.set_title("Confusion Matrix" + (" (normalized)" if normalize else ""))
+
+    thresh = cm.max() * 0.5
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(
+                j,
+                i,
+                f"{cm[i, j]:.2f}" if normalize else int(cm[i, j]),
+                ha="center",
+                va="center",
+                color="white" if cm[i, j] > thresh else "black",
+            )
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 def eval_model(
     *,
@@ -76,9 +130,11 @@ def eval_model(
     dataloader: DataLoader,
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
+    plot_confusion: bool = False,
     fusion_method: str = "concat",
     f1_average: str = "macro",
 ) -> Dict[str, float]:
+
     model.eval()
     total_loss = 0.0
     all_preds = []
@@ -96,11 +152,13 @@ def eval_model(
                 labels=batch["label"],
                 fusion_method=fusion_method,
             )
+
             loss = outputs["loss"]
             logits = outputs["logits"]
 
             total_loss += float(loss.item()) if loss is not None else 0.0
             preds = torch.argmax(logits, dim=-1)
+
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
 
@@ -111,11 +169,30 @@ def eval_model(
     if verbose_report and id2label is not None:
         target_names = [id2label[i] for i in range(len(id2label))]
         print("Classification report:")
-        print(classification_report(all_labels, all_preds, target_names=target_names, digits=4))
+        print(
+            classification_report(
+                all_labels,
+                all_preds,
+                target_names=target_names,
+                digits=4,
+            )
+        )
 
-    return {"loss": avg_loss, "acc": acc, "f1": f1}
+    if plot_confusion:
+        _plot_confusion_matrix(
+            all_labels,
+            all_preds,
+            id2label=id2label,
+            normalize=True,
+        )
 
-
+    return {
+        "loss": avg_loss,
+        "acc": acc,
+        "f1": f1,
+    }
+    
+    
 def run_training_loop(
     *,
     model: nn.Module,
