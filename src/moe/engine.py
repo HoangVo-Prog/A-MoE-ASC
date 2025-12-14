@@ -80,6 +80,7 @@ def train_one_epoch(
     f1 = f1_score(all_labels, all_preds, average=f1_average)
     return {"loss": avg_loss, "acc": acc, "f1": f1}
 
+
 def _plot_confusion_matrix(
     y_true,
     y_pred,
@@ -125,7 +126,6 @@ def _plot_confusion_matrix(
 
     plt.tight_layout()
     plt.show()
-
 
 
 def eval_model(
@@ -211,6 +211,7 @@ def run_training_loop(
     early_stop_patience: int,
     id2label: Dict[int, str],
     tag: str = "",
+    step_print_moe: float = 100,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -237,6 +238,7 @@ def run_training_loop(
             scheduler=scheduler,
             fusion_method=fusion_method,
             f1_average="macro",
+            step_print_moe=step_print_moe,
         )
         history["train_loss"].append(train_metrics["loss"])
         history["train_f1"].append(train_metrics["f1"])
