@@ -10,8 +10,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val_path", type=str, default="dataset/atsa/laptop14/val.json")
     parser.add_argument("--test_path", type=str, default="dataset/atsa/laptop14/test.json")
     
-    parser.add_argument("--max_len_sent", type=int, default=128)
-    parser.add_argument("--max_len_term", type=int, default=16)
+    parser.add_argument("--max_len_sent", type=int, default=24)
+    parser.add_argument("--max_len_term", type=int, default=4)
 
     parser.add_argument("--train_batch_size", type=int, default=4)
     parser.add_argument("--eval_batch_size", type=int, default=8)
