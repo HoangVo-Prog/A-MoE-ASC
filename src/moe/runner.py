@@ -106,7 +106,7 @@ def train_full_then_test(
         early_stop_patience=cfg.early_stop_patience,
         id2label=id2label,
         tag="[FULL] ",
-        step_print_moe=step_print_moe,
+        step_print_moe=cfg.step_print_moe,
     )
 
     if out["best_state_dict"] is not None:
