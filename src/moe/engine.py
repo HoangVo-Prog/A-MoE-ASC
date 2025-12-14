@@ -254,6 +254,7 @@ def run_training_loop(
                 model=model,
                 dataloader=val_loader,
                 id2label=id2label,
+                plot_confusion=True,
                 verbose_report=False,
                 fusion_method=fusion_method,
                 f1_average="macro",
