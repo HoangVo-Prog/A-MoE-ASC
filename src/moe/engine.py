@@ -134,7 +134,7 @@ def eval_model(
     dataloader: DataLoader,
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
-    plot_confusion: bool = False,
+    plot_confusion: bool = True,
     fusion_method: str = "concat",
     f1_average: str = "macro",
 ) -> Dict[str, float]:
