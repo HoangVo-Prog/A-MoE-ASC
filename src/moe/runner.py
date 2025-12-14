@@ -144,7 +144,8 @@ def train_full_then_test(
 def main(args: argparse.Namespace) -> None:
     
     cfg, moe_cfg = build_config(args)
-    
+    print(cfg)
+    print(moe_cfg)
     torch.manual_seed(cfg.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(cfg.seed)
