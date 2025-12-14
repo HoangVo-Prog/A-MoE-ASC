@@ -34,6 +34,7 @@ class TrainConfig:
     step_print_moe: float = 100
     
     train_full_only: bool = False
+    head_type: str = "linear" # "linear" or "mlp"
 
 
 @dataclass

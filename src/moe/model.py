@@ -117,6 +117,32 @@ def freeze_all_but_moe_and_heads(model: nn.Module) -> None:
                     p.requires_grad = True
 
 
+def build_head(head_type: str, in_dim: int, num_labels: int, dropout: float) -> nn.Module:
+    head_type = head_type.lower().strip()
+    if head_type in {"linear", "lin"}:
+        return LinearHead(in_dim, num_labels, dropout)
+    if head_type in {"mlp", "2layer", "two_layer"}:
+        return MLPHead(in_dim, num_labels, dropout)
+    raise ValueError(f"Unsupported head_type: {head_type}. Use 'linear' or 'mlp'.")
+
+
+class LinearHead(nn.Module):
+    """
+    Linear head with LayerNorm + Dropout for stability.
+    """
+    def __init__(self, in_dim: int, num_labels: int, dropout: float):
+        super().__init__()
+        self.norm = nn.LayerNorm(in_dim)
+        self.drop = nn.Dropout(dropout)
+        self.fc = nn.Linear(in_dim, num_labels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.drop(x)
+        x = self.fc(x)
+        return x
+
+
 class MLPHead(nn.Module):
     def __init__(self, in_dim: int, num_labels: int, dropout: float):
         super().__init__()
@@ -143,23 +169,29 @@ class BertConcatClassifier(nn.Module):
         num_labels: int,
         dropout: float = 0.1,
         use_moe: bool = False,
-        moe_cfg: Optional[MoEConfig] = None,
+        moe_cfg: Optional["MoEConfig"] = None,
         freeze_base: bool = False,
         aux_loss_weight: float = 0.01,
+        head_type: str = "linear",  # "linear" or "mlp"
     ) -> None:
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
-        
-        # Cross-domain attention: term (query) attends over sentence (key/value)
-        # Choose a num_heads that divides hidden size to avoid runtime error
+
         _candidates = [8, 4, 2, 1]
         num_heads = next((x for x in _candidates if hidden_size % x == 0), 1)
-        self.cross_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
 
         self.dropout = nn.Dropout(dropout)
-        self.head_concat = MLPHead(2 * hidden_size, num_labels, dropout)
-        self.head_single = MLPHead(hidden_size, num_labels, dropout)
+
+        self.head_type = head_type
+        self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
+        self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
 
         self.use_moe = use_moe
         self.aux_loss_weight = aux_loss_weight
@@ -196,12 +228,6 @@ class BertConcatClassifier(nn.Module):
 
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
-        """
-        Trả về list stats cho từng layer có MoE:
-        - usage: phân phối load theo expert (mean over tokens)
-        - entropy_norm: entropy chuẩn hóa [0..1]
-        - max_load, min_load
-        """
         if not self.use_moe:
             return []
 
@@ -215,11 +241,10 @@ class BertConcatClassifier(nn.Module):
             if moe.last_router_logits is None or moe.last_topk_idx is None:
                 continue
 
-            logits = moe.last_router_logits          # thường shape [B*T, E] hoặc [B, T, E]
-            topk_idx = moe.last_topk_idx            # thường shape [B*T, K] hoặc [B, T, K]
+            logits = moe.last_router_logits
+            topk_idx = moe.last_topk_idx
             E = moe.moe_cfg.num_experts
 
-            # ép về [N, E] và [N, K]
             if logits.dim() == 3:
                 logits2 = logits.reshape(-1, logits.size(-1))
             else:
@@ -230,35 +255,33 @@ class BertConcatClassifier(nn.Module):
             else:
                 topk2 = topk_idx
 
-            # probs full để tính entropy
-            probs = torch.softmax(logits2, dim=-1)  # [N, E]
+            probs = torch.softmax(logits2, dim=-1)
 
-            # entropy chuẩn hoá
             eps = 1e-9
-            ent = -(probs * (probs + eps).log()).sum(dim=-1).mean()  # scalar
+            ent = -(probs * (probs + eps).log()).sum(dim=-1).mean()
             ent_norm = ent / math.log(E)
 
-            # usage dựa trên top-k selection: count frequency expert được chọn
-            # mỗi token góp K lượt chọn
             counts = torch.zeros(E, device=logits2.device, dtype=torch.float32)
-            counts.scatter_add_(0, topk2.reshape(-1), torch.ones_like(topk2.reshape(-1), dtype=torch.float32))
+            counts.scatter_add_(
+                0,
+                topk2.reshape(-1),
+                torch.ones_like(topk2.reshape(-1), dtype=torch.float32),
+            )
             usage = counts / counts.sum().clamp_min(1.0)
 
-            stats.append({
-                "layer": li,
-                "entropy_norm": float(ent_norm.item()),
-                "max_load": float(usage.max().item()),
-                "min_load": float(usage.min().item()),
-                "usage": usage.detach().cpu(),  # tensor [E]
-            })
+            stats.append(
+                {
+                    "layer": li,
+                    "entropy_norm": float(ent_norm.item()),
+                    "max_load": float(usage.max().item()),
+                    "min_load": float(usage.min().item()),
+                    "usage": usage.detach().cpu(),
+                }
+            )
 
         return stats
 
-
     def print_moe_debug(self, topn: int = 3):
-        """
-        In nhanh: entropy, max/min load, top expert.
-        """
         stats = self._moe_debug_stats_per_layer()
         if not stats:
             print("[MoE] No stats yet (maybe first batch not run or last_router_logits missing).")
@@ -268,12 +291,10 @@ class BertConcatClassifier(nn.Module):
             usage = s["usage"]
             topv, topi = torch.topk(usage, k=min(topn, usage.numel()))
             top_pairs = ", ".join([f"e{int(i)}={float(v):.3f}" for v, i in zip(topv, topi)])
-
             print(
                 f"[MoE][layer {s['layer']}] entropy_norm={s['entropy_norm']:.3f} "
                 f"max={s['max_load']:.3f} min={s['min_load']:.3f} | top: {top_pairs}"
             )
-
 
     def forward(
         self,
@@ -301,16 +322,13 @@ class BertConcatClassifier(nn.Module):
             fused = cls_sent * cls_term
             logits = self.head_single(self.dropout(fused))
         elif fusion_method == "cross":
-            # term embedding as query, sentence token embeddings as key/value
-            # query: [B, 1, H], key/value: [B, Ls, H]
             query = out_term.last_hidden_state[:, 0:1, :]
             key = out_sent.last_hidden_state
             value = out_sent.last_hidden_state
 
-            # key_padding_mask expects True for positions that should be ignored (pads)
             key_padding_mask = attention_mask_sent.eq(0)
             attn_out, _ = self.cross_attn(query, key, value, key_padding_mask=key_padding_mask)
-            fused = attn_out.squeeze(1)  # [B, H]
+            fused = attn_out.squeeze(1)
             logits = self.head_single(self.dropout(fused))
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")

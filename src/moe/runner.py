@@ -45,7 +45,8 @@ def build_config(args):
         freeze_base=bool(args.freeze_base),
         aux_loss_weight=float(args.aux_loss_weight),
         step_print_moe=float(args.step_print_moe),
-        train_full_only=bool(args.train_full_only)
+        train_full_only=bool(args.train_full_only),
+        head_type=args.head_type,
     )
 
     moe_cfg = None
@@ -68,6 +69,7 @@ def build_model(*, cfg: TrainConfig, moe_cfg: MoEConfig, num_labels: int):
         moe_cfg=moe_cfg,
         freeze_base=bool(cfg.freeze_base),
         aux_loss_weight=float(cfg.aux_loss_weight),
+        head_type=cfg.head_type
     ).to(DEVICE)
 
 

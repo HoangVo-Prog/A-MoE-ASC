@@ -1,13 +1,17 @@
-export CUDA_LAUNCH_BLOCKING=1
-export TORCH_SHOW_CPP_STACKTRACES=1
-
-python src/moe/train_cli.py \
-    --train_path dataset/asc/rest14/train.json \
-    --test_path dataset/asc/rest14/test.json \
-    --val_path dataset/asc/rest14/dev.json \
-    --model_name bert-base-uncased \
+python src/moe/runner.py \
+    --model_name roberta-base \
+    --epochs 10 \
+    --k_folds 5 \
+    --rolling_k 3 \
+    --early_stop_patience 3 \
+    --freeze_epochs 3 \
+    --train_path dataset/atsa/laptop14/train.json \
+    --test_path dataset/atsa/laptop14/test.json \
+    --val_path dataset/atsa/laptop14/val.json \
     --fusion_method concat \
     --use_moe \
-    --freeze_base \
     --route_mask_pad_tokens \
-    --aux_loss_weight 0.01
+    --aux_loss_weight 0.01 \
+    --train_batch_size 16 \
+    --eval_batch_size 32 \
+    --step_print_moe 100 
