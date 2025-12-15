@@ -17,7 +17,7 @@ from optim import build_optimizer_and_scheduler
 from cli import parse_args
 
 
-def clear_model():
+def clear_model(model, optimizer, scheduler):
     del model
     del optimizer
     del scheduler
@@ -133,7 +133,7 @@ def train_full_then_test(
     torch.save(model.state_dict(), save_path)
     print(f"Final model saved to {save_path}")
     
-    clear_model()
+    clear_model(model, optimizer, scheduler)
 
 
 def main(args) -> None:
@@ -304,7 +304,7 @@ def main(args) -> None:
             torch.save(model.state_dict(), save_path)
             print(f"Saved fold model to {save_path}")
             
-            clear_model()
+            clear_model(model, optimizer, scheduler)
 
         print("\n===== CV Summary =====")
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
