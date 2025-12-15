@@ -11,10 +11,30 @@ from transformers import AutoTokenizer
 from config import TrainConfig
 from constants import DEVICE
 from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from engine import eval_model, run_training_loop, _print_confusion_matrix
+from engine import eval_model, run_training_loop, _print_confusion_matrix, logits_to_metrics, collect_test_logits
 from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
+import random
+
+
+def set_all_seeds(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        
+
+def make_train_loader_with_seed(train_dataset_full, batch_size: int, seed: int) -> DataLoader:
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return DataLoader(
+        train_dataset_full,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=g,
+    )
 
 
 def clear_model(model, optimizer, scheduler):
@@ -134,6 +154,108 @@ def train_full_then_test(
     print(f"Final model saved to {save_path}")
     
     clear_model(model, optimizer, scheduler)
+
+
+def train_full_multi_seed_then_test(
+    *,
+    cfg: TrainConfig,
+    train_dataset_full,
+    test_loader: DataLoader,
+    label2id: Dict[str, int],
+    id2label: Dict[int, str],
+    seeds: list[int],
+    print_confusion_matrix: bool = True,
+    do_ensemble_logits: bool = True,
+):
+    print("\n===== Train FULL (multi-seed) then Test =====")
+    print(f"Seeds: {seeds}")
+
+    per_seed_metrics = []
+    sum_logits = None
+    fixed_labels = None
+
+    for i, seed in enumerate(seeds, start=1):
+        print(f"\n----- FULL run {i}/{len(seeds)} | seed={seed} -----")
+        set_all_seeds(seed)
+
+        train_loader = make_train_loader_with_seed(
+            train_dataset_full, batch_size=cfg.train_batch_size, seed=seed
+        )
+
+        model = build_model(cfg=cfg, num_labels=len(label2id))
+        total_steps = len(train_loader) * cfg.epochs
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
+        )
+
+        out = run_training_loop(
+            model=model,
+            train_loader=train_loader,
+            val_loader=None,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epochs=cfg.epochs,
+            fusion_method=cfg.fusion_method,
+            freeze_epochs=cfg.freeze_epochs,
+            rolling_k=cfg.rolling_k,
+            early_stop_patience=cfg.early_stop_patience,
+            id2label=id2label,
+            tag=f"[FULL seed={seed}] ",
+        )
+
+
+        logits, labels = collect_test_logits(
+            model=model, test_loader=test_loader, fusion_method=cfg.fusion_method
+        )
+
+        if fixed_labels is None:
+            fixed_labels = labels
+        else:
+            # sanity check: labels phải giống nhau giữa các seed
+            if not np.array_equal(fixed_labels, labels):
+                raise RuntimeError("Test labels differ across runs. Check test_loader shuffle.")
+
+        m = logits_to_metrics(logits, labels)
+        per_seed_metrics.append(m)
+        print(f"Seed {seed} | Test acc {m['acc']:.4f} | Test macro-F1 {m['f1']:.4f}")
+
+        if do_ensemble_logits:
+            if sum_logits is None:
+                sum_logits = logits.astype(np.float64)
+            else:
+                sum_logits += logits.astype(np.float64)
+
+        os.makedirs(cfg.output_dir, exist_ok=True)
+        save_path = os.path.join(cfg.output_dir, f"full_seed{seed}_{cfg.output_name}")
+        torch.save(model.state_dict(), save_path)
+        print(f"Saved full model to {save_path}")
+
+        clear_model(model, optimizer, scheduler)
+
+    # 1) Report mean ± std trên test
+    f1s = np.array([m["f1"] for m in per_seed_metrics], dtype=np.float64)
+    accs = np.array([m["acc"] for m in per_seed_metrics], dtype=np.float64)
+
+    print("\n===== FULL multi-seed TEST summary =====")
+    print(f"Test macro-F1 mean {f1s.mean():.4f} std {f1s.std(ddof=0):.4f}")
+    print(f"Test acc      mean {accs.mean():.4f} std {accs.std(ddof=0):.4f}")
+
+    # 2) Ensemble logits
+    if do_ensemble_logits and sum_logits is not None:
+        ens_logits = (sum_logits / len(seeds)).astype(np.float32)
+        ens_preds = ens_logits.argmax(axis=-1)
+
+        if print_confusion_matrix:
+            _print_confusion_matrix(
+                fixed_labels.tolist(),
+                ens_preds.tolist(),
+                id2label=id2label,
+                normalize=True,
+            )
+
+        print("\nClassification report (TEST, Ensemble logits):")
+        target_names = [id2label[i] for i in range(len(id2label))]
+        print(classification_report(fixed_labels, ens_preds, target_names=target_names, digits=4))
 
 
 def main(args) -> None:
@@ -310,17 +432,18 @@ def main(args) -> None:
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
         print(f"Test macro-F1 mean {np.mean(fold_test_f1):.4f} std {np.std(fold_test_f1):.4f}")
 
-    torch.manual_seed(cfg.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(cfg.seed)
-    train_full_then_test(
+    seeds = [cfg.seed + i for i in cfg.k_folds]  
+    train_full_multi_seed_then_test(
         cfg=cfg,
         train_dataset_full=train_dataset_full,
         test_loader=test_loader,
         label2id=label2id,
         id2label=id2label,
-        print_confusion_matrix=True
+        seeds=seeds,
+        print_confusion_matrix=True,
+        do_ensemble_logits=True,
     )
+
 
 if __name__ == "__main__":
     args = parse_args()

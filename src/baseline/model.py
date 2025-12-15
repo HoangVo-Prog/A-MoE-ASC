@@ -72,7 +72,7 @@ class BertConcatClassifier(nn.Module):
         self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
         self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
 
-
+    
     def forward(
         self,
         input_ids_sent: torch.Tensor,
