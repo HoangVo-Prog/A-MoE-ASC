@@ -432,7 +432,7 @@ def main(args) -> None:
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
         print(f"Test macro-F1 mean {np.mean(fold_test_f1):.4f} std {np.std(fold_test_f1):.4f}")
 
-    seeds = [cfg.seed + i for i in cfg.k_folds]  
+    seeds = [cfg.seed + i for i in range(cfg.k_folds)]  
     train_full_multi_seed_then_test(
         cfg=cfg,
         train_dataset_full=train_dataset_full,
