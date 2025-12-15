@@ -17,6 +17,13 @@ from optim import build_optimizer_and_scheduler
 from cli import parse_args
 
 
+def clear_model():
+    del model
+    del optimizer
+    del scheduler
+    torch.cuda.empty_cache()
+    
+
 def build_train_config(args) -> TrainConfig:
     return TrainConfig(
         model_name=args.model_name,
@@ -125,6 +132,8 @@ def train_full_then_test(
     save_path = os.path.join(cfg.output_dir, f"final_{cfg.output_name}")
     torch.save(model.state_dict(), save_path)
     print(f"Final model saved to {save_path}")
+    
+    clear_model()
 
 
 def main(args) -> None:
@@ -294,6 +303,8 @@ def main(args) -> None:
             save_path = os.path.join(cfg.output_dir, f"fold{fold_idx}_{cfg.output_name}")
             torch.save(model.state_dict(), save_path)
             print(f"Saved fold model to {save_path}")
+            
+            clear_model()
 
         print("\n===== CV Summary =====")
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
