@@ -49,7 +49,7 @@ def locked_baseline_config(
     independent variable is `fusion_method`.
     """
     return TrainConfig(
-        model_name="bert-base-uncased",
+        model_name="robert-base",
         fusion_method=fusion_method,
 
         epochs=20,
@@ -59,11 +59,11 @@ def locked_baseline_config(
         warmup_ratio=0.1,
         dropout=0.1,
 
-        freeze_epochs=0,
+        freeze_epochs=5,
         rolling_k=3,
         early_stop_patience=3,
 
-        k_folds=0,
+        k_folds=5,
         seed=42,
 
         max_len_sent=24,
