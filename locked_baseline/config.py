@@ -49,7 +49,7 @@ def locked_baseline_config(
     independent variable is `fusion_method`.
     """
     return TrainConfig(
-        model_name="robert-base",
+        model_name="roberta-base",
         fusion_method=fusion_method,
 
         epochs=20,
