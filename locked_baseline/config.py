@@ -53,8 +53,8 @@ def locked_baseline_config(
         fusion_method=fusion_method,
 
         epochs=20,
-        train_batch_size=32,
-        eval_batch_size=64,
+        train_batch_size=16,
+        eval_batch_size=32,
         lr=2e-5,
         warmup_ratio=0.1,
         dropout=0.1,
@@ -73,6 +73,6 @@ def locked_baseline_config(
         output_name=output_name,
         verbose_report=False,
 
-        train_full_only=True,
+        train_full_only=False,
         head_type="linear",
     )
