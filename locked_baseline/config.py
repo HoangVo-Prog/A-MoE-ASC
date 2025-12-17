@@ -73,6 +73,6 @@ def locked_baseline_config(
         output_name=output_name,
         verbose_report=False,
 
-        train_full_only=False,
+        train_full_only=True,
         head_type="linear",
     )
