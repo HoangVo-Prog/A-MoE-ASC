@@ -10,7 +10,6 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 
 from constants import DEVICE
 import matplotlib.pyplot as plt
@@ -43,7 +42,7 @@ def train_one_epoch(
     all_preds = []
     all_labels = []
 
-    for batch in tqdm(dataloader, desc="Training"):
+    for batch in dataloader:
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
