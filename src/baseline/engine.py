@@ -205,6 +205,10 @@ def run_training_loop(
     best_state_dict = None
     best_epoch = -1
     epochs_no_improve = 0
+    
+    print("=======================================================================")
+    print("Fusion Method:", fusion_method)
+    print("=======================================================================")    
 
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
