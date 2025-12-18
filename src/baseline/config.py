@@ -59,7 +59,7 @@ def locked_baseline_config(
         warmup_ratio=0.1,
         dropout=0.1,
 
-        freeze_epochs=5,
+        freeze_epochs=3,
         rolling_k=3,
         early_stop_patience=3,
 
