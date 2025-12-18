@@ -21,7 +21,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
 
-    parser.add_argument("--fusion_method", type=str, default="concat", choices=["concat", "add", "mul", "cross"])
+    parser.add_argument(
+        "--fusion_method",
+        type=str,
+        default="concat",
+        choices=["sent", "term", "concat", "add", "mul", "cross"],
+    )
     parser.add_argument("--locked_baseline", action="store_true", help="Lock the experimental baseline so only fusion_method changes across runs.")
 
     parser.add_argument("--output_dir", type=str, default="saved_model")
@@ -39,4 +44,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train_full_only", action="store_true")
     parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp"])
 
+    parser.add_argument(
+        "--benchmark_fusions",
+        action="store_true",
+        help="Run Phase 1 benchmark over multiple fusion methods and multiple seeds.",
+    )
+    parser.add_argument(
+        "--num_seeds",
+        type=int,
+        default=3,
+        help="Number of seeds to run per fusion method when --benchmark_fusions is enabled.",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default="",
+        help="Optional comma-separated seed list to override --num_seeds (e.g., 42,43,44).",
+    )
+    parser.add_argument(
+        "--benchmark_methods",
+        type=str,
+        default="sent,term,concat,add,mul,cross",
+        help="Comma-separated fusion methods for --benchmark_fusions.",
+    )
+
     return parser.parse_args()
+

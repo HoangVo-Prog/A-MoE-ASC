@@ -15,6 +15,7 @@ from engine import eval_model, run_training_loop, _print_confusion_matrix, logit
 from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
+from plotting import plot_history
 import random
 import json
 import hashlib
@@ -134,6 +135,218 @@ def build_model(*, cfg: TrainConfig, num_labels: int):
         dropout=cfg.dropout,
         head_type=cfg.head_type,
     ).to(DEVICE)
+
+
+def _parse_int_list(csv: str) -> list[int]:
+    s = (csv or "").strip()
+    if not s:
+        return []
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    out: list[int] = []
+    for p in parts:
+        out.append(int(p))
+    return out
+
+
+def _parse_str_list(csv: str) -> list[str]:
+    s = (csv or "").strip()
+    if not s:
+        return []
+    return [p.strip() for p in s.split(",") if p.strip()]
+
+
+def _run_single_method_single_seed(
+    *,
+    base_cfg: TrainConfig,
+    fusion_method: str,
+    seed: int,
+    train_dataset,
+    val_dataset,
+    test_loader: DataLoader,
+    label2id: Dict[str, int],
+    id2label: Dict[int, str],
+    run_dir: str,
+) -> Dict[str, float]:
+    """Train on train, select best on rolling val F1, then evaluate on test."""
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Ensure the same initialization and data order for this (method, seed) run.
+    set_all_seeds(seed)
+    set_determinism(seed)
+
+    cfg = TrainConfig(**{**base_cfg.__dict__, "fusion_method": fusion_method, "seed": seed})
+
+    train_loader = make_train_loader_with_seed(train_dataset, cfg.train_batch_size, seed)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.eval_batch_size, shuffle=False)
+
+    model = build_model(cfg=cfg, num_labels=len(label2id))
+    total_steps = len(train_loader) * cfg.epochs
+    optimizer, scheduler = build_optimizer_and_scheduler(
+        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
+    )
+
+    out = run_training_loop(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        epochs=cfg.epochs,
+        fusion_method=fusion_method,
+        freeze_epochs=cfg.freeze_epochs,
+        rolling_k=cfg.rolling_k,
+        early_stop_patience=cfg.early_stop_patience,
+        id2label=id2label,
+        tag=f"[PHASE1 seed={seed} method={fusion_method}] ",
+    )
+
+    history = out.get("history")
+    if history is not None:
+        plot_history(history, save_dir=run_dir, prefix="")
+
+    if out.get("best_state_dict") is not None:
+        model.load_state_dict(out["best_state_dict"])
+        model.to(DEVICE)
+
+    test_metrics = eval_model(
+        model=model,
+        dataloader=test_loader,
+        id2label=id2label,
+        print_confusion_matrix=False,
+        verbose_report=False,
+        fusion_method=fusion_method,
+        f1_average="macro",
+    )
+
+    # Save model checkpoint for this run.
+    torch.save(model.state_dict(), os.path.join(run_dir, "model.pt"))
+
+    # Save a compact JSON record.
+    record = {
+        "seed": seed,
+        "fusion_method": fusion_method,
+        "test_macro_f1": float(test_metrics["f1"]),
+        "test_acc": float(test_metrics["acc"]),
+        "best_epoch": out.get("best_epoch"),
+    }
+    with open(os.path.join(run_dir, "result.json"), "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2, ensure_ascii=False)
+
+    clear_model(model, optimizer, scheduler)
+    return record
+
+
+def run_phase1_benchmark(
+    *,
+    base_cfg: TrainConfig,
+    train_path: str,
+    val_path: str,
+    test_path: str,
+    tokenizer,
+    methods: list[str],
+    seeds: list[int],
+) -> None:
+    """Benchmark multiple fusion methods across multiple seeds."""
+    os.makedirs(base_cfg.output_dir, exist_ok=True)
+
+    train_dataset = AspectSentimentDataset(
+        json_path=train_path,
+        tokenizer=tokenizer,
+        max_len_sent=base_cfg.max_len_sent,
+        max_len_term=base_cfg.max_len_term,
+        label2id=None,
+    )
+    label2id = train_dataset.label2id
+    id2label = {v: k for k, v in label2id.items()}
+
+    val_dataset = AspectSentimentDataset(
+        json_path=val_path,
+        tokenizer=tokenizer,
+        max_len_sent=base_cfg.max_len_sent,
+        max_len_term=base_cfg.max_len_term,
+        label2id=label2id,
+    )
+    test_dataset = AspectSentimentDataset(
+        json_path=test_path,
+        tokenizer=tokenizer,
+        max_len_sent=base_cfg.max_len_sent,
+        max_len_term=base_cfg.max_len_term,
+        label2id=label2id,
+    )
+    test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
+
+    # Results structure: method -> list of f1 by seed
+    rows = []
+    for seed in seeds:
+        for method in methods:
+            run_dir = os.path.join(base_cfg.output_dir, "phase1", method, f"seed_{seed}")
+            rec = _run_single_method_single_seed(
+                base_cfg=base_cfg,
+                fusion_method=method,
+                seed=seed,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                test_loader=test_loader,
+                label2id=label2id,
+                id2label=id2label,
+                run_dir=run_dir,
+            )
+            rows.append(rec)
+
+    # Summaries per method.
+    by_method: dict[str, list[float]] = {m: [] for m in methods}
+    for r in rows:
+        by_method[r["fusion_method"]].append(float(r["test_macro_f1"]))
+
+    summary = []
+    for m in methods:
+        arr = np.array(by_method[m], dtype=float)
+        mean = float(arr.mean()) if arr.size else float("nan")
+        std = float(arr.std(ddof=1)) if arr.size > 1 else 0.0
+        summary.append({"fusion_method": m, "mean_macro_f1": mean, "std_macro_f1": std})
+
+    # Baseline comparison: sent only.
+    sent_mean = next((x["mean_macro_f1"] for x in summary if x["fusion_method"] == "sent"), None)
+    if sent_mean is not None:
+        for x in summary:
+            x["delta_vs_sent"] = float(x["mean_macro_f1"] - sent_mean)
+
+    out_dir = os.path.join(base_cfg.output_dir, "phase1")
+    os.makedirs(out_dir, exist_ok=True)
+
+    with open(os.path.join(out_dir, "results_per_seed.json"), "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    # Write CSVs for quick copy.
+    import csv
+
+    with open(os.path.join(out_dir, "results_per_seed.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["fusion_method", "seed", "test_macro_f1", "test_acc", "best_epoch"])
+        w.writeheader()
+        for r in rows:
+            w.writerow(
+                {
+                    "fusion_method": r["fusion_method"],
+                    "seed": r["seed"],
+                    "test_macro_f1": r["test_macro_f1"],
+                    "test_acc": r["test_acc"],
+                    "best_epoch": r["best_epoch"],
+                }
+            )
+
+    # Sort summary by mean descending.
+    summary_sorted = sorted(summary, key=lambda x: x["mean_macro_f1"], reverse=True)
+    summary_fields = ["fusion_method", "mean_macro_f1", "std_macro_f1"]
+    if sent_mean is not None:
+        summary_fields.append("delta_vs_sent")
+
+    with open(os.path.join(out_dir, "summary.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=summary_fields)
+        w.writeheader()
+        for r in summary_sorted:
+            w.writerow({k: r.get(k) for k in summary_fields})
 
 
 def train_full_then_test(
@@ -325,14 +538,33 @@ def main(args) -> None:
         val_path = "dataset/atsa/laptop14/val.json"
         test_path = "dataset/atsa/laptop14/test.json"
     else:
-        train_path = train_path
-        val_path = val_path
-        test_path = test_path
+        train_path = args.train_path
+        val_path = args.val_path
+        test_path = args.test_path
 
     set_all_seeds(cfg.seed)
     set_determinism(cfg.seed)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+
+    if getattr(args, "benchmark_fusions", False):
+        methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
+        seed_list = _parse_int_list(getattr(args, "seeds", ""))
+        if not seed_list:
+            n = int(getattr(args, "num_seeds", 3))
+            seed_list = [cfg.seed + i for i in range(n)]
+
+        run_phase1_benchmark(
+            base_cfg=cfg,
+            train_path=train_path,
+            val_path=val_path,
+            test_path=test_path,
+            tokenizer=tokenizer,
+            methods=methods,
+            seeds=seed_list,
+        )
+        print(f"Phase 1 benchmark done. Results saved under: {os.path.join(cfg.output_dir, 'phase1')}")
+        return
 
     train_dataset_full = AspectSentimentDataset(
         json_path=train_path,

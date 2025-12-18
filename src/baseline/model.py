@@ -88,7 +88,13 @@ class BertConcatClassifier(nn.Module):
         out_term = self.encoder(input_ids=input_ids_term, attention_mask=attention_mask_term)
         cls_term = out_term.last_hidden_state[:, 0, :]
 
-        if fusion_method == "concat":
+        if fusion_method == "sent":
+            fused = cls_sent
+            logits = self.head_single(self.dropout(fused))
+        elif fusion_method == "term":
+            fused = cls_term
+            logits = self.head_single(self.dropout(fused))
+        elif fusion_method == "concat":
             fused = torch.cat([cls_sent, cls_term], dim=-1)
             logits = self.head_concat(self.dropout(fused))
         elif fusion_method == "add":
