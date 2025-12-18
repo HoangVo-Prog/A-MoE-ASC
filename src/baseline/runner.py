@@ -15,11 +15,20 @@ from engine import eval_model, run_training_loop, _print_confusion_matrix, logit
 from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
-from plotting import plot_history
 import random
 import json
 import hashlib
 import os
+
+
+def _mean_std(xs: list[float]) -> tuple[float, float]:
+    """Sample mean and sample std (ddof=1)."""
+    arr = np.array(xs, dtype=np.float64)
+    if arr.size == 0:
+        return float("nan"), float("nan")
+    if arr.size == 1:
+        return float(arr.mean()), 0.0
+    return float(arr.mean()), float(arr.std(ddof=1))
 
 
 def set_all_seeds(seed: int) -> None:
@@ -141,11 +150,7 @@ def _parse_int_list(csv: str) -> list[int]:
     s = (csv or "").strip()
     if not s:
         return []
-    parts = [p.strip() for p in s.split(",") if p.strip()]
-    out: list[int] = []
-    for p in parts:
-        out.append(int(p))
-    return out
+    return [int(p.strip()) for p in s.split(",") if p.strip()]
 
 
 def _parse_str_list(csv: str) -> list[str]:
@@ -155,29 +160,19 @@ def _parse_str_list(csv: str) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
-def _run_single_method_single_seed(
+def _train_full_and_eval_test(
     *,
-    base_cfg: TrainConfig,
-    fusion_method: str,
-    seed: int,
-    train_dataset,
-    val_dataset,
+    cfg: TrainConfig,
+    train_dataset_full,
     test_loader: DataLoader,
     label2id: Dict[str, int],
     id2label: Dict[int, str],
-    run_dir: str,
 ) -> Dict[str, float]:
-    """Train on train, select best on rolling val F1, then evaluate on test."""
-    os.makedirs(run_dir, exist_ok=True)
+    """Train on full train set (no val) and evaluate once on test.
 
-    # Ensure the same initialization and data order for this (method, seed) run.
-    set_all_seeds(seed)
-    set_determinism(seed)
-
-    cfg = TrainConfig(**{**base_cfg.__dict__, "fusion_method": fusion_method, "seed": seed})
-
-    train_loader = make_train_loader_with_seed(train_dataset, cfg.train_batch_size, seed)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.eval_batch_size, shuffle=False)
+    Note: This function does NOT save checkpoints and does NOT write per-run files.
+    """
+    train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, cfg.seed)
 
     model = build_model(cfg=cfg, num_labels=len(label2id))
     total_steps = len(train_loader) * cfg.epochs
@@ -185,87 +180,60 @@ def _run_single_method_single_seed(
         model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
     )
 
-    out = run_training_loop(
+    _ = run_training_loop(
         model=model,
         train_loader=train_loader,
-        val_loader=val_loader,
+        val_loader=None,
         optimizer=optimizer,
         scheduler=scheduler,
         epochs=cfg.epochs,
-        fusion_method=fusion_method,
+        fusion_method=cfg.fusion_method,
         freeze_epochs=cfg.freeze_epochs,
         rolling_k=cfg.rolling_k,
         early_stop_patience=cfg.early_stop_patience,
         id2label=id2label,
-        tag=f"[PHASE1 seed={seed} method={fusion_method}] ",
+        tag=f"[FULL seed={cfg.seed} {cfg.fusion_method}] ",
     )
 
-    history = out.get("history")
-    if history is not None:
-        plot_history(history, save_dir=run_dir, prefix="")
-
-    if out.get("best_state_dict") is not None:
-        model.load_state_dict(out["best_state_dict"])
-        model.to(DEVICE)
-
-    test_metrics = eval_model(
-        model=model,
-        dataloader=test_loader,
-        id2label=id2label,
-        print_confusion_matrix=False,
-        verbose_report=False,
-        fusion_method=fusion_method,
-        f1_average="macro",
+    logits, labels = collect_test_logits(
+        model=model, test_loader=test_loader, fusion_method=cfg.fusion_method
     )
-
-    # Save model checkpoint for this run.
-    torch.save(model.state_dict(), os.path.join(run_dir, "model.pt"))
-
-    # Save a compact JSON record.
-    record = {
-        "seed": seed,
-        "fusion_method": fusion_method,
-        "test_macro_f1": float(test_metrics["f1"]),
-        "test_acc": float(test_metrics["acc"]),
-        "best_epoch": out.get("best_epoch"),
-    }
-    with open(os.path.join(run_dir, "result.json"), "w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2, ensure_ascii=False)
+    m = logits_to_metrics(logits, labels)
 
     clear_model(model, optimizer, scheduler)
-    return record
+    return {"test_acc": float(m["acc"]), "test_f1": float(m["f1"])}
 
 
-def run_phase1_benchmark(
+def run_phase1_benchmark_kfold_plus_full(
     *,
     base_cfg: TrainConfig,
     train_path: str,
-    val_path: str,
     test_path: str,
     tokenizer,
     methods: list[str],
     seeds: list[int],
+    output_path: str,
 ) -> None:
-    """Benchmark multiple fusion methods across multiple seeds."""
-    os.makedirs(base_cfg.output_dir, exist_ok=True)
+    """Benchmark that always runs: K-fold CV + FULL train then test.
 
-    train_dataset = AspectSentimentDataset(
+    Saving policy (per user requirement):
+    - DO NOT save model checkpoints
+    - DO NOT save per-run result files
+    - DO NOT call plt.show()
+    - MUST output a single aggregate file containing all results
+    """
+
+    # Build datasets once.
+    train_dataset_full = AspectSentimentDataset(
         json_path=train_path,
         tokenizer=tokenizer,
         max_len_sent=base_cfg.max_len_sent,
         max_len_term=base_cfg.max_len_term,
         label2id=None,
     )
-    label2id = train_dataset.label2id
+    label2id = train_dataset_full.label2id
     id2label = {v: k for k, v in label2id.items()}
 
-    val_dataset = AspectSentimentDataset(
-        json_path=val_path,
-        tokenizer=tokenizer,
-        max_len_sent=base_cfg.max_len_sent,
-        max_len_term=base_cfg.max_len_term,
-        label2id=label2id,
-    )
     test_dataset = AspectSentimentDataset(
         json_path=test_path,
         tokenizer=tokenizer,
@@ -275,78 +243,171 @@ def run_phase1_benchmark(
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
 
-    # Results structure: method -> list of f1 by seed
-    rows = []
-    for seed in seeds:
-        for method in methods:
-            run_dir = os.path.join(base_cfg.output_dir, "phase1", method, f"seed_{seed}")
-            rec = _run_single_method_single_seed(
-                base_cfg=base_cfg,
-                fusion_method=method,
-                seed=seed,
-                train_dataset=train_dataset,
-                val_dataset=val_dataset,
+    samples = train_dataset_full.samples
+    y = [label2id[s["sentiment"]] for s in samples]
+
+    k = int(base_cfg.k_folds)
+    if k <= 1:
+        k = 5
+
+    all_results: dict = {
+        "phase": 1,
+        "benchmark_type": "kfold_plus_full",
+        "methods": methods,
+        "seeds": seeds,
+        "k_folds": k,
+        "config": base_cfg.to_dict() if hasattr(base_cfg, "to_dict") else base_cfg.__dict__,
+        "runs": {},
+        "summary": {},
+    }
+
+    # method -> list of per-seed records (for later aggregation)
+    per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
+
+    for method in methods:
+        for seed in seeds:
+            cfg = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "seed": seed, "k_folds": k})
+
+            set_all_seeds(seed)
+            set_determinism(seed)
+
+            # ===== K-fold CV =====
+            skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+
+            fold_val_f1: list[float] = []
+            fold_test_f1: list[float] = []
+
+            for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
+                train_samples = [samples[i] for i in train_idx]
+                val_samples = [samples[i] for i in val_idx]
+
+                train_ds = AspectSentimentDatasetFromSamples(
+                    train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                )
+                val_ds = AspectSentimentDatasetFromSamples(
+                    val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                )
+
+                train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, seed + fold_idx)
+                val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
+
+                model = build_model(cfg=cfg, num_labels=len(label2id))
+                total_steps = len(train_loader) * cfg.epochs
+                optimizer, scheduler = build_optimizer_and_scheduler(
+                    model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
+                )
+
+                out = run_training_loop(
+                    model=model,
+                    train_loader=train_loader,
+                    val_loader=val_loader,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epochs=cfg.epochs,
+                    fusion_method=cfg.fusion_method,
+                    freeze_epochs=cfg.freeze_epochs,
+                    rolling_k=cfg.rolling_k,
+                    early_stop_patience=cfg.early_stop_patience,
+                    id2label=id2label,
+                    tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
+                )
+
+                if out.get("best_state_dict") is not None:
+                    model.load_state_dict(out["best_state_dict"])
+                    model.to(DEVICE)
+
+                val_m = eval_model(
+                    model=model,
+                    dataloader=val_loader,
+                    id2label=id2label,
+                    verbose_report=False,
+                    print_confusion_matrix=False,
+                    fusion_method=cfg.fusion_method,
+                    f1_average="macro",
+                )
+                test_m = eval_model(
+                    model=model,
+                    dataloader=test_loader,
+                    id2label=id2label,
+                    verbose_report=False,
+                    print_confusion_matrix=False,
+                    fusion_method=cfg.fusion_method,
+                    f1_average="macro",
+                )
+
+                fold_val_f1.append(float(val_m["f1"]))
+                fold_test_f1.append(float(test_m["f1"]))
+
+                clear_model(model, optimizer, scheduler)
+
+            cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
+            cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
+
+            # ===== FULL run then test (single seed) =====
+            full_metrics = _train_full_and_eval_test(
+                cfg=cfg,
+                train_dataset_full=train_dataset_full,
                 test_loader=test_loader,
                 label2id=label2id,
                 id2label=id2label,
-                run_dir=run_dir,
-            )
-            rows.append(rec)
-
-    # Summaries per method.
-    by_method: dict[str, list[float]] = {m: [] for m in methods}
-    for r in rows:
-        by_method[r["fusion_method"]].append(float(r["test_macro_f1"]))
-
-    summary = []
-    for m in methods:
-        arr = np.array(by_method[m], dtype=float)
-        mean = float(arr.mean()) if arr.size else float("nan")
-        std = float(arr.std(ddof=1)) if arr.size > 1 else 0.0
-        summary.append({"fusion_method": m, "mean_macro_f1": mean, "std_macro_f1": std})
-
-    # Baseline comparison: sent only.
-    sent_mean = next((x["mean_macro_f1"] for x in summary if x["fusion_method"] == "sent"), None)
-    if sent_mean is not None:
-        for x in summary:
-            x["delta_vs_sent"] = float(x["mean_macro_f1"] - sent_mean)
-
-    out_dir = os.path.join(base_cfg.output_dir, "phase1")
-    os.makedirs(out_dir, exist_ok=True)
-
-    with open(os.path.join(out_dir, "results_per_seed.json"), "w", encoding="utf-8") as f:
-        json.dump(rows, f, indent=2, ensure_ascii=False)
-    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
-
-    # Write CSVs for quick copy.
-    import csv
-
-    with open(os.path.join(out_dir, "results_per_seed.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["fusion_method", "seed", "test_macro_f1", "test_acc", "best_epoch"])
-        w.writeheader()
-        for r in rows:
-            w.writerow(
-                {
-                    "fusion_method": r["fusion_method"],
-                    "seed": r["seed"],
-                    "test_macro_f1": r["test_macro_f1"],
-                    "test_acc": r["test_acc"],
-                    "best_epoch": r["best_epoch"],
-                }
             )
 
-    # Sort summary by mean descending.
-    summary_sorted = sorted(summary, key=lambda x: x["mean_macro_f1"], reverse=True)
-    summary_fields = ["fusion_method", "mean_macro_f1", "std_macro_f1"]
-    if sent_mean is not None:
-        summary_fields.append("delta_vs_sent")
+            record = {
+                "fusion_method": method,
+                "seed": seed,
+                "cv_val_f1_folds": fold_val_f1,
+                "cv_test_f1_folds": fold_test_f1,
+                "cv_val_f1_mean": cv_val_mean,
+                "cv_val_f1_std": cv_val_std,
+                "cv_test_f1_mean": cv_test_mean,
+                "cv_test_f1_std": cv_test_std,
+                "full_test_acc": float(full_metrics["test_acc"]),
+                "full_test_f1": float(full_metrics["test_f1"]),
+            }
 
-    with open(os.path.join(out_dir, "summary.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=summary_fields)
-        w.writeheader()
-        for r in summary_sorted:
-            w.writerow({k: r.get(k) for k in summary_fields})
+            per_method_seed_records[method].append(record)
+
+    all_results["runs"] = per_method_seed_records
+
+    # ===== Aggregate summary across seeds per method =====
+    summary: dict[str, dict] = {}
+    for method in methods:
+        recs = per_method_seed_records[method]
+        cv_val_means = [float(r["cv_val_f1_mean"]) for r in recs]
+        cv_test_means = [float(r["cv_test_f1_mean"]) for r in recs]
+        full_f1s = [float(r["full_test_f1"]) for r in recs]
+        full_accs = [float(r["full_test_acc"]) for r in recs]
+
+        m1, s1 = _mean_std(cv_val_means)
+        m2, s2 = _mean_std(cv_test_means)
+        m3, s3 = _mean_std(full_f1s)
+        m4, s4 = _mean_std(full_accs)
+
+        summary[method] = {
+            "cv_val_f1_mean_over_seeds": m1,
+            "cv_val_f1_std_over_seeds": s1,
+            "cv_test_f1_mean_over_seeds": m2,
+            "cv_test_f1_std_over_seeds": s2,
+            "full_test_f1_mean_over_seeds": m3,
+            "full_test_f1_std_over_seeds": s3,
+            "full_test_acc_mean_over_seeds": m4,
+            "full_test_acc_std_over_seeds": s4,
+        }
+
+    # Deltas vs sent baseline (if present)
+    if "sent" in summary:
+        base = summary["sent"]["full_test_f1_mean_over_seeds"]
+        for method in methods:
+            summary[method]["delta_full_test_f1_vs_sent"] = float(
+                summary[method]["full_test_f1_mean_over_seeds"] - base
+            )
+
+    all_results["summary"] = summary
+
+    # Single aggregate output file
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False)
 
 
 def train_full_then_test(
@@ -547,23 +608,32 @@ def main(args) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
 
+    # Phase 1 benchmark mode: for each fusion method, run K-fold CV + FULL run on test.
+    # Saving policy in benchmark:
+    # - no checkpoints
+    # - no per-run result files
+    # - a single aggregate JSON file containing all results
     if getattr(args, "benchmark_fusions", False):
         methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
-        seed_list = _parse_int_list(getattr(args, "seeds", ""))
-        if not seed_list:
-            n = int(getattr(args, "num_seeds", 3))
-            seed_list = [cfg.seed + i for i in range(n)]
+        if not methods:
+            methods = ["sent", "term", "concat", "add", "mul", "cross"]
 
-        run_phase1_benchmark(
+        seeds = _parse_int_list(getattr(args, "seeds", ""))
+        if not seeds:
+            n = int(getattr(args, "num_seeds", 3))
+            seeds = [int(cfg.seed) + i for i in range(n)]
+
+        out_path = os.path.join(cfg.output_dir, "phase1_benchmark_all.json")
+        run_phase1_benchmark_kfold_plus_full(
             base_cfg=cfg,
             train_path=train_path,
-            val_path=val_path,
             test_path=test_path,
             tokenizer=tokenizer,
             methods=methods,
-            seeds=seed_list,
+            seeds=seeds,
+            output_path=out_path,
         )
-        print(f"Phase 1 benchmark done. Results saved under: {os.path.join(cfg.output_dir, 'phase1')}")
+        print(f"Benchmark complete. Aggregate results written to: {out_path}")
         return
 
     train_dataset_full = AspectSentimentDataset(

@@ -47,26 +47,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--benchmark_fusions",
         action="store_true",
-        help="Run Phase 1 benchmark over multiple fusion methods and multiple seeds.",
+        help="Run fusion benchmark across multiple methods and multiple seeds.",
     )
     parser.add_argument(
         "--num_seeds",
         type=int,
         default=3,
-        help="Number of seeds to run per fusion method when --benchmark_fusions is enabled.",
+        help="Number of seeds per fusion method when --benchmark_fusions is enabled.",
     )
     parser.add_argument(
         "--seeds",
         type=str,
         default="",
-        help="Optional comma-separated seed list to override --num_seeds (e.g., 42,43,44).",
+        help="Optional comma-separated seed list (overrides --num_seeds). Example: 42,43,44",
     )
     parser.add_argument(
         "--benchmark_methods",
         type=str,
         default="sent,term,concat,add,mul,cross",
-        help="Comma-separated fusion methods for --benchmark_fusions.",
+        help="Comma-separated fusion methods to benchmark.",
     )
 
     return parser.parse_args()
-

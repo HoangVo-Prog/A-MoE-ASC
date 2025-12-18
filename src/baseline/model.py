@@ -88,6 +88,8 @@ class BertConcatClassifier(nn.Module):
         out_term = self.encoder(input_ids=input_ids_term, attention_mask=attention_mask_term)
         cls_term = out_term.last_hidden_state[:, 0, :]
 
+        fusion_method = (fusion_method or "").lower().strip()
+
         if fusion_method == "sent":
             fused = cls_sent
             logits = self.head_single(self.dropout(fused))
