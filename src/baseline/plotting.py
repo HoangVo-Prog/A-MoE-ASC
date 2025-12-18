@@ -14,9 +14,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
     plt.plot(epochs, history["train_loss"], label="train")
     if len(history["val_loss"]) > 0:
         plt.plot(epochs[: len(history["val_loss"])], history["val_loss"], label="val")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Loss per epoch")
+
     plt.legend()
     plt.grid(True)
     if save_dir is not None:

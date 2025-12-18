@@ -52,7 +52,7 @@ def locked_baseline_config(
         model_name="roberta-base",
         fusion_method=fusion_method,
 
-        epochs=20,
+        epochs=10,
         train_batch_size=16,
         eval_batch_size=32,
         lr=2e-5,
