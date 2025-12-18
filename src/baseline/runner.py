@@ -616,7 +616,7 @@ def main(args) -> None:
     if getattr(args, "benchmark_fusions", False):
         methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
         if not methods:
-            methods = ["sent", "term", "concat", "add", "mul", "cross"]
+            methods = ["sent", "term", "concat", "add", "mul", "cross", "gated_concat", "bilinear", "coattn", "late_interaction", "moe"]
 
         seeds = _parse_int_list(getattr(args, "seeds", ""))
         if not seeds:
