@@ -112,10 +112,6 @@ def _print_confusion_matrix(
         print(row_str)
 
     print()
-    print("Rows: True labels")
-    print("Cols: Predicted labels")
-    if normalize:
-        print("Values are row normalized")
 
 
 def eval_model(
