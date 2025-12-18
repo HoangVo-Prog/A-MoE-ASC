@@ -8,7 +8,7 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from config import TrainConfig
+from config import TrainConfig, locked_baseline_config
 from constants import DEVICE
 from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from engine import eval_model, run_training_loop, _print_confusion_matrix, logits_to_metrics, collect_test_logits
@@ -16,6 +16,9 @@ from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 from cli import parse_args
 import random
+import json
+import hashlib
+import os
 
 
 def set_all_seeds(seed: int) -> None:
@@ -26,6 +29,56 @@ def set_all_seeds(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
         
 
+
+def set_determinism(seed: int) -> None:
+    """Best-effort determinism for reproducible experiments."""
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.allow_tf32 = False
+
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        pass
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_locked_baseline_metadata(
+    *,
+    cfg: TrainConfig,
+    locked_baseline: bool,
+    train_path: str,
+    val_path: str,
+    test_path: str,
+) -> None:
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    payload = {
+        "locked_baseline": locked_baseline,
+        "fusion_method": cfg.fusion_method,
+        "config": cfg.to_dict() if hasattr(cfg, "to_dict") else cfg.__dict__,
+        "dataset_paths": {"train": train_path, "val": val_path, "test": test_path},
+        "dataset_sha256": {
+            "train": _sha256_file(train_path) if train_path and os.path.exists(train_path) else None,
+            "val": _sha256_file(val_path) if val_path and os.path.exists(val_path) else None,
+            "test": _sha256_file(test_path) if test_path and os.path.exists(test_path) else None,
+        },
+    }
+    out_path = os.path.join(cfg.output_dir, f"{cfg.output_name}.baseline_lock.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 def make_train_loader_with_seed(train_dataset_full, batch_size: int, seed: int) -> DataLoader:
     g = torch.Generator()
     g.manual_seed(seed)
@@ -45,6 +98,12 @@ def clear_model(model, optimizer, scheduler):
     
 
 def build_train_config(args) -> TrainConfig:
+    if getattr(args, "locked_baseline", False):
+        return locked_baseline_config(
+            fusion_method=args.fusion_method,
+            output_dir=args.output_dir,
+            output_name=args.output_name,
+        )
     return TrainConfig(
         model_name=args.model_name,
         fusion_method=args.fusion_method,
@@ -68,7 +127,6 @@ def build_train_config(args) -> TrainConfig:
         head_type=args.head_type,
     )
 
-
 def build_model(*, cfg: TrainConfig, num_labels: int):
     return BertConcatClassifier(
         cfg.model_name, 
@@ -89,7 +147,7 @@ def train_full_then_test(
 ):
     print("\n===== Train FULL then Test =====")
 
-    train_loader = DataLoader(train_dataset_full, batch_size=cfg.train_batch_size, shuffle=True)
+    train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, cfg.seed)
 
     model = build_model(cfg=cfg, num_labels=len(label2id))
     total_steps = len(train_loader) * cfg.epochs
@@ -261,14 +319,23 @@ def train_full_multi_seed_then_test(
 def main(args) -> None:
     cfg = build_train_config(args)
 
-    torch.manual_seed(cfg.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(cfg.seed)
+    # Resolve dataset paths
+    if getattr(args, "locked_baseline", False):
+        train_path = "dataset/atsa/laptop14/train.json"
+        val_path = "dataset/atsa/laptop14/val.json"
+        test_path = "dataset/atsa/laptop14/test.json"
+    else:
+        train_path = train_path
+        val_path = val_path
+        test_path = test_path
+
+    set_all_seeds(cfg.seed)
+    set_determinism(cfg.seed)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
 
     train_dataset_full = AspectSentimentDataset(
-        json_path=args.train_path,
+        json_path=train_path,
         tokenizer=tokenizer,
         max_len_sent=cfg.max_len_sent,
         max_len_term=cfg.max_len_term,
@@ -279,7 +346,7 @@ def main(args) -> None:
     print("Label mapping:", label2id)
 
     test_dataset = AspectSentimentDataset(
-        json_path=args.test_path,
+        json_path=test_path,
         tokenizer=tokenizer,
         max_len_sent=cfg.max_len_sent,
         max_len_term=cfg.max_len_term,
@@ -292,14 +359,14 @@ def main(args) -> None:
         print("Running single split training")
 
         val_dataset = AspectSentimentDataset(
-            json_path=args.val_path,
+            json_path=val_path,
             tokenizer=tokenizer,
             max_len_sent=cfg.max_len_sent,
             max_len_term=cfg.max_len_term,
             label2id=label2id,
         )
 
-        train_loader = DataLoader(train_dataset_full, batch_size=cfg.train_batch_size, shuffle=True)
+        train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, cfg.seed)
         val_loader = DataLoader(val_dataset, batch_size=cfg.eval_batch_size, shuffle=False)
 
         model = build_model(cfg=cfg, num_labels=len(label2id))
@@ -368,7 +435,7 @@ def main(args) -> None:
                 val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
             )
 
-            train_loader = DataLoader(train_ds, batch_size=cfg.train_batch_size, shuffle=True)
+            train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, cfg.seed + fold_idx)
             val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
             model = build_model(cfg=cfg, num_labels=len(label2id))
