@@ -160,50 +160,6 @@ def _parse_str_list(csv: str) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
-def _train_full_and_eval_test(
-    *,
-    cfg: TrainConfig,
-    train_dataset_full,
-    test_loader: DataLoader,
-    label2id: Dict[str, int],
-    id2label: Dict[int, str],
-) -> Dict[str, float]:
-    """Train on full train set (no val) and evaluate once on test.
-
-    Note: This function does NOT save checkpoints and does NOT write per-run files.
-    """
-    train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, cfg.seed)
-
-    model = build_model(cfg=cfg, num_labels=len(label2id))
-    total_steps = len(train_loader) * cfg.epochs
-    optimizer, scheduler = build_optimizer_and_scheduler(
-        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-    )
-
-    _ = run_training_loop(
-        model=model,
-        train_loader=train_loader,
-        val_loader=None,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        epochs=cfg.epochs,
-        fusion_method=cfg.fusion_method,
-        freeze_epochs=cfg.freeze_epochs,
-        rolling_k=cfg.rolling_k,
-        early_stop_patience=cfg.early_stop_patience,
-        id2label=id2label,
-        tag=f"[FULL seed={cfg.seed} {cfg.fusion_method}] ",
-    )
-
-    logits, labels = collect_test_logits(
-        model=model, test_loader=test_loader, fusion_method=cfg.fusion_method
-    )
-    m = logits_to_metrics(logits, labels)
-
-    clear_model(model, optimizer, scheduler)
-    return {"test_acc": float(m["acc"]), "test_f1": float(m["f1"])}
-
-
 def run_phase1_benchmark_kfold_plus_full(
     *,
     base_cfg: TrainConfig,

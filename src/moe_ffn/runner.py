@@ -18,7 +18,7 @@ from cli import FUSION_METHOD_CHOICES, parse_args
 from config import TrainConfig, build_moe_config, build_train_config, locked_baseline_config
 from constants import DEVICE
 from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from engine import _print_confusion_matrix, eval_model, run_training_loop
+from engine import _print_confusion_matrix, eval_model, run_training_loop, logits_to_metrics, collect_test_logits
 from model import BertConcatClassifier
 from optim import build_optimizer_and_scheduler
 
@@ -98,38 +98,6 @@ def build_model(*, cfg: TrainConfig, moe_cfg, num_labels: int):
         aux_loss_weight=float(cfg.aux_loss_weight),
         head_type=cfg.head_type,
     ).to(DEVICE)
-
-
-@torch.no_grad()
-def collect_test_logits(
-    *,
-    model: torch.nn.Module,
-    dataloader: DataLoader,
-    fusion_method: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    model.eval()
-    all_logits = []
-    all_labels = []
-    for batch in dataloader:
-        batch = {k: v.to(DEVICE) for k, v in batch.items()}
-        outputs = model(
-            input_ids_sent=batch["input_ids_sent"],
-            attention_mask_sent=batch["attention_mask_sent"],
-            input_ids_term=batch["input_ids_term"],
-            attention_mask_term=batch["attention_mask_term"],
-            labels=None,
-            fusion_method=fusion_method,
-        )
-        all_logits.append(outputs["logits"].detach().cpu().numpy())
-        all_labels.append(batch["label"].detach().cpu().numpy())
-    return np.concatenate(all_logits, axis=0), np.concatenate(all_labels, axis=0)
-
-
-def logits_to_metrics(logits: np.ndarray, labels: np.ndarray) -> dict:
-    preds = logits.argmax(axis=-1)
-    acc = accuracy_score(labels, preds)
-    f1 = f1_score(labels, preds, average="macro")
-    return {"acc": float(acc), "f1": float(f1)}
 
 
 def train_full_then_test(
