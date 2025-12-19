@@ -220,8 +220,6 @@ def run_phase1_benchmark_kfold_plus_full(
         label2id=label2id,
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
-
-    print(base_cfg)
     
     all_results: dict = {}
     k = int(getattr(base_cfg, "k_folds", 0) or 0)
