@@ -10,7 +10,6 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 
 from constants import DEVICE
 import matplotlib.pyplot as plt
@@ -37,14 +36,13 @@ def train_one_epoch(
     scheduler=None,
     fusion_method: str = "concat",
     f1_average: str = "macro",
-    step_print_moe: float = 100
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
     all_preds = []
     all_labels = []
 
-    for step, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc="Training"):
+    for batch in dataloader:
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         outputs = model(
@@ -71,9 +69,6 @@ def train_one_epoch(
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
-        
-        if step > 0 and step % step_print_moe == 0:
-            model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
@@ -117,10 +112,6 @@ def _print_confusion_matrix(
         print(row_str)
 
     print()
-    print("Rows: True labels")
-    print("Cols: Predicted labels")
-    if normalize:
-        print("Values are row normalized")
 
 
 def eval_model(
@@ -206,7 +197,6 @@ def run_training_loop(
     early_stop_patience: int,
     id2label: Dict[int, str],
     tag: str = "",
-    step_print_moe: float = 100,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -215,7 +205,11 @@ def run_training_loop(
     best_state_dict = None
     best_epoch = -1
     epochs_no_improve = 0
-
+    
+    print("=======================================================================")
+    print("Fusion Method:", fusion_method)
+    print("=======================================================================")
+    
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
 
@@ -233,7 +227,6 @@ def run_training_loop(
             scheduler=scheduler,
             fusion_method=fusion_method,
             f1_average="macro",
-            step_print_moe=step_print_moe,
         )
         history["train_loss"].append(train_metrics["loss"])
         history["train_f1"].append(train_metrics["f1"])
@@ -287,3 +280,43 @@ def run_training_loop(
         "best_val_f1_rolling": best_val_f1_rolling,
         "history": history,
     }
+
+
+def logits_to_metrics(logits: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
+    preds = logits.argmax(axis=-1)
+    acc = accuracy_score(labels, preds)
+    f1 = f1_score(labels, preds, average="macro")
+    return {"acc": float(acc), "f1": float(f1)}
+
+
+@torch.no_grad()
+def collect_test_logits(
+    *,
+    model: torch.nn.Module,
+    test_loader: DataLoader,
+    fusion_method: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    logits_chunks = []
+    labels_chunks = []
+
+    for batch in test_loader:
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        outputs = model(
+            input_ids_sent=batch["input_ids_sent"],
+            attention_mask_sent=batch["attention_mask_sent"],
+            input_ids_term=batch["input_ids_term"],
+            attention_mask_term=batch["attention_mask_term"],
+            labels=None,
+            fusion_method=fusion_method,
+        )
+        logits = outputs["logits"].detach().cpu().numpy()
+        labels = batch["label"].detach().cpu().numpy()
+
+        logits_chunks.append(logits)
+        labels_chunks.append(labels)
+
+    logits_all = np.concatenate(logits_chunks, axis=0)
+    labels_all = np.concatenate(labels_chunks, axis=0)
+    return logits_all, labels_all
+    
