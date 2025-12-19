@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import torch
 import torch.nn as nn
@@ -12,7 +12,6 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader
 
 from constants import DEVICE
-import matplotlib.pyplot as plt
 import numpy as np 
 
 
@@ -124,7 +123,7 @@ def eval_model(
     fusion_method: str = "concat",
     f1_average: str = "macro",
     return_confusion: bool = False,
-) -> Dict[str]:
+) -> Dict[str, Any]:
 
     model.eval()
     total_loss = 0.0
