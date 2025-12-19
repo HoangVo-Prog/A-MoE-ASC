@@ -110,4 +110,26 @@ def locked_baseline_config(
     moe_cfg = build_moe_config(args)
     if use_moe is not None and not bool(use_moe):
         moe_cfg = None
+        
+    cfg.model_name="roberta-base"
+    cfg.epochs=10
+    cfg.train_batch_size=16
+    cfg.eval_batch_size=32
+    cfg.lr=2e-5
+    cfg.warmup_ratio=0.1
+    cfg.dropout=0.1
+    cfg.freeze_epochs=3
+    cfg.rolling_k=3,
+    cfg.early_stop_patience=3
+
+    cfg.k_folds=5
+
+    cfg.max_len_sent=24
+    cfg.max_len_term=4
+
+
+    cfg.verbose_report=False
+
+    cfg.train_full_only=False
+    cfg.head_type="linear"
     return cfg, moe_cfg
