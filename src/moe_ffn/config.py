@@ -116,7 +116,7 @@ def locked_baseline_config(
         moe_cfg = None
         
     cfg.model_name="roberta-base"
-    cfg.epochs=10
+    cfg.epochs=20
     cfg.train_batch_size=16
     cfg.eval_batch_size=32
     cfg.lr=2e-5
