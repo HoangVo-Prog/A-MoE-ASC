@@ -213,8 +213,9 @@ def run_phase1_benchmark_kfold_plus_full(
     methods: list[str],
     seeds: list[int],
     output_path: str,
+    do_ensemble_logits: bool = True,
 ) -> None:
-    """Benchmark that always runs: K-fold CV + FULL train then test.
+    """Benchmark that always runs: K-fold CV + FULL multi-seed train then test (with optional ensemble).
 
     Saving policy (per user requirement):
     - DO NOT save model checkpoints
@@ -251,29 +252,31 @@ def run_phase1_benchmark_kfold_plus_full(
         k = 5
 
     all_results: dict = {
-        "phase": 1,
-        "benchmark_type": "kfold_plus_full",
+        "phase": 2,  # phase-agnostic benchmark; using 2 here since you now run Phase 2 methods too
+        "benchmark_type": "kfold_plus_full_multiseed",
         "methods": methods,
         "seeds": seeds,
         "k_folds": k,
+        "do_ensemble_logits": bool(do_ensemble_logits),
         "config": base_cfg.to_dict() if hasattr(base_cfg, "to_dict") else base_cfg.__dict__,
         "runs": {},
         "summary": {},
     }
 
-    # method -> list of per-seed records (for later aggregation)
     per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
 
     for method in methods:
+        # Config template for this method
+        cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k})
+
+        # ===== K-fold CV per seed =====
         for seed in seeds:
-            cfg = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "seed": seed, "k_folds": k})
+            cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
 
-            set_all_seeds(seed)
-            set_determinism(seed)
+            set_all_seeds(int(seed))
+            set_determinism(int(seed))
 
-            # ===== K-fold CV =====
-            skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
-
+            skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=int(seed))
             fold_val_f1: list[float] = []
             fold_test_f1: list[float] = []
 
@@ -288,7 +291,7 @@ def run_phase1_benchmark_kfold_plus_full(
                     val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
                 )
 
-                train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, seed + fold_idx)
+                train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, int(seed) + fold_idx)
                 val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
                 model = build_model(cfg=cfg, num_labels=len(label2id))
@@ -312,8 +315,9 @@ def run_phase1_benchmark_kfold_plus_full(
                     tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
                 )
 
-                if out.get("best_state_dict") is not None:
-                    model.load_state_dict(out["best_state_dict"])
+                best_sd = out.get("best_state_dict", None)
+                if best_sd is not None:
+                    model.load_state_dict(best_sd)
                     model.to(DEVICE)
 
                 val_m = eval_model(
@@ -343,29 +347,43 @@ def run_phase1_benchmark_kfold_plus_full(
             cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
             cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
 
-            # ===== FULL run then test (single seed) =====
-            full_metrics = _train_full_and_eval_test(
-                cfg=cfg,
-                train_dataset_full=train_dataset_full,
-                test_loader=test_loader,
-                label2id=label2id,
-                id2label=id2label,
-            )
-
             record = {
                 "fusion_method": method,
-                "seed": seed,
+                "seed": int(seed),
                 "cv_val_f1_folds": fold_val_f1,
                 "cv_test_f1_folds": fold_test_f1,
-                "cv_val_f1_mean": cv_val_mean,
-                "cv_val_f1_std": cv_val_std,
-                "cv_test_f1_mean": cv_test_mean,
-                "cv_test_f1_std": cv_test_std,
-                "full_test_acc": float(full_metrics["test_acc"]),
-                "full_test_f1": float(full_metrics["test_f1"]),
+                "cv_val_f1_mean": float(cv_val_mean),
+                "cv_val_f1_std": float(cv_val_std),
+                "cv_test_f1_mean": float(cv_test_mean),
+                "cv_test_f1_std": float(cv_test_std),
             }
-
             per_method_seed_records[method].append(record)
+
+        # ===== FULL multi-seed then test (and ensemble) =====
+        full_out = train_full_multi_seed_then_test(
+            cfg=cfg_method,
+            train_dataset_full=train_dataset_full,
+            test_loader=test_loader,
+            label2id=label2id,
+            id2label=id2label,
+            seeds=[int(s) for s in seeds],
+            print_confusion_matrix=False,
+            do_ensemble_logits=bool(do_ensemble_logits),
+            verbose_ensemble_report=False,
+        )
+
+        # Merge FULL per-seed metrics back into each record (same seed order)
+        full_by_seed = {r["seed"]: r for r in full_out["per_seed"]}
+        for rec in per_method_seed_records[method]:
+            s = int(rec["seed"])
+            rec["full_test_acc"] = float(full_by_seed[s]["acc"])
+            rec["full_test_f1"] = float(full_by_seed[s]["f1"])
+
+        # Attach method-level ensemble metrics
+        ens = full_out.get("ensemble", None)
+        if ens is not None:
+            all_results.setdefault("ensemble", {})
+            all_results["ensemble"][method] = {"full_ens_test_acc": float(ens["acc"]), "full_ens_test_f1": float(ens["f1"])}
 
     all_results["runs"] = per_method_seed_records
 
@@ -383,16 +401,21 @@ def run_phase1_benchmark_kfold_plus_full(
         m3, s3 = _mean_std(full_f1s)
         m4, s4 = _mean_std(full_accs)
 
-        summary[method] = {
-            "cv_val_f1_mean_over_seeds": m1,
-            "cv_val_f1_std_over_seeds": s1,
-            "cv_test_f1_mean_over_seeds": m2,
-            "cv_test_f1_std_over_seeds": s2,
-            "full_test_f1_mean_over_seeds": m3,
-            "full_test_f1_std_over_seeds": s3,
-            "full_test_acc_mean_over_seeds": m4,
-            "full_test_acc_std_over_seeds": s4,
+        method_sum = {
+            "cv_val_f1_mean_over_seeds": float(m1),
+            "cv_val_f1_std_over_seeds": float(s1),
+            "cv_test_f1_mean_over_seeds": float(m2),
+            "cv_test_f1_std_over_seeds": float(s2),
+            "full_test_f1_mean_over_seeds": float(m3),
+            "full_test_f1_std_over_seeds": float(s3),
+            "full_test_acc_mean_over_seeds": float(m4),
+            "full_test_acc_std_over_seeds": float(s4),
         }
+
+        if "ensemble" in all_results and method in all_results["ensemble"]:
+            method_sum.update(all_results["ensemble"][method])
+
+        summary[method] = method_sum
 
     # Deltas vs sent baseline (if present)
     if "sent" in summary:
@@ -401,14 +424,14 @@ def run_phase1_benchmark_kfold_plus_full(
             summary[method]["delta_full_test_f1_vs_sent"] = float(
                 summary[method]["full_test_f1_mean_over_seeds"] - base
             )
+            if "full_ens_test_f1" in summary[method] and "full_ens_test_f1" in summary["sent"]:
+                summary[method]["delta_full_ens_test_f1_vs_sent"] = float(summary[method]["full_ens_test_f1"] - summary["sent"]["full_ens_test_f1"])
 
     all_results["summary"] = summary
 
-    # Single aggregate output file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
-
 
 def train_full_then_test(
     *,
@@ -498,17 +521,35 @@ def train_full_multi_seed_then_test(
     seeds: list[int],
     print_confusion_matrix: bool = True,
     do_ensemble_logits: bool = True,
-):
+    verbose_ensemble_report: bool = True,
+) -> dict:
+    """
+    Train FULL multiple times with different seeds, evaluate each run on test,
+    and optionally compute an ensemble by averaging logits.
+
+    Returns a dict:
+      {
+        "per_seed": [{"seed": int, "acc": float, "f1": float}, ...],
+        "mean": {"acc": float, "acc_std": float, "f1": float, "f1_std": float},
+        "ensemble": {"acc": float, "f1": float} or None
+      }
+
+    Notes:
+    - No checkpoints are saved here.
+    - If run_training_loop provides best_state_dict (even in no-val mode), we load it
+      before collecting test logits to avoid using a suboptimal final epoch.
+    """
     print("\n===== Train FULL (multi-seed) then Test =====")
     print(f"Seeds: {seeds}")
 
-    per_seed_metrics = []
+    per_seed_metrics: list[dict] = []
     sum_logits = None
     fixed_labels = None
 
     for i, seed in enumerate(seeds, start=1):
         print(f"\n----- FULL run {i}/{len(seeds)} | seed={seed} -----")
         set_all_seeds(seed)
+        set_determinism(seed)
 
         train_loader = make_train_loader_with_seed(
             train_dataset_full, batch_size=cfg.train_batch_size, seed=seed
@@ -535,6 +576,14 @@ def train_full_multi_seed_then_test(
             tag=f"[FULL seed={seed}] ",
         )
 
+        # IMPORTANT: ensure we evaluate the "best" state if training loop provides it.
+        best_sd = out.get("best_state_dict", None)
+        if best_sd is not None:
+            model.load_state_dict(best_sd)
+            model.to(DEVICE)
+            be = out.get("best_epoch", None)
+            if be is not None:
+                print(f"Loaded best FULL model at epoch {be} (seed={seed})")
 
         logits, labels = collect_test_logits(
             model=model, test_loader=test_loader, fusion_method=cfg.fusion_method
@@ -543,12 +592,11 @@ def train_full_multi_seed_then_test(
         if fixed_labels is None:
             fixed_labels = labels
         else:
-            # sanity check: labels phải giống nhau giữa các seed
             if not np.array_equal(fixed_labels, labels):
                 raise RuntimeError("Test labels differ across runs. Check test_loader shuffle.")
 
         m = logits_to_metrics(logits, labels)
-        per_seed_metrics.append(m)
+        per_seed_metrics.append({"seed": int(seed), "acc": float(m["acc"]), "f1": float(m["f1"])})
         print(f"Seed {seed} | Test acc {m['acc']:.4f} | Test macro-F1 {m['f1']:.4f}")
 
         if do_ensemble_logits:
@@ -557,24 +605,26 @@ def train_full_multi_seed_then_test(
             else:
                 sum_logits += logits.astype(np.float64)
 
-        os.makedirs(cfg.output_dir, exist_ok=True)
-        save_path = os.path.join(cfg.output_dir, f"full_seed{seed}_{cfg.output_name}")
-        torch.save(model.state_dict(), save_path)
-        print(f"Saved full model to {save_path}")
-
         clear_model(model, optimizer, scheduler)
 
-    # 1) Report mean ± std trên test
+    # Mean ± std across seeds (sample std, ddof=1)
     f1s = np.array([m["f1"] for m in per_seed_metrics], dtype=np.float64)
     accs = np.array([m["acc"] for m in per_seed_metrics], dtype=np.float64)
+    f1_mean = float(f1s.mean()) if f1s.size else float("nan")
+    acc_mean = float(accs.mean()) if accs.size else float("nan")
+    f1_std = float(f1s.std(ddof=1)) if f1s.size > 1 else 0.0
+    acc_std = float(accs.std(ddof=1)) if accs.size > 1 else 0.0
 
     print("\n===== FULL multi-seed TEST summary =====")
-    print(f"Test macro-F1 mean {f1s.mean():.4f} std {f1s.std(ddof=0):.4f}")
-    print(f"Test acc      mean {accs.mean():.4f} std {accs.std(ddof=0):.4f}")
+    print(f"Test macro-F1 mean {f1_mean:.4f} std {f1_std:.4f}")
+    print(f"Test acc      mean {acc_mean:.4f} std {acc_std:.4f}")
 
-    # 2) Ensemble logits
+    ensemble_block = None
     if do_ensemble_logits and sum_logits is not None:
         ens_logits = (sum_logits / len(seeds)).astype(np.float32)
+        ens_m = logits_to_metrics(ens_logits, fixed_labels)
+        ensemble_block = {"acc": float(ens_m["acc"]), "f1": float(ens_m["f1"])}
+
         ens_preds = ens_logits.argmax(axis=-1)
 
         if print_confusion_matrix:
@@ -585,10 +635,16 @@ def train_full_multi_seed_then_test(
                 normalize=True,
             )
 
-        print("\nClassification report (TEST, Ensemble logits):")
-        target_names = [id2label[i] for i in range(len(id2label))]
-        print(classification_report(fixed_labels, ens_preds, target_names=target_names, digits=4))
+        if verbose_ensemble_report:
+            print("\nClassification report (TEST, Ensemble logits):")
+            target_names = [id2label[i] for i in range(len(id2label))]
+            print(classification_report(fixed_labels, ens_preds, target_names=target_names, digits=4))
 
+    return {
+        "per_seed": per_seed_metrics,
+        "mean": {"acc": acc_mean, "acc_std": acc_std, "f1": f1_mean, "f1_std": f1_std},
+        "ensemble": ensemble_block,
+    }
 
 def main(args) -> None:
     cfg = build_train_config(args)
