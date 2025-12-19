@@ -163,17 +163,15 @@ def train_full_multi_seed_then_test(
         )
 
         model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=num_classes)
-        total_steps = len(train_loader) * cfg.epochs
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-        )
 
         out = run_training_loop(
             model=model,
             train_loader=train_loader,
             val_loader=None,
-            optimizer=optimizer,
-            scheduler=scheduler,
+            optimizer=None,
+            scheduler=None,
+            lr=cfg.lr,
+            warmup_ratio=cfg.warmup_ratio,
             epochs=cfg.epochs,
             fusion_method=cfg.fusion_method,
             freeze_epochs=cfg.freeze_epochs,
@@ -204,7 +202,7 @@ def train_full_multi_seed_then_test(
         per_seed_metrics.append({"seed": int(seed), **m})
         all_seed_logits.append(logits)
 
-        clear_model(model, optimizer, scheduler)
+        clear_model(model, None, None)
 
     accs = [r["acc"] for r in per_seed_metrics]
     f1s = [r["f1"] for r in per_seed_metrics]
@@ -336,17 +334,15 @@ def run_phase1_benchmark_kfold_plus_full(
                     val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
                     model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=num_classes)
-                    total_steps = len(train_loader) * cfg.epochs
-                    optimizer, scheduler = build_optimizer_and_scheduler(
-                        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-                    )
 
                     out = run_training_loop(
                         model=model,
                         train_loader=train_loader,
                         val_loader=val_loader,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
+                        optimizer=None,
+                        scheduler=None,
+                        lr=cfg.lr,
+                        warmup_ratio=cfg.warmup_ratio,
                         epochs=cfg.epochs,
                         fusion_method=cfg.fusion_method,
                         freeze_epochs=cfg.freeze_epochs,
@@ -388,7 +384,7 @@ def run_phase1_benchmark_kfold_plus_full(
                     fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                     fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
-                    clear_model(model, optimizer, scheduler)
+                    clear_model(model, None, None)
 
                 cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
                 cv_test_mean, cv_test_std = _mean_std(fold_test_f1)

@@ -12,8 +12,9 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader
 
 from constants import DEVICE
-import numpy as np 
+import numpy as np
 
+from optim import build_optimizer_and_scheduler
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
     for p in model.encoder.parameters():
@@ -206,6 +207,8 @@ def run_training_loop(
     val_loader: Optional[DataLoader],
     optimizer,
     scheduler,
+    lr: float = None,
+    warmup_ratio: float = None,
     epochs: int,
     fusion_method: str,
     freeze_epochs: int,
@@ -216,6 +219,36 @@ def run_training_loop(
     step_print_moe: float = 100,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+
+
+    def _trainable_params(m: nn.Module):
+        return [p for p in m.parameters() if p.requires_grad]
+
+    # Build phase-specific optimizer and scheduler to avoid allocating AdamW
+    # state for frozen parameters. When the encoder becomes trainable, the
+    # optimizer is rebuilt with the newly trainable parameters.
+    steps_per_epoch = max(1, len(train_loader))
+
+    # Ensure encoder trainable flags are correct before building the initial optimizer.
+    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
+
+    if optimizer is None or scheduler is None:
+        if lr is None or warmup_ratio is None:
+            raise ValueError("lr and warmup_ratio must be provided when optimizer/scheduler are None.")
+
+        if freeze_epochs > 0:
+            phase1_epochs = min(freeze_epochs, epochs)
+            phase1_steps = steps_per_epoch * max(1, phase1_epochs)
+        else:
+            phase1_steps = steps_per_epoch * max(1, epochs)
+
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model,
+            lr=lr,
+            warmup_ratio=warmup_ratio,
+            total_steps=phase1_steps,
+            params=_trainable_params(model),
+        )
 
     val_f1_window = deque(maxlen=rolling_k)
     best_val_f1_rolling = -1.0
@@ -234,8 +267,28 @@ def run_training_loop(
 
         if freeze_epochs > 0 and epoch < freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
+
         elif freeze_epochs > 0 and epoch == freeze_epochs:
             print("Encoder unfrozen")
+
+            # Rebuild optimizer and scheduler for the remaining epochs now that
+            # the encoder parameters are trainable.
+            remaining_steps = steps_per_epoch * max(1, epochs - epoch)
+            try:
+                del optimizer
+                del scheduler
+            except Exception:
+                pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            optimizer, scheduler = build_optimizer_and_scheduler(
+                model=model,
+                lr=lr,
+                warmup_ratio=warmup_ratio,
+                total_steps=remaining_steps,
+                params=_trainable_params(model),
+            )
 
         train_metrics = train_one_epoch(
             model=model,
