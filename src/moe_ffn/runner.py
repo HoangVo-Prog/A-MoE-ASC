@@ -100,74 +100,6 @@ def build_model(*, cfg: TrainConfig, moe_cfg, num_labels: int):
     ).to(DEVICE)
 
 
-def train_full_then_test(
-    *,
-    cfg: TrainConfig,
-    moe_cfg,
-    train_dataset_full,
-    test_loader: DataLoader,
-    label2id: Dict[str, int],
-    id2label: Dict[int, str],
-    step_print_moe: float,
-    print_confusion_matrix: bool,
-):
-    print("\n===== Train FULL then Test =====")
-
-    train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, cfg.seed)
-
-    model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=len(label2id))
-    total_steps = len(train_loader) * cfg.epochs
-    optimizer, scheduler = build_optimizer_and_scheduler(
-        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-    )
-
-    out = run_training_loop(
-        model=model,
-        train_loader=train_loader,
-        val_loader=None,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        epochs=cfg.epochs,
-        fusion_method=cfg.fusion_method,
-        freeze_epochs=cfg.freeze_epochs,
-        rolling_k=cfg.rolling_k,
-        early_stop_patience=cfg.early_stop_patience,
-        id2label=id2label,
-        tag="[FULL] ",
-        step_print_moe=step_print_moe,
-    )
-
-    if out.get("best_state_dict", None) is not None:
-        model.load_state_dict(out["best_state_dict"])
-        model.to(DEVICE)
-        if out.get("best_epoch", None) is not None:
-            print(f"Loaded best FULL model at epoch {out['best_epoch']}")
-
-    print("\n===== Final TEST evaluation =====")
-    logits, labels = collect_test_logits(model=model, dataloader=test_loader, fusion_method=cfg.fusion_method)
-    preds = logits.argmax(axis=-1).tolist()
-    labels_list = labels.tolist()
-
-    if print_confusion_matrix:
-        _print_confusion_matrix(
-            labels_list,
-            preds,
-            id2label=id2label,
-            normalize=True,
-        )
-
-    print("\nClassification report (TEST):")
-    target_names = [id2label[i] for i in range(len(id2label))]
-    print(classification_report(labels_list, preds, target_names=target_names, digits=4))
-
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    save_path = os.path.join(cfg.output_dir, f"final_{cfg.output_name}")
-    torch.save(model.state_dict(), save_path)
-    print(f"Final model saved to {save_path}")
-
-    clear_model(model, optimizer, scheduler)
-
-
 def train_full_multi_seed_then_test(
     *,
     cfg: TrainConfig,
@@ -289,6 +221,8 @@ def run_phase1_benchmark_kfold_plus_full(
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
 
+    print(base_cfg)
+    
     all_results: dict = {}
     k = int(getattr(base_cfg, "k_folds", 0) or 0)
 
