@@ -123,7 +123,8 @@ def eval_model(
     print_confusion_matrix: bool = True,
     fusion_method: str = "concat",
     f1_average: str = "macro",
-) -> Dict[str, float]:
+    return_confusion: bool = False,
+) -> Dict[str]:
 
     model.eval()
     total_loss = 0.0
@@ -167,6 +168,13 @@ def eval_model(
                 digits=4,
             )
         )
+        
+    num_labels = len(id2label) if id2label is not None else None
+    cm = confusion_matrix(
+        all_labels,
+        all_preds,
+        labels=list(range(num_labels)) if num_labels is not None else None,
+    )
 
     if print_confusion_matrix:
         _print_confusion_matrix(
@@ -176,12 +184,17 @@ def eval_model(
             normalize=True,
         )
 
-    return {
+    out = {
         "loss": avg_loss,
         "acc": acc,
         "f1": f1,
     }
-    
+
+    if return_confusion:
+        out["confusion"] = cm  # shape [C, C], raw counts
+
+    return out
+   
     
 def run_training_loop(
     *,

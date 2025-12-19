@@ -3,7 +3,7 @@ from typing import Dict
 
 import numpy as np
 import torch
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -189,6 +189,8 @@ def run_phase1_benchmark_kfold_plus_full(
     )
     label2id = train_dataset_full.label2id
     id2label = {v: k for k, v in label2id.items()}
+    samples = train_dataset_full.samples
+    y = [label2id[s["sentiment"]] for s in samples]
 
     test_dataset = AspectSentimentDataset(
         json_path=test_path,
@@ -198,9 +200,6 @@ def run_phase1_benchmark_kfold_plus_full(
         label2id=label2id,
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
-
-    samples = train_dataset_full.samples
-    y = [label2id[s["sentiment"]] for s in samples]
 
     k = int(base_cfg.k_folds)
 
@@ -215,6 +214,8 @@ def run_phase1_benchmark_kfold_plus_full(
     }
 
     per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
+    num_classes = len(label2id)
+
 
     for method in methods:
         cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k})
@@ -222,103 +223,119 @@ def run_phase1_benchmark_kfold_plus_full(
         # ===== K-fold CV per seed =====
         for seed in seeds:
             cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
-
             set_all_seeds(int(seed))
             set_determinism(int(seed))
+            # K-fold CV if requested
+            if cfg.k_folds and cfg.k_folds > 1:            
+                skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=int(seed))
+                
+                fold_val_f1: list[float] = []
+                fold_test_f1: list[float] = []
 
-            skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=int(seed))
-            fold_val_f1: list[float] = []
-            fold_test_f1: list[float] = []
+                fold_val_cms: list[np.ndarray] = []
+                fold_test_cms: list[np.ndarray] = []
 
-            for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
-                train_samples = [samples[i] for i in train_idx]
-                val_samples = [samples[i] for i in val_idx]
+                for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
+                    train_samples = [samples[i] for i in train_idx]
+                    val_samples = [samples[i] for i in val_idx]
 
-                train_ds = AspectSentimentDatasetFromSamples(
-                    train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
-                )
-                val_ds = AspectSentimentDatasetFromSamples(
-                    val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
-                )
+                    train_ds = AspectSentimentDatasetFromSamples(
+                        train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                    )
+                    val_ds = AspectSentimentDatasetFromSamples(
+                        val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                    )
 
-                train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, int(seed) + fold_idx)
-                val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
+                    train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, int(seed) + fold_idx)
+                    val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
-                model = build_model(cfg=cfg, num_labels=len(label2id))
-                total_steps = len(train_loader) * cfg.epochs
-                optimizer, scheduler = build_optimizer_and_scheduler(
-                    model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-                )
+                    model = build_model(cfg=cfg, num_labels=num_classes)
+                    total_steps = len(train_loader) * cfg.epochs
+                    optimizer, scheduler = build_optimizer_and_scheduler(
+                        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
+                    )
 
-                out = run_training_loop(
-                    model=model,
-                    train_loader=train_loader,
-                    val_loader=val_loader,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    epochs=cfg.epochs,
-                    fusion_method=cfg.fusion_method,
-                    freeze_epochs=cfg.freeze_epochs,
-                    rolling_k=cfg.rolling_k,
-                    early_stop_patience=cfg.early_stop_patience,
-                    id2label=id2label,
-                    tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
-                )
+                    out = run_training_loop(
+                        model=model,
+                        train_loader=train_loader,
+                        val_loader=val_loader,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        epochs=cfg.epochs,
+                        fusion_method=cfg.fusion_method,
+                        freeze_epochs=cfg.freeze_epochs,
+                        rolling_k=cfg.rolling_k,
+                        early_stop_patience=cfg.early_stop_patience,
+                        id2label=id2label,
+                        tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
+                    )
 
-                best_sd = out.get("best_state_dict", None)
-                if best_sd is not None:
-                    model.load_state_dict(best_sd)
-                    model.to(DEVICE)
+                    best_sd = out.get("best_state_dict", None)
+                    if best_sd is not None:
+                        model.load_state_dict(best_sd)
+                        model.to(DEVICE)
 
-                val_m = eval_model(
-                    model=model,
-                    dataloader=val_loader,
-                    id2label=id2label,
-                    verbose_report=False,
-                    print_confusion_matrix=False,
-                    fusion_method=cfg.fusion_method,
-                    f1_average="macro",
-                )
-                test_m = eval_model(
-                    model=model,
-                    dataloader=test_loader,
-                    id2label=id2label,
-                    verbose_report=False,
-                    print_confusion_matrix=False,
-                    fusion_method=cfg.fusion_method,
-                    f1_average="macro",
-                )
+                    val_m = eval_model(
+                        model=model,
+                        dataloader=val_loader,
+                        id2label=id2label,
+                        verbose_report=False,
+                        print_confusion_matrix=False,
+                        fusion_method=cfg.fusion_method,
+                        return_confusion=True,
+                        f1_average="macro",
+                    )
+                    test_m = eval_model(
+                        model=model,
+                        dataloader=test_loader,
+                        id2label=id2label,
+                        verbose_report=False,
+                        print_confusion_matrix=False,
+                        fusion_method=cfg.fusion_method,
+                        return_confusion=True,
+                        f1_average="macro",
+                    )
 
-                fold_val_f1.append(float(val_m["f1"]))
-                fold_test_f1.append(float(test_m["f1"]))
+                    fold_val_f1.append(val_m["f1"])
+                    fold_test_f1.append(test_m["f1"])
 
-                clear_model(model, optimizer, scheduler)
+                    fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
+                    fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
-            cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
-            cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
+                    clear_model(model, optimizer, scheduler)
 
-            record = {
-                "fusion_method": method,
-                "seed": int(seed),
-                "cv_val_f1_folds": fold_val_f1,
-                "cv_test_f1_folds": fold_test_f1,
-                "cv_val_f1_mean": float(cv_val_mean),
-                "cv_val_f1_std": float(cv_val_std),
-                "cv_test_f1_mean": float(cv_test_mean),
-                "cv_test_f1_std": float(cv_test_std),
-            }
-            per_method_seed_records[method].append(record)
+                cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
+                cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
+                
+                # Aggregate confusion across folds for this seed
+                cv_val_conf = _aggregate_confusions(fold_val_cms)
+                cv_test_conf = _aggregate_confusions(fold_test_cms)
+
+                record = {
+                    "fusion_method": method,
+                    "seed": int(seed),
+                    "cv_val_f1_folds": fold_val_f1,
+                    "cv_test_f1_folds": fold_test_f1,
+                    "cv_val_f1_mean": float(cv_val_mean),
+                    "cv_val_f1_std": float(cv_val_std),
+                    "cv_test_f1_mean": float(cv_test_mean),
+                    "cv_test_f1_std": float(cv_test_std),
+                    "cv_val_confusion": cv_val_conf,
+                    "cv_test_confusion": cv_test_conf,
+                }
+                per_method_seed_records[method].append(record)
 
         # ===== FULL multi-seed then test (and ensemble) =====
+        cfg_full = TrainConfig(**{**cfg_method.__dict__})
         full_out = train_full_multi_seed_then_test(
-            cfg=cfg_method,
+            cfg=cfg_full,
             train_dataset_full=train_dataset_full,
             test_loader=test_loader,
             label2id=label2id,
             id2label=id2label,
             seeds=[int(s) for s in seeds],
             print_confusion_matrix=False,
-            do_ensemble_logits=base_cfg.do_ensemble_logits,
+            do_ensemble_logits=getattr(base_cfg, "do_ensemble_logits", True),
             verbose_ensemble_report=False,
         )
 
@@ -326,14 +343,24 @@ def run_phase1_benchmark_kfold_plus_full(
         full_by_seed = {r["seed"]: r for r in full_out["per_seed"]}
         for rec in per_method_seed_records[method]:
             s = int(rec["seed"])
-            rec["full_test_acc"] = float(full_by_seed[s]["acc"])
-            rec["full_test_f1"] = float(full_by_seed[s]["f1"])
+            if s in full_by_seed:
+                rec["full_test_acc"] = float(full_by_seed[s]["acc"])
+                rec["full_test_f1"] = float(full_by_seed[s]["f1"])
 
-        # Attach method-level ensemble metrics
+        # Attach method-level FULL confusion aggregation across seeds
+        # This is the requested cm_mean/cm_std for FULL run
+        all_results.setdefault("full_confusion", {})
+        all_results["full_confusion"][method] = full_out.get("confusion", {})
+
+        # Attach method-level ensemble metrics (and confusion if present)
         ens = full_out.get("ensemble", None)
         if ens is not None:
             all_results.setdefault("ensemble", {})
-            all_results["ensemble"][method] = {"full_ens_test_acc": float(ens["acc"]), "full_ens_test_f1": float(ens["f1"])}
+            all_results["ensemble"][method] = {
+                "full_ens_test_acc": float(ens["metrics"]["acc"]),
+                "full_ens_test_f1": float(ens["metrics"]["f1"]),
+                "confusion": ens.get("confusion", None),
+            }
 
     all_results["runs"] = per_method_seed_records
 
@@ -343,8 +370,8 @@ def run_phase1_benchmark_kfold_plus_full(
         recs = per_method_seed_records[method]
         cv_val_means = [float(r["cv_val_f1_mean"]) for r in recs]
         cv_test_means = [float(r["cv_test_f1_mean"]) for r in recs]
-        full_f1s = [float(r["full_test_f1"]) for r in recs]
-        full_accs = [float(r["full_test_acc"]) for r in recs]
+        full_f1s = [float(r.get("full_test_f1", 0.0)) for r in recs]
+        full_accs = [float(r.get("full_test_acc", 0.0)) for r in recs]
 
         m1, s1 = _mean_std(cv_val_means)
         m2, s2 = _mean_std(cv_test_means)
@@ -362,8 +389,22 @@ def run_phase1_benchmark_kfold_plus_full(
             "full_test_acc_std_over_seeds": float(s4),
         }
 
+        # NEW: aggregate k-fold confusion across seeds (using per-seed fold-mean matrices)
+        if len(recs) > 0 and "cv_test_confusion" in recs[0]:
+            cv_val_seed_means = [np.asarray(r["cv_val_confusion"]["cm_mean"], dtype=np.float64) for r in recs]
+            cv_test_seed_means = [np.asarray(r["cv_test_confusion"]["cm_mean"], dtype=np.float64) for r in recs]
+            method_sum["cv_val_confusion_over_seeds"] = _aggregate_confusions(cv_val_seed_means)
+            method_sum["cv_test_confusion_over_seeds"] = _aggregate_confusions(cv_test_seed_means)
+
+        # FULL confusion across seeds already computed by train_full_multi_seed_then_test
+        if "full_confusion" in all_results and method in all_results["full_confusion"]:
+            method_sum["full_confusion_over_seeds"] = all_results["full_confusion"][method]
+
         if "ensemble" in all_results and method in all_results["ensemble"]:
-            method_sum.update(all_results["ensemble"][method])
+            method_sum["full_ens_test_acc"] = float(all_results["ensemble"][method]["full_ens_test_acc"])
+            method_sum["full_ens_test_f1"] = float(all_results["ensemble"][method]["full_ens_test_f1"])
+            if all_results["ensemble"][method].get("confusion", None) is not None:
+                method_sum["full_ens_confusion"] = all_results["ensemble"][method]["confusion"]
 
         summary[method] = method_sum
 
@@ -375,13 +416,16 @@ def run_phase1_benchmark_kfold_plus_full(
                 summary[method]["full_test_f1_mean_over_seeds"] - base
             )
             if "full_ens_test_f1" in summary[method] and "full_ens_test_f1" in summary["sent"]:
-                summary[method]["delta_full_ens_test_f1_vs_sent"] = float(summary[method]["full_ens_test_f1"] - summary["sent"]["full_ens_test_f1"])
+                summary[method]["delta_full_ens_test_f1_vs_sent"] = float(
+                    summary[method]["full_ens_test_f1"] - summary["sent"]["full_ens_test_f1"]
+                )
 
     all_results["summary"] = summary
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
+        
 
 def train_full_then_test(
     *,
@@ -461,6 +505,29 @@ def train_full_then_test(
     clear_model(model, optimizer, scheduler)
 
 
+def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
+    # cms: list of [C, C] raw count matrices
+    if len(cms) == 0:
+        return {}
+
+    arr = np.stack([np.asarray(cm, dtype=np.float64) for cm in cms], axis=0)  # [N, C, C]
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0, ddof=1) if arr.shape[0] > 1 else np.zeros_like(mean)
+
+    # Normalize AFTER aggregating raw counts
+    denom = mean.sum(axis=1, keepdims=True)
+    denom = np.clip(denom, 1e-12, None)
+    mean_norm = mean / denom
+    std_norm = std / denom
+
+    return {
+        "cm_mean": mean.tolist(),
+        "cm_std": std.tolist(),
+        "cm_mean_normalized": mean_norm.tolist(),
+        "cm_std_normalized": std_norm.tolist(),
+    }
+
+
 def train_full_multi_seed_then_test(
     *,
     cfg: TrainConfig,
@@ -493,8 +560,10 @@ def train_full_multi_seed_then_test(
     print(f"Seeds: {seeds}")
 
     per_seed_metrics: list[dict] = []
-    sum_logits = None
-    fixed_labels = None
+    all_seed_logits: list[np.ndarray] = []
+    all_seed_cms: list[np.ndarray] = []
+    num_classes = len(label2id)
+
 
     for i, seed in enumerate(seeds, start=1):
         print(f"\n----- FULL run {i}/{len(seeds)} | seed={seed} -----")
@@ -539,62 +608,61 @@ def train_full_multi_seed_then_test(
             model=model, test_loader=test_loader, fusion_method=cfg.fusion_method
         )
 
-        if fixed_labels is None:
-            fixed_labels = labels
-        else:
-            if not np.array_equal(fixed_labels, labels):
-                raise RuntimeError("Test labels differ across runs. Check test_loader shuffle.")
-
+        
         m = logits_to_metrics(logits, labels)
-        per_seed_metrics.append({"seed": int(seed), "acc": float(m["acc"]), "f1": float(m["f1"])})
-        print(f"Seed {seed} | Test acc {m['acc']:.4f} | Test macro-F1 {m['f1']:.4f}")
+        preds = logits.argmax(axis=-1)
+        cm = confusion_matrix(labels, preds, labels=list(range(num_classes)))  # raw counts
+        all_seed_cms.append(cm)
 
-        if do_ensemble_logits:
-            if sum_logits is None:
-                sum_logits = logits.astype(np.float64)
-            else:
-                sum_logits += logits.astype(np.float64)
+        per_seed_metrics.append({"seed": int(seed), **m})
+        all_seed_logits.append(logits)
 
         clear_model(model, optimizer, scheduler)
 
-    # Mean ± std across seeds (sample std, ddof=1)
-    f1s = np.array([m["f1"] for m in per_seed_metrics], dtype=np.float64)
-    accs = np.array([m["acc"] for m in per_seed_metrics], dtype=np.float64)
-    f1_mean = float(f1s.mean()) if f1s.size else float("nan")
-    acc_mean = float(accs.mean()) if accs.size else float("nan")
-    f1_std = float(f1s.std(ddof=1)) if f1s.size > 1 else 0.0
-    acc_std = float(accs.std(ddof=1)) if accs.size > 1 else 0.0
+    accs = [r["acc"] for r in per_seed_metrics]
+    f1s = [r["f1"] for r in per_seed_metrics]
+    acc_mean, acc_std = _mean_std(accs)
+    f1_mean, f1_std = _mean_std(f1s)
 
-    print("\n===== FULL multi-seed TEST summary =====")
-    print(f"Test macro-F1 mean {f1_mean:.4f} std {f1_std:.4f}")
-    print(f"Test acc      mean {acc_mean:.4f} std {acc_std:.4f}")
+    # Aggregate FULL confusion across seeds
+    full_confusion_block = _aggregate_confusions(all_seed_cms)
 
     ensemble_block = None
-    if do_ensemble_logits and sum_logits is not None:
-        ens_logits = (sum_logits / len(seeds)).astype(np.float32)
-        ens_m = logits_to_metrics(ens_logits, fixed_labels)
-        ensemble_block = {"acc": float(ens_m["acc"]), "f1": float(ens_m["f1"])}
+    if do_ensemble_logits and len(all_seed_logits) >= 2:
+        ens_logits = np.mean(np.stack(all_seed_logits, axis=0), axis=0)
+        ens_metrics = logits_to_metrics(ens_logits, labels)
 
         ens_preds = ens_logits.argmax(axis=-1)
+        ens_cm = confusion_matrix(labels, ens_preds, labels=list(range(num_classes)))
 
-        if print_confusion_matrix:
-            _print_confusion_matrix(
-                fixed_labels.tolist(),
-                ens_preds.tolist(),
-                id2label=id2label,
-                normalize=True,
-            )
+        ensemble_block = {
+            "metrics": ens_metrics,
+            "confusion": {
+                "cm": ens_cm.tolist(),
+                "cm_normalized": (ens_cm / np.clip(ens_cm.sum(axis=1, keepdims=True), 1e-12, None)).tolist(),
+            },
+        }
 
         if verbose_ensemble_report:
-            print("\nClassification report (TEST, Ensemble logits):")
+            preds_list = ens_preds.tolist()
+            labels_list = labels.tolist()
+            print("\n===== Ensemble classification report (TEST) =====")
             target_names = [id2label[i] for i in range(len(id2label))]
-            print(classification_report(fixed_labels, ens_preds, target_names=target_names, digits=4))
+            print(classification_report(labels_list, preds_list, target_names=target_names, digits=4))
 
-    return {
+        if print_confusion_matrix:
+            preds_list = ens_preds.tolist()
+            labels_list = labels.tolist()
+            _print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
+
+    out = {
         "per_seed": per_seed_metrics,
         "mean": {"acc": acc_mean, "acc_std": acc_std, "f1": f1_mean, "f1_std": f1_std},
+        "confusion": full_confusion_block, 
         "ensemble": ensemble_block,
     }
+    return out
+
 
 def main(args) -> None:
     cfg = build_train_config(args)
