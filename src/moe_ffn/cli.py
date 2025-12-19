@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--train_batch_size", type=int, default=2)
     parser.add_argument("--eval_batch_size", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
