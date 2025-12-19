@@ -221,11 +221,21 @@ def run_phase1_benchmark_kfold_plus_full(
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
     
-    all_results: dict = {}
-    k = int(getattr(base_cfg, "k_folds", 0) or 0)
+    k = int(base_cfg.k_folds)
 
+    all_results: dict = {
+        "benchmark_type": "kfold_plus_full_multiseed",
+        "methods": methods,
+        "seeds": seeds,
+        "k_folds": k,
+        "config": base_cfg.to_dict() if hasattr(base_cfg, "to_dict") else base_cfg.__dict__,
+        "runs": {},
+        "summary": {},
+    }
+    
+    per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
+    
     for method in methods:
-        print(f"\n==================== Benchmark fusion={method} ====================")
         cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k})
 
         per_seed_records: list[dict] = []
@@ -276,7 +286,7 @@ def run_phase1_benchmark_kfold_plus_full(
                         rolling_k=cfg.rolling_k,
                         early_stop_patience=cfg.early_stop_patience,
                         id2label=id2label,
-                        tag=f"[Fold {fold_idx}] ",
+                        tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
                         step_print_moe=float(cfg.step_print_moe),
                     )
 
@@ -303,39 +313,97 @@ def run_phase1_benchmark_kfold_plus_full(
 
                     fold_val_f1.append(best_val["f1"])
                     fold_test_f1.append(best_test["f1"])
+                    
                     clear_model(model, optimizer, scheduler)
 
-                seed_record["cv_val_f1_mean"] = float(np.mean(fold_val_f1))
-                seed_record["cv_val_f1_std"] = float(np.std(fold_val_f1))
-                seed_record["cv_test_f1_mean"] = float(np.mean(fold_test_f1))
-                seed_record["cv_test_f1_std"] = float(np.std(fold_test_f1))
+                cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
+                cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
 
-            # FULL train then TEST
-            full_metrics = train_full_multi_seed_then_test(
-                cfg=cfg,
-                moe_cfg=moe_cfg,
-                train_dataset_full=train_dataset_full,
-                test_loader=test_loader,
-                label2id=label2id,
-                id2label=id2label,
-                seeds=[int(seed)],
-                print_confusion_matrix=False,
-                do_ensemble_logits=False,
-            )
-            seed_record["full_test_acc"] = full_metrics["per_seed"][0]["acc"]
-            seed_record["full_test_f1"] = full_metrics["per_seed"][0]["f1"]
+                record = {
+                    "fusion_method": method,
+                    "seed": int(seed),
+                    "cv_val_f1_folds": fold_val_f1,
+                    "cv_test_f1_folds": fold_test_f1,
+                    "cv_val_f1_mean": float(cv_val_mean),
+                    "cv_val_f1_std": float(cv_val_std),
+                    "cv_test_f1_mean": float(cv_test_mean),
+                    "cv_test_f1_std": float(cv_test_std),
+                }
+                per_method_seed_records[method].append(record)
 
-            per_seed_records.append(seed_record)
+        # ===== FULL multi-seed then test (and ensemble) =====
+        full_out = train_full_multi_seed_then_test(
+            cfg=cfg,
+            moe_cfg=moe_cfg,
+            train_dataset_full=train_dataset_full,
+            test_loader=test_loader,
+            label2id=label2id,
+            id2label=id2label,
+            seeds=[int(seed)],
+            print_confusion_matrix=False,
+            do_ensemble_logits=base_cfg.do_ensemble_logits,
+            verbose_ensemble_report=False,
+        )
+        # Merge FULL per-seed metrics back into each record (same seed order)
+        full_by_seed = {r["seed"]: r for r in full_out["per_seed"]}
+        for rec in per_method_seed_records[method]:
+            s = int(rec["seed"])
+            rec["full_test_acc"] = float(full_by_seed[s]["acc"])
+            rec["full_test_f1"] = float(full_by_seed[s]["f1"])
 
-        all_results[method] = {
-            "per_seed": per_seed_records,
+        # Attach method-level ensemble metrics
+        ens = full_out.get("ensemble", None)
+        if ens is not None:
+            all_results.setdefault("ensemble", {})
+            all_results["ensemble"][method] = {"full_ens_test_acc": float(ens["acc"]), "full_ens_test_f1": float(ens["f1"])}
+
+    all_results["runs"] = per_method_seed_records
+
+    # ===== Aggregate summary across seeds per method =====
+    summary: dict[str, dict] = {}
+    for method in methods:
+        recs = per_method_seed_records[method]
+        cv_val_means = [float(r["cv_val_f1_mean"]) for r in recs]
+        cv_test_means = [float(r["cv_test_f1_mean"]) for r in recs]
+        full_f1s = [float(r["full_test_f1"]) for r in recs]
+        full_accs = [float(r["full_test_acc"]) for r in recs]
+
+        m1, s1 = _mean_std(cv_val_means)
+        m2, s2 = _mean_std(cv_test_means)
+        m3, s3 = _mean_std(full_f1s)
+        m4, s4 = _mean_std(full_accs)
+
+        method_sum = {
+            "cv_val_f1_mean_over_seeds": float(m1),
+            "cv_val_f1_std_over_seeds": float(s1),
+            "cv_test_f1_mean_over_seeds": float(m2),
+            "cv_test_f1_std_over_seeds": float(s2),
+            "full_test_f1_mean_over_seeds": float(m3),
+            "full_test_f1_std_over_seeds": float(s3),
+            "full_test_acc_mean_over_seeds": float(m4),
+            "full_test_acc_std_over_seeds": float(s4),
         }
 
+        if "ensemble" in all_results and method in all_results["ensemble"]:
+            method_sum.update(all_results["ensemble"][method])
+
+        summary[method] = method_sum
+
+    # Deltas vs sent baseline (if present)
+    if "sent" in summary:
+        base = summary["sent"]["full_test_f1_mean_over_seeds"]
+        for method in methods:
+            summary[method]["delta_full_test_f1_vs_sent"] = float(
+                summary[method]["full_test_f1_mean_over_seeds"] - base
+            )
+            if "full_ens_test_f1" in summary[method] and "full_ens_test_f1" in summary["sent"]:
+                summary[method]["delta_full_ens_test_f1_vs_sent"] = float(summary[method]["full_ens_test_f1"] - summary["sent"]["full_ens_test_f1"])
+
+    all_results["summary"] = summary
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
-
-    print(f"\nBenchmark aggregate written to: {output_path}")
-
 
 def main(args: argparse.Namespace) -> None:
     # Build configs from config.py (Phase 2 style)

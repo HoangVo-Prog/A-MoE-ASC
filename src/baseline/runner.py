@@ -169,7 +169,6 @@ def run_phase1_benchmark_kfold_plus_full(
     methods: list[str],
     seeds: list[int],
     output_path: str,
-    do_ensemble_logits: bool = True,
 ) -> None:
     """Benchmark that always runs: K-fold CV + FULL multi-seed train then test (with optional ensemble).
 
@@ -204,16 +203,12 @@ def run_phase1_benchmark_kfold_plus_full(
     y = [label2id[s["sentiment"]] for s in samples]
 
     k = int(base_cfg.k_folds)
-    if k <= 1:
-        k = 5
 
     all_results: dict = {
-        "phase": 2,  # phase-agnostic benchmark; using 2 here since you now run Phase 2 methods too
         "benchmark_type": "kfold_plus_full_multiseed",
         "methods": methods,
         "seeds": seeds,
         "k_folds": k,
-        "do_ensemble_logits": bool(do_ensemble_logits),
         "config": base_cfg.to_dict() if hasattr(base_cfg, "to_dict") else base_cfg.__dict__,
         "runs": {},
         "summary": {},
@@ -222,7 +217,6 @@ def run_phase1_benchmark_kfold_plus_full(
     per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
 
     for method in methods:
-        # Config template for this method
         cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k})
 
         # ===== K-fold CV per seed =====
@@ -324,7 +318,7 @@ def run_phase1_benchmark_kfold_plus_full(
             id2label=id2label,
             seeds=[int(s) for s in seeds],
             print_confusion_matrix=False,
-            do_ensemble_logits=bool(do_ensemble_logits),
+            do_ensemble_logits=base_cfg.do_ensemble_logits,
             verbose_ensemble_report=False,
         )
 

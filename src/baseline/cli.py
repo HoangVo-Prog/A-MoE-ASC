@@ -67,5 +67,10 @@ def parse_args() -> argparse.Namespace:
         default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction,moe",
         help="Comma-separated fusion methods to benchmark.",
     )
+    parser.add_argument(
+        "--do-ensemble-logits",
+        type=bool,
+        default=True,
+    )
 
     return parser.parse_args()

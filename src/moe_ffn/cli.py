@@ -83,5 +83,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--train_full_only", action="store_true")
     parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp"])
-
+    parser.add_argument(
+        "--do-ensemble-logits",
+        type=bool,
+        default=True,
+    )
+    
     return parser.parse_args()

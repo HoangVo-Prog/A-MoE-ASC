@@ -40,6 +40,8 @@ class TrainConfig:
     train_full_only: bool = False
     head_type: str = "linear"  # "linear" or "mlp"
 
+    do_ensemble_logits: bool = True
+
 
 @dataclass
 class MoEConfig:
@@ -77,6 +79,8 @@ def build_train_config(args: argparse.Namespace) -> TrainConfig:
         step_print_moe=float(getattr(args, "step_print_moe", 100)),
         train_full_only=bool(getattr(args, "train_full_only", False)),
         head_type=str(getattr(args, "head_type", "linear")),
+        do_ensemble_logits=bool(getattr(args, "do_ensemble_logits", True)),
+
     )
 
 
