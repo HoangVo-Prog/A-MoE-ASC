@@ -649,15 +649,10 @@ def train_full_multi_seed_then_test(
 def main(args) -> None:
     cfg = build_train_config(args)
 
-    # Resolve dataset paths
-    if getattr(args, "locked_baseline", False):
-        train_path = "dataset/atsa/laptop14/train.json"
-        val_path = "dataset/atsa/laptop14/val.json"
-        test_path = "dataset/atsa/laptop14/test.json"
-    else:
-        train_path = args.train_path
-        val_path = args.val_path
-        test_path = args.test_path
+    
+    train_path = args.train_path
+    val_path = args.val_path
+    test_path = args.test_path
 
     set_all_seeds(cfg.seed)
     set_determinism(cfg.seed)

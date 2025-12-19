@@ -1,5 +1,9 @@
+from __future__ import annotations
+
+import argparse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
+
 
 @dataclass
 class TrainConfig:
@@ -26,15 +30,15 @@ class TrainConfig:
     output_dir: str
     output_name: str
     verbose_report: bool
-    
+
     use_moe: bool = False
-    freeze_base: bool = False 
+    freeze_base: bool = False
     aux_loss_weight: float = 0.01
-    
+
     step_print_moe: float = 100
-    
+
     train_full_only: bool = False
-    head_type: str = "linear" # "linear" or "mlp"
+    head_type: str = "linear"  # "linear" or "mlp"
 
 
 @dataclass
@@ -44,4 +48,66 @@ class MoEConfig:
     router_bias: bool = True
     router_jitter: float = 0.0
     capacity_factor: Optional[float] = None
-    route_mask_pad_tokens: bool = False 
+    route_mask_pad_tokens: bool = False
+
+
+def build_train_config(args: argparse.Namespace) -> TrainConfig:
+    return TrainConfig(
+        model_name=args.model_name,
+        fusion_method=args.fusion_method,
+        epochs=args.epochs,
+        train_batch_size=args.train_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        lr=args.lr,
+        warmup_ratio=args.warmup_ratio,
+        dropout=args.dropout,
+        freeze_epochs=args.freeze_epochs,
+        rolling_k=args.rolling_k,
+        early_stop_patience=args.early_stop_patience,
+        k_folds=args.k_folds,
+        seed=args.seed,
+        max_len_sent=args.max_len_sent,
+        max_len_term=args.max_len_term,
+        output_dir=args.output_dir,
+        output_name=args.output_name,
+        verbose_report=args.verbose_report,
+        use_moe=bool(getattr(args, "use_moe", False)),
+        freeze_base=bool(getattr(args, "freeze_base", False)),
+        aux_loss_weight=float(getattr(args, "aux_loss_weight", 0.01)),
+        step_print_moe=float(getattr(args, "step_print_moe", 100)),
+        train_full_only=bool(getattr(args, "train_full_only", False)),
+        head_type=str(getattr(args, "head_type", "linear")),
+    )
+
+
+def build_moe_config(args: argparse.Namespace) -> Optional[MoEConfig]:
+    if not bool(getattr(args, "use_moe", False)):
+        return None
+    return MoEConfig(
+        num_experts=int(getattr(args, "moe_num_experts", 8)),
+        top_k=int(getattr(args, "moe_top_k", 1)),
+        route_mask_pad_tokens=bool(getattr(args, "route_mask_pad_tokens", False)),
+    )
+
+
+def locked_baseline_config(
+    args: argparse.Namespace,
+    fusion_method: str,
+    seed: int,
+    use_moe: Optional[bool] = None,
+) -> Tuple[TrainConfig, Optional[MoEConfig]]:
+    """Build a benchmark configuration that is locked across runs for fair comparison.
+
+    Only a small set of fields is overridden per run (fusion_method, seed, optionally use_moe).
+    All other hyperparameters are taken from args at the time the benchmark is launched.
+    """
+    cfg = build_train_config(args)
+    cfg.fusion_method = fusion_method
+    cfg.seed = seed
+    if use_moe is not None:
+        cfg.use_moe = bool(use_moe)
+
+    moe_cfg = build_moe_config(args)
+    if use_moe is not None and not bool(use_moe):
+        moe_cfg = None
+    return cfg, moe_cfg

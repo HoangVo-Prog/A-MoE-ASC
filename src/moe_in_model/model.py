@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 from transformers import AutoModel
-import math 
 
 from moe import MoEConfig, MoEFFN, moe_load_balance_loss
 
@@ -58,7 +58,7 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
             output_attentions=False,
             **kwargs,
         ):
-            # transformers có thể truyền past_key_value hoặc past_key_values tùy version
+            # transformers can pass past_key_value or past_key_values depending on version
             past = kwargs.get("past_key_value", None)
             if past is None:
                 past = kwargs.get("past_key_values", None)
@@ -68,7 +68,7 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
                 attention_mask,
                 head_mask,
                 output_attentions=output_attentions,
-                past_key_value=past,  # attention module dùng key này
+                past_key_value=past,
             )
             attention_output = self_attention_outputs[0]
             outputs = self_attention_outputs[1:]
@@ -85,7 +85,7 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
                 attention_output = cross_attention_outputs[0]
                 outputs = outputs + cross_attention_outputs[1:]
 
-            # token_mask 2D cho route mask pad, tránh dùng extended mask 4D
+            # token_mask is 2D for route_mask_pad_tokens, do not use extended 4D mask
             token_mask = None
             if attention_mask is not None:
                 if attention_mask.dim() == 4:
@@ -105,7 +105,7 @@ def freeze_all_but_moe_and_heads(model: nn.Module) -> None:
 
     # classifier heads should train
     for name, p in model.named_parameters():
-        if name.startswith("classifier_"):
+        if name.startswith("head_") or name.startswith("classifier_"):
             p.requires_grad = True
 
     # moe params should train
@@ -127,9 +127,8 @@ def build_head(head_type: str, in_dim: int, num_labels: int, dropout: float) -> 
 
 
 class LinearHead(nn.Module):
-    """
-    Linear head with LayerNorm + Dropout for stability.
-    """
+    """Linear head with LayerNorm + Dropout for stability."""
+
     def __init__(self, in_dim: int, num_labels: int, dropout: float):
         super().__init__()
         self.norm = nn.LayerNorm(in_dim)
@@ -178,8 +177,11 @@ class BertConcatClassifier(nn.Module):
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
 
+        # Attention blocks used by some fusion methods
         _candidates = [8, 4, 2, 1]
         num_heads = next((x for x in _candidates if hidden_size % x == 0), 1)
+
+        # Cross attention: term (query) attends over sentence (key/value)
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=num_heads,
@@ -187,12 +189,39 @@ class BertConcatClassifier(nn.Module):
             batch_first=True,
         )
 
-        self.dropout = nn.Dropout(dropout)
+        # Co-attention (CLS-to-tokens both directions)
+        self.coattn_term_to_sent = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.coattn_sent_to_term = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
 
+        # Gated fusion in hidden space
+        self.gate = nn.Linear(2 * hidden_size, hidden_size)
+
+        # Bilinear fusion (low-rank in hidden space)
+        bilinear_rank = max(32, min(256, hidden_size // 4))
+        self.bilinear_rank = bilinear_rank
+        self.bilinear_proj_sent = nn.Linear(hidden_size, bilinear_rank)
+        self.bilinear_proj_term = nn.Linear(hidden_size, bilinear_rank)
+        self.bilinear_out = nn.Linear(bilinear_rank, hidden_size)
+
+        # Heads
+        # head_single is used for methods that produce a single fused vector in hidden space
+        # head_concat is used for concat which doubles the representation
+        self.dropout = nn.Dropout(dropout)
         self.head_type = head_type
         self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
         self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
 
+        # Encoder MoE (FFN replacement), independent from fusion choice
         self.use_moe = use_moe
         self.aux_loss_weight = aux_loss_weight
 
@@ -312,24 +341,89 @@ class BertConcatClassifier(nn.Module):
         out_term = self.encoder(input_ids=input_ids_term, attention_mask=attention_mask_term)
         cls_term = out_term.last_hidden_state[:, 0, :]
 
-        if fusion_method == "concat":
+        fusion_method = fusion_method.lower().strip()
+
+        if fusion_method == "sent":
+            logits = self.head_single(self.dropout(cls_sent))
+
+        elif fusion_method == "term":
+            logits = self.head_single(self.dropout(cls_term))
+
+        elif fusion_method == "concat":
             fused = torch.cat([cls_sent, cls_term], dim=-1)
             logits = self.head_concat(self.dropout(fused))
+
         elif fusion_method == "add":
             fused = cls_sent + cls_term
             logits = self.head_single(self.dropout(fused))
+
         elif fusion_method == "mul":
             fused = cls_sent * cls_term
             logits = self.head_single(self.dropout(fused))
+
         elif fusion_method == "cross":
             query = out_term.last_hidden_state[:, 0:1, :]
             key = out_sent.last_hidden_state
             value = out_sent.last_hidden_state
-
             key_padding_mask = attention_mask_sent.eq(0)
             attn_out, _ = self.cross_attn(query, key, value, key_padding_mask=key_padding_mask)
             fused = attn_out.squeeze(1)
             logits = self.head_single(self.dropout(fused))
+
+        elif fusion_method == "gated_concat":
+            g = torch.sigmoid(self.gate(torch.cat([cls_sent, cls_term], dim=-1)))
+            fused = g * cls_sent + (1.0 - g) * cls_term
+            logits = self.head_single(self.dropout(fused))
+
+        elif fusion_method == "bilinear":
+            ps = self.bilinear_proj_sent(cls_sent)  # [B, r]
+            pt = self.bilinear_proj_term(cls_term)  # [B, r]
+            fused = self.bilinear_out(ps * pt)       # [B, H]
+            logits = self.head_single(self.dropout(fused))
+
+        elif fusion_method == "coattn":
+            sent_tokens = out_sent.last_hidden_state  # [B, Ls, H]
+            term_tokens = out_term.last_hidden_state  # [B, Lt, H]
+
+            q_term = term_tokens[:, 0:1, :]
+            kpm_sent = attention_mask_sent.eq(0)
+            term_ctx, _ = self.coattn_term_to_sent(q_term, sent_tokens, sent_tokens, key_padding_mask=kpm_sent)
+            term_ctx = term_ctx.squeeze(1)
+
+            q_sent = sent_tokens[:, 0:1, :]
+            kpm_term = attention_mask_term.eq(0)
+            sent_ctx, _ = self.coattn_sent_to_term(q_sent, term_tokens, term_tokens, key_padding_mask=kpm_term)
+            sent_ctx = sent_ctx.squeeze(1)
+
+            fused = term_ctx + sent_ctx
+            logits = self.head_single(self.dropout(fused))
+
+        elif fusion_method == "late_interaction":
+            sent_tok = out_sent.last_hidden_state  # [B, Ls, H]
+            term_tok = out_term.last_hidden_state  # [B, Lt, H]
+
+            sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
+            term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
+
+            sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))  # [B, Lt, Ls]
+
+            if attention_mask_sent is not None:
+                mask = attention_mask_sent.unsqueeze(1).eq(0)  # [B, 1, Ls]
+                sim = sim.masked_fill(mask, -1e9)
+
+            max_sim = sim.max(dim=-1).values  # [B, Lt]
+
+            if attention_mask_term is not None:
+                term_valid = attention_mask_term.float()
+                denom = term_valid.sum(dim=1).clamp_min(1.0)
+                pooled = (max_sim * term_valid).sum(dim=1) / denom  # [B]
+            else:
+                pooled = max_sim.mean(dim=1)
+
+            cond = self.gate(torch.cat([cls_sent, cls_term], dim=-1))  # [B, H]
+            fused = cond * pooled.unsqueeze(-1)
+            logits = self.head_single(self.dropout(fused))
+
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
@@ -337,8 +431,7 @@ class BertConcatClassifier(nn.Module):
         aux_loss = None
 
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            ce = loss_fct(logits, labels)
+            ce = nn.CrossEntropyLoss()(logits, labels)
             aux = self._collect_aux_loss()
             loss = ce + (self.aux_loss_weight * aux)
             aux_loss = aux
