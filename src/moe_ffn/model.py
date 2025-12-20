@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional
-
 import torch
 import torch.nn as nn
-from transformers import AutoModel
 
 from moe_ffn.moe import MoEConfig, MoEFFN, moe_load_balance_loss
 from shared import DEVICE, BaseBertConcatClassifier
@@ -225,3 +222,4 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         aux_loss_weight=float(cfg.aux_loss_weight),
         freeze_moe=bool(getattr(cfg, "freeze_moe", False)),
     ).to(DEVICE)
+    
