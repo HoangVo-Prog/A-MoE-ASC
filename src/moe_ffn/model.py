@@ -9,6 +9,8 @@ from transformers import AutoModel
 
 from moe import MoEConfig, MoEFFN, moe_load_balance_loss
 
+from constants import DEVICE
+
 
 def _get_act_fn_from_intermediate(intermediate_module: nn.Module):
     if hasattr(intermediate_module, "intermediate_act_fn"):
@@ -437,3 +439,18 @@ class BertConcatClassifier(nn.Module):
             aux_loss = aux
 
         return {"loss": loss, "logits": logits, "aux_loss": aux_loss}
+
+
+def build_model(*, cfg, moe_cfg, num_labels: int):
+    return BertConcatClassifier(
+        model_name=cfg.model_name,
+        num_labels=num_labels,
+        dropout=cfg.dropout,
+        use_moe=bool(cfg.use_moe),
+        moe_cfg=moe_cfg,
+        freeze_base=bool(cfg.freeze_base),
+        aux_loss_weight=float(cfg.aux_loss_weight),
+        head_type=cfg.head_type,
+    ).to(DEVICE)
+    
+    

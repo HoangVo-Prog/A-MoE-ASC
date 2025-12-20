@@ -20,16 +20,9 @@ from cli import FUSION_METHOD_CHOICES, parse_args
 from config import TrainConfig, build_moe_config, build_train_config, locked_baseline_config
 from constants import DEVICE
 from datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from engine import _print_confusion_matrix, eval_model, run_training_loop, logits_to_metrics, collect_test_logits
-from model import BertConcatClassifier
+from engine import _print_confusion_matrix, eval_model, run_training_loop, logits_to_metrics, collect_test_logits, cleanup_cuda
+from model import build_model
 from optim import build_optimizer_and_scheduler
-
-
-def clear_model(model, optimizer, scheduler):
-    del model
-    del optimizer
-    del scheduler
-    torch.cuda.empty_cache()
 
 
 def _mean_std(xs: list[float]) -> tuple[float, float]:
@@ -94,19 +87,6 @@ def make_train_loader_with_seed(dataset, batch_size: int, seed: int) -> DataLoad
         generator=g,
         worker_init_fn=_seed_worker,
     )
-
-
-def build_model(*, cfg: TrainConfig, moe_cfg, num_labels: int):
-    return BertConcatClassifier(
-        model_name=cfg.model_name,
-        num_labels=num_labels,
-        dropout=cfg.dropout,
-        use_moe=bool(cfg.use_moe),
-        moe_cfg=moe_cfg,
-        freeze_base=bool(cfg.freeze_base),
-        aux_loss_weight=float(cfg.aux_loss_weight),
-        head_type=cfg.head_type,
-    ).to(DEVICE)
 
 
 def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
@@ -199,7 +179,8 @@ def train_full_multi_seed_then_test(
         per_seed_metrics.append({"seed": int(seed), **m})
         all_seed_logits.append(logits)
 
-        clear_model(model, None, None)
+        del model
+        cleanup_cuda()
 
     accs = [r["acc"] for r in per_seed_metrics]
     f1s = [r["f1"] for r in per_seed_metrics]
@@ -304,13 +285,6 @@ def run_phase1_benchmark_kfold_plus_full(
 
             cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
 
-            seed_record: dict[str, object] = {
-                "seed": int(seed),
-                "fusion_method": method,
-                "k_folds": int(k_folds),
-                "folds": [],
-            }
-
             if k_folds > 1:
                 skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=int(seed))
                 fold_val_f1: list[float] = []
@@ -350,8 +324,6 @@ def run_phase1_benchmark_kfold_plus_full(
                         model=model,
                         train_loader=train_loader,
                         val_loader=val_loader,
-                        optimizer=None,
-                        scheduler=None,
                         lr=cfg.lr,
                         warmup_ratio=cfg.warmup_ratio,
                         epochs=cfg.epochs,
@@ -398,7 +370,8 @@ def run_phase1_benchmark_kfold_plus_full(
                     fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                     fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
-                    clear_model(model, None, None)
+                    del model
+                    cleanup_cuda()
 
                 cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
                 cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
@@ -607,16 +580,11 @@ def main(args: argparse.Namespace) -> None:
 
         model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=len(label2id))
         total_steps = len(train_loader) * cfg.epochs
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-        )
 
         out = run_training_loop(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
             epochs=cfg.epochs,
             fusion_method=cfg.fusion_method,
             freeze_epochs=cfg.freeze_epochs,
@@ -646,7 +614,8 @@ def main(args: argparse.Namespace) -> None:
         save_path = os.path.join(cfg.output_dir, cfg.output_name)
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
-        clear_model(model, optimizer, scheduler)
+        del model
+        cleanup_cuda()
         return
 
     # Case 2: k fold CV
@@ -677,17 +646,11 @@ def main(args: argparse.Namespace) -> None:
             val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
             model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=len(label2id))
-            total_steps = len(train_loader) * cfg.epochs
-            optimizer, scheduler = build_optimizer_and_scheduler(
-                model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-            )
 
             out = run_training_loop(
                 model=model,
                 train_loader=train_loader,
                 val_loader=val_loader,
-                optimizer=optimizer,
-                scheduler=scheduler,
                 epochs=cfg.epochs,
                 fusion_method=cfg.fusion_method,
                 freeze_epochs=cfg.freeze_epochs,
@@ -705,7 +668,7 @@ def main(args: argparse.Namespace) -> None:
             best_val = eval_model(
                 model=model,
                 dataloader=val_loader,
-                id2label=label2id,
+                id2label=id2label,
                 verbose_report=False,
                 fusion_method=cfg.fusion_method,
                 f1_average="macro",
@@ -713,7 +676,7 @@ def main(args: argparse.Namespace) -> None:
             best_test = eval_model(
                 model=model,
                 dataloader=test_loader,
-                id2label=label2id,
+                id2label=id2label,
                 verbose_report=False,
                 fusion_method=cfg.fusion_method,
                 f1_average="macro",
@@ -732,7 +695,8 @@ def main(args: argparse.Namespace) -> None:
             torch.save(model.state_dict(), save_path)
             print(f"Saved fold model to {save_path}")
 
-            clear_model(model, optimizer, scheduler)
+            del model
+            cleanup_cuda()
 
         print("\n===== CV Summary =====")
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")
