@@ -17,6 +17,7 @@ from shared import (
     build_optimizer_and_scheduler,
     cleanup_cuda,
     maybe_freeze_encoder,
+    _print_confusion_matrix,
 )
 
 
@@ -131,7 +132,7 @@ def eval_model(
     )
 
     if print_confusion_matrix:
-        print_confusion_matrix(
+        _print_confusion_matrix(
             all_labels,
             all_preds,
             id2label=id2label,

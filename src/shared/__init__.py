@@ -1,7 +1,7 @@
 from .constants import DEVICE
 from .datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from .optim import build_optimizer_and_scheduler
-from .plotting import plot_history
+from .plotting import plot_history, _print_confusion_matrix
 from .utils import cleanup_cuda, set_encoder_trainable, maybe_freeze_encoder
 from .seed import set_all_seeds, set_determinism, seed_worker, make_train_loader_with_seed
 from .build_model import build_head
@@ -14,7 +14,7 @@ __all__ = [
     "AspectSentimentDatasetFromSamples",
     "build_optimizer_and_scheduler",
     "plot_history",
-    "print_confusion_matrix",
+    "_print_confusion_matrix",
     "cleanup_cuda",
     "set_encoder_trainable", 
     "maybe_freeze_encoder",

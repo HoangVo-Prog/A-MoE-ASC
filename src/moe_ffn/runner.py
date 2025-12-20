@@ -25,6 +25,7 @@ from shared import (
     cleanup_cuda,
     logits_to_metrics,
     collect_test_logits,
+    _print_confusion_matrix
 )
 from moe_ffn.engine import eval_model, run_training_loop
 from moe_ffn.model import build_model
@@ -176,7 +177,7 @@ def train_full_multi_seed_then_test(
         if print_confusion_matrix:
             preds_list = ens_preds.tolist()
             labels_list = labels.tolist()
-            print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
+            _print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
 
     out = {
         "per_seed": per_seed_metrics,
