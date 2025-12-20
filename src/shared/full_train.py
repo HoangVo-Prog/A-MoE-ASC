@@ -85,7 +85,7 @@ def train_full_multi_seed_then_test_generic(
 
         logits, labels = collect_test_logits(
             model=model,
-            dataloader=test_loader,
+            test_loader=test_loader,
             fusion_method=cfg.fusion_method,
         )
         labels_last = labels
