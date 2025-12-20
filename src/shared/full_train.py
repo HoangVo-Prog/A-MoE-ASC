@@ -9,8 +9,8 @@ from torch.utils.data import DataLoader
 
 from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed
 from .logit import collect_test_logits, logits_to_metrics
-from .utils import _mean_std, cleanup_cuda
-from .plotting import _print_confusion_matrix, _aggregate_confusions
+from .utils import _mean_std, cleanup_cuda, _aggregate_confusions
+from .plotting import _print_confusion_matrix
 
 
 ModelFactory = Callable[[Any, int, Dict[str, Any]], torch.nn.Module]
