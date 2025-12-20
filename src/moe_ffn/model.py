@@ -152,10 +152,8 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         model_name=cfg.model_name,
         num_labels=num_labels,
         dropout=cfg.dropout,
-        use_moe=bool(cfg.use_moe),
-        moe_cfg=moe_cfg,
-        freeze_moe=bool(cfg.freeze_moe),
-        aux_loss_weight=float(cfg.aux_loss_weight),
         head_type=cfg.head_type,
+        moe_cfg=moe_cfg,
+        aux_loss_weight=float(cfg.aux_loss_weight),
+        freeze_base=bool(getattr(cfg, "freeze_base", False)),
     ).to(DEVICE)
-    
