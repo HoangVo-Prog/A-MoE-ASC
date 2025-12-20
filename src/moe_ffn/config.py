@@ -3,36 +3,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from utils import BaseTrainConfig
 
 
 @dataclass
-class TrainConfig:
-    model_name: str
-    fusion_method: str
-
-    epochs: int
-    train_batch_size: int
-    eval_batch_size: int
-    lr: float
-    warmup_ratio: float
-    dropout: float
-
-    freeze_epochs: int
-    rolling_k: int
-    early_stop_patience: int
-
-    k_folds: int
-    seed: int
-
-    max_len_sent: int
-    max_len_term: int
-
-    output_dir: str
-    output_name: str
-    verbose_report: bool
-
+class TrainConfig(BaseTrainConfig):
     use_moe: bool = False
-    freeze_base: bool = False
+    freeze_moe: bool = False
     aux_loss_weight: float = 0.01
 
     step_print_moe: float = 100
@@ -79,7 +56,7 @@ def build_train_config(args: argparse.Namespace) -> TrainConfig:
         output_name=args.output_name,
         verbose_report=args.verbose_report,
         use_moe=bool(getattr(args, "use_moe", False)),
-        freeze_base=bool(getattr(args, "freeze_base", False)),
+        freeze_moe=bool(getattr(args, "freeze_moe", False)),
         aux_loss_weight=float(getattr(args, "aux_loss_weight", 0.01)),
         step_print_moe=float(getattr(args, "step_print_moe", 100)),
         train_full_only=bool(getattr(args, "train_full_only", False)),

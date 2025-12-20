@@ -45,6 +45,7 @@ def maybe_freeze_encoder(
     model: nn.Module,
     epoch_idx_0based: int,
     freeze_epochs: int,
+    freeze_moe: bool = False
 ) -> None:
     """
     Freeze base encoder for first `freeze_epochs` epochs,
@@ -55,7 +56,7 @@ def maybe_freeze_encoder(
         set_encoder_trainable(
             model,
             trainable=False,
-            keep_moe_trainable=True,
+            keep_moe_trainable=not freeze_moe,
         )
     else:
         # Phase 2: unfreeze everything
@@ -64,7 +65,6 @@ def maybe_freeze_encoder(
             trainable=True,
             keep_moe_trainable=False,
         )
-
 
 
 def train_one_epoch(
@@ -230,6 +230,7 @@ def run_training_loop(
     epochs: int,
     fusion_method: str,
     freeze_epochs: int,
+    freeze_moe: bool,
     rolling_k: int,
     early_stop_patience: int,
     id2label: Dict[int, str],
@@ -260,7 +261,7 @@ def run_training_loop(
         return [p for p in model.parameters() if p.requires_grad]
 
     # ===== PHASE INIT (epoch 0) =====
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
+    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
@@ -278,7 +279,7 @@ def run_training_loop(
         prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
         # update freeze / unfreeze state
-        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs)
+        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
         now_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
