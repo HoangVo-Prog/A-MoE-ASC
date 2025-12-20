@@ -8,7 +8,7 @@ import torch.nn as nn
 from transformers import AutoModel
 
 from moe_ffn.moe import MoEConfig, MoEFFN, moe_load_balance_loss
-from shared import DEVICE
+from shared import DEVICE, build_head
 
 
 def _get_act_fn_from_intermediate(intermediate_module: nn.Module):
@@ -116,50 +116,6 @@ def freeze_all_but_moe_and_heads(model: nn.Module) -> None:
             if moe is not None:
                 for p in moe.parameters():
                     p.requires_grad = True
-
-
-def build_head(head_type: str, in_dim: int, num_labels: int, dropout: float) -> nn.Module:
-    head_type = head_type.lower().strip()
-    if head_type in {"linear", "lin"}:
-        return LinearHead(in_dim, num_labels, dropout)
-    if head_type in {"mlp", "2layer", "two_layer"}:
-        return MLPHead(in_dim, num_labels, dropout)
-    raise ValueError(f"Unsupported head_type: {head_type}. Use 'linear' or 'mlp'.")
-
-
-class LinearHead(nn.Module):
-    """Linear head with LayerNorm + Dropout for stability."""
-
-    def __init__(self, in_dim: int, num_labels: int, dropout: float):
-        super().__init__()
-        self.norm = nn.LayerNorm(in_dim)
-        self.drop = nn.Dropout(dropout)
-        self.fc = nn.Linear(in_dim, num_labels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.norm(x)
-        x = self.drop(x)
-        x = self.fc(x)
-        return x
-
-
-class MLPHead(nn.Module):
-    def __init__(self, in_dim: int, num_labels: int, dropout: float):
-        super().__init__()
-        hidden = in_dim
-        self.norm = nn.LayerNorm(in_dim)
-        self.fc1 = nn.Linear(in_dim, hidden)
-        self.act = nn.GELU()
-        self.drop = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden, num_labels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.norm(x)
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        return x
 
 
 class BertConcatClassifier(nn.Module):
@@ -451,5 +407,4 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         aux_loss_weight=float(cfg.aux_loss_weight),
         head_type=cfg.head_type,
     ).to(DEVICE)
-    
     

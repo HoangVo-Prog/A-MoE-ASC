@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 from typing import Dict
 
 
@@ -23,8 +22,11 @@ from shared import (
     set_all_seeds,
     set_determinism,
     make_train_loader_with_seed,
+    cleanup_cuda,
+    logits_to_metrics,
+    collect_test_logits,
 )
-from moe_ffn.engine import eval_model, run_training_loop, logits_to_metrics, collect_test_logits, cleanup_cuda
+from moe_ffn.engine import eval_model, run_training_loop
 from moe_ffn.model import build_model
 
 

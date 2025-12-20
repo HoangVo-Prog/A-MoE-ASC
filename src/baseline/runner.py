@@ -9,16 +9,18 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from baseline.config import TrainConfig, build_train_config
-from baseline.engine import eval_model, run_training_loop, print_confusion_matrix, logits_to_metrics, collect_test_logits
-from baseline.model import BertConcatClassifier
+from baseline.engine import eval_model, run_training_loop
+from baseline.model import build_model
 from shared import (
     DEVICE, 
-    build_optimizer_and_scheduler, 
     AspectSentimentDataset, 
     AspectSentimentDatasetFromSamples,
     set_all_seeds, 
     set_determinism,
     make_train_loader_with_seed,
+    cleanup_cuda,
+    logits_to_metrics,
+    collect_test_logits,
 )
 from baseline.cli import parse_args
 import json
@@ -67,22 +69,8 @@ def write_locked_baseline_metadata(
     out_path = os.path.join(cfg.output_dir, f"{cfg.output_name}.baseline_lock.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)    
-
-
-def clear_model(model, optimizer, scheduler):
-    del model
-    del optimizer
-    del scheduler
-    torch.cuda.empty_cache()
     
 
-def build_model(*, cfg: TrainConfig, num_labels: int):
-    return BertConcatClassifier(
-        cfg.model_name, 
-        num_labels=num_labels, 
-        dropout=cfg.dropout,
-        head_type=cfg.head_type,
-    ).to(DEVICE)
 
 
 def _parse_int_list(csv: str) -> list[int]:
@@ -189,17 +177,13 @@ def run_phase1_benchmark_kfold_plus_full(
                     val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
                     model = build_model(cfg=cfg, num_labels=num_classes)
-                    total_steps = len(train_loader) * cfg.epochs
-                    optimizer, scheduler = build_optimizer_and_scheduler(
-                        model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-                    )
 
                     out = run_training_loop(
                         model=model,
                         train_loader=train_loader,
                         val_loader=val_loader,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
+                        lr=cfg.lr,
+                        warmup_ratio=cfg.warmup_ratio,
                         epochs=cfg.epochs,
                         fusion_method=cfg.fusion_method,
                         freeze_epochs=cfg.freeze_epochs,
@@ -241,7 +225,8 @@ def run_phase1_benchmark_kfold_plus_full(
                     fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                     fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
-                    clear_model(model, optimizer, scheduler)
+                    del model
+                    cleanup_cuda()
 
                 cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
                 cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
@@ -436,17 +421,13 @@ def train_full_multi_seed_then_test(
         )
 
         model = build_model(cfg=cfg, num_labels=len(label2id))
-        total_steps = len(train_loader) * cfg.epochs
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-        )
 
         out = run_training_loop(
             model=model,
             train_loader=train_loader,
             val_loader=None,
-            optimizer=optimizer,
-            scheduler=scheduler,
+            lr=cfg.lr,
+            warmup_ratio=cfg.warmup_ratio,
             epochs=cfg.epochs,
             fusion_method=cfg.fusion_method,
             freeze_epochs=cfg.freeze_epochs,
@@ -478,7 +459,8 @@ def train_full_multi_seed_then_test(
         per_seed_metrics.append({"seed": int(seed), **m})
         all_seed_logits.append(logits)
 
-        clear_model(model, optimizer, scheduler)
+        del model
+        cleanup_cuda()
 
     accs = [r["acc"] for r in per_seed_metrics]
     f1s = [r["f1"] for r in per_seed_metrics]
@@ -602,17 +584,13 @@ def main(args) -> None:
         val_loader = DataLoader(val_dataset, batch_size=cfg.eval_batch_size, shuffle=False)
 
         model = build_model(cfg=cfg, num_labels=len(label2id))
-        total_steps = len(train_loader) * cfg.epochs
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-        )
 
         out = run_training_loop(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
+            lr=cfg.lr,
+            warmup_ratio=cfg.warmup_ratio,
             epochs=cfg.epochs,
             fusion_method=cfg.fusion_method,
             freeze_epochs=cfg.freeze_epochs,
@@ -672,16 +650,13 @@ def main(args) -> None:
 
             model = build_model(cfg=cfg, num_labels=len(label2id))
             total_steps = len(train_loader) * cfg.epochs
-            optimizer, scheduler = build_optimizer_and_scheduler(
-                model=model, lr=cfg.lr, warmup_ratio=cfg.warmup_ratio, total_steps=total_steps
-            )
 
             out = run_training_loop(
                 model=model,
                 train_loader=train_loader,
                 val_loader=val_loader,
-                optimizer=optimizer,
-                scheduler=scheduler,
+                lr=cfg.lr,
+                warmup_ratio=cfg.warmup_ratio,
                 epochs=cfg.epochs,
                 fusion_method=cfg.fusion_method,
                 freeze_epochs=cfg.freeze_epochs,
@@ -725,7 +700,8 @@ def main(args) -> None:
             torch.save(model.state_dict(), save_path)
             print(f"Saved fold model to {save_path}")
             
-            clear_model(model, optimizer, scheduler)
+            del model
+            cleanup_cuda()
 
         print("\n===== CV Summary =====")
         print(f"Val macro-F1 mean {np.mean(fold_val_f1):.4f} std {np.std(fold_val_f1):.4f}")

@@ -70,6 +70,7 @@ def build_train_config(args) -> TrainConfig:
         head_type=args.head_type,
     )
 
+
 def locked_baseline_config(
     *,
     fusion_method: str,
