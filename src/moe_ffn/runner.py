@@ -16,7 +16,7 @@ from transformers import AutoTokenizer
 
 from moe_ffn.cli import FUSION_METHOD_CHOICES, parse_args
 from moe_ffn.config import TrainConfig, build_moe_config, build_train_config, locked_baseline_config
-from utils import DEVICE, AspectSentimentDataset, AspectSentimentDatasetFromSamples
+from shared import DEVICE, AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from moe_ffn.engine import _print_confusion_matrix, eval_model, run_training_loop, logits_to_metrics, collect_test_logits, cleanup_cuda
 from moe_ffn.model import build_model
 

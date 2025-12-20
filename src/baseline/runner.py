@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 from baseline.config import TrainConfig, locked_baseline_config
 from baseline.engine import eval_model, run_training_loop, _print_confusion_matrix, logits_to_metrics, collect_test_logits
 from baseline.model import BertConcatClassifier
-from utils import DEVICE, build_optimizer_and_scheduler, AspectSentimentDataset, AspectSentimentDatasetFromSamples
+from shared import DEVICE, build_optimizer_and_scheduler, AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from baseline.cli import parse_args
 import random
 import json

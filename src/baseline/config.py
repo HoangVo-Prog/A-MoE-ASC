@@ -34,7 +34,7 @@ class TrainConfig:
     head_type: str = "linear"  # "linear" or "mlp"
     
     do_ensemble_logits: bool = True
-
+    
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 

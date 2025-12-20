@@ -12,7 +12,7 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader
 
-from utils import DEVICE, build_optimizer_and_scheduler
+from shared import DEVICE, build_optimizer_and_scheduler
 import numpy as np
 
 
