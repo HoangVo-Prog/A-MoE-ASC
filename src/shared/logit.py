@@ -6,7 +6,7 @@ from sklearn.metrics import (
     accuracy_score,
     f1_score,
 )
-from .constants import DEVICE
+from .utils import DEVICE
 from typing import Dict
 
 
