@@ -186,9 +186,9 @@ class BertConcatClassifier(nn.Module):
             if moe_cfg is None:
                 raise ValueError("use_moe=True but moe_cfg is None")
             replace_encoder_ffn_with_moe(self.encoder, moe_cfg)
-
+  
         if freeze_base:
-            freeze_all_but_moe_and_heads(self)
+            self.activate_freeze_base()
 
     def _collect_aux_loss(self) -> torch.Tensor:
         if not self.use_moe:
@@ -395,6 +395,8 @@ class BertConcatClassifier(nn.Module):
 
         return {"loss": loss, "logits": logits, "aux_loss": aux_loss}
 
+    def activate_freeze_base(self) -> None:
+        freeze_all_but_moe_and_heads(self)
 
 def build_model(*, cfg, moe_cfg, num_labels: int):
     return BertConcatClassifier(

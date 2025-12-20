@@ -244,6 +244,7 @@ def run_training_loop(
 
         if freeze_epochs > 0 and epoch < freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
+            model.activate_freeze_base()
         elif freeze_epochs > 0 and epoch == freeze_epochs:
             print("Encoder unfrozen")
 
