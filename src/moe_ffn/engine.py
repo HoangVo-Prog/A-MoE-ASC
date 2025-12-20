@@ -1,6 +1,6 @@
 from collections import deque
 from typing import Dict, Optional, Any
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 import torch
 import torch.nn as nn
@@ -54,6 +54,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with autocast(
+            "cuda",
             enabled=use_amp,
             dtype=torch.float16 if amp_dtype == "fp16" else torch.bfloat16,
         ):
