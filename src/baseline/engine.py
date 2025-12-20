@@ -20,7 +20,6 @@ from shared import (
 )
 
 
-
 def train_one_epoch(
     *,
     model: nn.Module,
@@ -156,8 +155,8 @@ def run_training_loop(
     model: nn.Module,
     train_loader: DataLoader,
     val_loader: Optional[DataLoader],
-    optimizer,
-    scheduler,
+    lr: float,
+    warmup_ratio: float,
     epochs: int,
     fusion_method: str,
     freeze_epochs: int,
@@ -178,15 +177,29 @@ def run_training_loop(
     print("Fusion Method:", fusion_method)
     print("=======================================================================")
     
+    steps_per_epoch = max(1, len(train_loader))
+
+    def trainable_params():
+        return [p for p in model.parameters() if p.requires_grad]
+
+    # Ensure correct freeze state before building phase 1 optimizer
+    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
+
+    # Build phase 1 optimizer, only for trainable params
+    phase1_epochs = min(max(1, freeze_epochs), epochs) if freeze_epochs > 0 else epochs
+    optimizer, scheduler = build_optimizer_and_scheduler(
+        model=model,
+        lr=lr,
+        warmup_ratio=warmup_ratio,
+        total_steps=steps_per_epoch * max(1, phase1_epochs),
+        params=trainable_params(),
+        adamw_foreach=False,
+        adamw_fused=False,
+    )
+    
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
-
         maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs)
-
-        if freeze_epochs > 0 and epoch < freeze_epochs:
-            print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
-        elif freeze_epochs > 0 and epoch == freeze_epochs:
-            print("Encoder unfrozen")
 
         train_metrics = train_one_epoch(
             model=model,

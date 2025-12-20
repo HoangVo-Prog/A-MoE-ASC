@@ -105,9 +105,6 @@ def train_full_multi_seed_then_test(
         out = run_training_loop(
             model=model,
             train_loader=train_loader,
-            val_loader=None,
-            optimizer=None,
-            scheduler=None,
             lr=cfg.lr,
             warmup_ratio=cfg.warmup_ratio,
             epochs=cfg.epochs,
