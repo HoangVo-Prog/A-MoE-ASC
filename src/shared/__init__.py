@@ -1,4 +1,3 @@
-from .constants import DEVICE
 from .datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from .optim import build_optimizer_and_scheduler
 from .plotting import plot_history, _print_confusion_matrix
