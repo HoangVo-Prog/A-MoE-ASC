@@ -54,7 +54,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with autocast(
-            device_type="cuda",
+            "cuda",
             enabled=bool(use_amp),
             dtype=torch.float16 if amp_dtype == "fp16" else torch.bfloat16,
         ):
