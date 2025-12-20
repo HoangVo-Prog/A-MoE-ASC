@@ -5,6 +5,8 @@ import json
 import os
 import random
 from typing import Dict, Optional
+from pathlib import Path
+
 
 import numpy as np
 import torch
@@ -143,26 +145,21 @@ def train_full_multi_seed_then_test(
     do_ensemble_logits: bool = True,
     verbose_ensemble_report: bool = False,
 ) -> dict:
-
     print("\n===== Train FULL (multi-seed) then Test =====")
     print(f"Seeds: {seeds}")
+    
+    num_classes = len(label2id)
     per_seed_metrics: list[dict] = []
     all_seed_logits: list[np.ndarray] = []
     all_seed_cms: list[np.ndarray] = []
-    num_classes = len(label2id)
 
-    for i, seed in enumerate(seeds, start=1):
-        print(f"\n----- FULL run {i}/{len(seeds)} | seed={seed} -----")
-        set_all_seeds(seed)
-        set_determinism(seed)
+    for seed in seeds:
+        print(f"\n===== FULL seed={seed} fusion={cfg.fusion_method} =====")
+        set_determinism(int(seed))
 
-        train_loader = make_train_loader_with_seed(
-            train_dataset_full, 
-            cfg.train_batch_size, 
-            seed
-        )
+        train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, int(seed))
 
-        model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=num_classes)
+        model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=len(label2id))
 
         out = run_training_loop(
             model=model,
@@ -179,21 +176,21 @@ def train_full_multi_seed_then_test(
             early_stop_patience=cfg.early_stop_patience,
             id2label=id2label,
             tag=f"[FULL seed={seed}] ",
-            step_print_moe=float(cfg.step_print_moe),
+            step_print_moe=cfg.step_print_moe,
+            use_amp=cfg.use_amp,
+            amp_dtype=cfg.amp_dtype,
+            adamw_foreach=cfg.adamw_foreach,
+            adamw_fused=cfg.adamw_fused,
         )
 
-        best_sd = out.get("best_state_dict", None)
-        if best_sd is not None:
-            model.load_state_dict(best_sd)
-            model.to(DEVICE)
-            be = out.get("best_epoch", None)
-            if be is not None:
-                print(f"Loaded best FULL model at epoch {be} (seed={seed})")
+        if out.get("best_state_dict") is not None:
+            model.load_state_dict(out["best_state_dict"])
+            if out.get("best_epoch") is not None:
+                print(f"Loaded best FULL model from epoch {out.get('best_epoch')}")
 
         logits, labels = collect_test_logits(
             model=model, dataloader=test_loader, fusion_method=cfg.fusion_method
         )
-        
         m = logits_to_metrics(logits, labels)
         preds = logits.argmax(axis=-1)
         cm = confusion_matrix(labels, preds, labels=list(range(num_classes)))  # raw counts
@@ -253,13 +250,13 @@ def run_phase1_benchmark_kfold_plus_full(
     *,
     base_cfg: TrainConfig,
     moe_cfg,
+    tokenizer,
     train_path: str,
     test_path: str,
-    tokenizer,
-    methods: list[str],
-    seeds: list[int],
     output_path: str,
-) -> None:
+    fusion_methods: list[str],
+    seeds: list[int],
+) -> dict:
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -268,13 +265,10 @@ def run_phase1_benchmark_kfold_plus_full(
         tokenizer=tokenizer,
         max_len_sent=base_cfg.max_len_sent,
         max_len_term=base_cfg.max_len_term,
-        label2id=None,
     )
     label2id = train_dataset_full.label2id
     id2label = {v: k for k, v in label2id.items()}
-    samples = train_dataset_full.samples
-    y = [label2id[s["sentiment"]] for s in samples]
-
+    k_folds = int(base_cfg.k_folds)
     test_dataset = AspectSentimentDataset(
         json_path=test_path,
         tokenizer=tokenizer,
@@ -284,56 +278,73 @@ def run_phase1_benchmark_kfold_plus_full(
     )
     test_loader = DataLoader(test_dataset, batch_size=base_cfg.eval_batch_size, shuffle=False)
 
-    k = int(base_cfg.k_folds)
-
-    all_results: dict = {
-        "benchmark_type": "kfold_plus_full_multiseed",
-        "methods": methods,
+    all_results = {
+        "benchmark_type": "phase1_kfold_plus_full",
+        "methods": fusion_methods,
         "seeds": seeds,
-        "k_folds": k,
-        "config": base_cfg.to_dict() if hasattr(base_cfg, "to_dict") else base_cfg.__dict__,
+        "k_folds": k_folds,
+        "config": {**base_cfg.__dict__},
         "runs": {},
         "summary": {},
+        "full_confusion": {},
+        "ensemble": {},
     }
 
-    per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
-    num_classes = len(label2id)
+    per_method_seed_records: dict[str, list[dict]] = {}
+    samples = train_dataset_full.samples
+    y = np.array([label2id[s["label"]] for s in samples], dtype=int)
 
-    for method in methods:
-        cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k})
+    for method in fusion_methods:
+        cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k_folds})
+        per_method_seed_records[method] = []
 
         for seed in seeds:
-            cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
-            set_all_seeds(int(seed))
+            print(f"\n===== CV {method} seed={seed} k={k_folds} =====")
             set_determinism(int(seed))
 
-            # K-fold CV if requested
-            if cfg.k_folds and cfg.k_folds > 1:
-                skf = StratifiedKFold(n_splits=cfg.k_folds, shuffle=True, random_state=int(seed))
+            cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
 
+            seed_record: dict[str, object] = {
+                "seed": int(seed),
+                "fusion_method": method,
+                "k_folds": int(k_folds),
+                "folds": [],
+            }
+
+            if k_folds > 1:
+                skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=int(seed))
                 fold_val_f1: list[float] = []
                 fold_test_f1: list[float] = []
 
                 fold_val_cms: list[np.ndarray] = []
                 fold_test_cms: list[np.ndarray] = []
 
-                for fold_idx, (train_idx, val_idx) in enumerate(skf.split(samples, y), start=1):
-                    train_samples = [samples[i] for i in train_idx]
-                    val_samples = [samples[i] for i in val_idx]
+                for fold_idx, (tr_idx, va_idx) in enumerate(skf.split(np.zeros_like(y), y)):
+                    print(f"\n[CV {method} seed={seed} fold={fold_idx}]")
+
+                    train_samples = [samples[i] for i in tr_idx]
+                    val_samples = [samples[i] for i in va_idx]
 
                     train_ds = AspectSentimentDatasetFromSamples(
-                        train_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                        samples=train_samples,
+                        tokenizer=tokenizer,
+                        max_len_sent=cfg.max_len_sent,
+                        max_len_term=cfg.max_len_term,
+                        label2id=label2id,
                     )
                     val_ds = AspectSentimentDatasetFromSamples(
-                        val_samples, tokenizer, cfg.max_len_sent, cfg.max_len_term, label2id
+                        samples=val_samples,
+                        tokenizer=tokenizer,
+                        max_len_sent=cfg.max_len_sent,
+                        max_len_term=cfg.max_len_term,
+                        label2id=label2id,
                     )
 
-                    train_loader = make_train_loader_with_seed(
-                        train_ds, cfg.train_batch_size, int(seed) + 1000 * int(fold_idx)
-                    )
+                    fold_seed = int(seed) + 1000 * int(fold_idx)
+                    train_loader = make_train_loader_with_seed(train_ds, cfg.train_batch_size, fold_seed)
                     val_loader = DataLoader(val_ds, batch_size=cfg.eval_batch_size, shuffle=False)
 
-                    model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=num_classes)
+                    model = build_model(cfg=cfg, moe_cfg=moe_cfg, num_labels=len(label2id))
 
                     out = run_training_loop(
                         model=model,
@@ -350,32 +361,35 @@ def run_phase1_benchmark_kfold_plus_full(
                         early_stop_patience=cfg.early_stop_patience,
                         id2label=id2label,
                         tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
-                        step_print_moe=float(cfg.step_print_moe),
+                        step_print_moe=cfg.step_print_moe,
+                        use_amp=cfg.use_amp,
+                        amp_dtype=cfg.amp_dtype,
+                        adamw_foreach=cfg.adamw_foreach,
+                        adamw_fused=cfg.adamw_fused,
                     )
 
-                    if out.get("best_state_dict", None) is not None:
+                    if out.get("best_state_dict") is not None:
                         model.load_state_dict(out["best_state_dict"])
-                        model.to(DEVICE)
 
                     val_m = eval_model(
                         model=model,
                         dataloader=val_loader,
                         id2label=id2label,
-                        verbose_report=False,
                         print_confusion_matrix=False,
+                        verbose_report=False,
                         fusion_method=cfg.fusion_method,
-                        return_confusion=True,
                         f1_average="macro",
+                        return_confusion=True,
                     )
                     test_m = eval_model(
                         model=model,
                         dataloader=test_loader,
                         id2label=id2label,
-                        verbose_report=False,
                         print_confusion_matrix=False,
+                        verbose_report=False,
                         fusion_method=cfg.fusion_method,
-                        return_confusion=True,
                         f1_average="macro",
+                        return_confusion=True,
                     )
 
                     fold_val_f1.append(val_m["f1"])
@@ -450,7 +464,7 @@ def run_phase1_benchmark_kfold_plus_full(
 
     # ===== Aggregate summary across seeds per method =====
     summary: dict[str, dict] = {}
-    for method in methods:
+    for method in fusion_methods:
         recs = per_method_seed_records[method]
         cv_val_means = [float(r["cv_val_f1_mean"]) for r in recs]
         cv_test_means = [float(r["cv_test_f1_mean"]) for r in recs]
@@ -495,7 +509,7 @@ def run_phase1_benchmark_kfold_plus_full(
     # Deltas vs sent baseline (if present)
     if "sent" in summary:
         base = summary["sent"]["full_test_f1_mean_over_seeds"]
-        for method in methods:
+        for method in fusion_methods:
             summary[method]["delta_full_test_f1_vs_sent"] = float(
                 summary[method]["full_test_f1_mean_over_seeds"] - base
             )
@@ -509,7 +523,6 @@ def run_phase1_benchmark_kfold_plus_full(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
-
 
 def main(args: argparse.Namespace) -> None:
     # Build configs from config.py (Phase 2 style)

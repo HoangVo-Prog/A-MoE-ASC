@@ -89,4 +89,9 @@ def parse_args() -> argparse.Namespace:
         default=True,
     )
     
+    parser.add_argument("--no_amp", action="store_true")
+    parser.add_argument("--amp_dtype", choices=["fp16", "bf16"], default="fp16")
+    parser.add_argument("--adamw_foreach", action="store_true")
+    parser.add_argument("--adamw_fused", action="store_true")
+    
     return parser.parse_args()

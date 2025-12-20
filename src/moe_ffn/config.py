@@ -41,6 +41,11 @@ class TrainConfig:
     head_type: str = "linear"  # "linear" or "mlp"
 
     do_ensemble_logits: bool = True
+    
+    use_amp: bool = True
+    amp_dtype: str = "fp16"
+    adamw_foreach: bool = False
+    adamw_fused: bool = False
 
 
 @dataclass
@@ -80,7 +85,10 @@ def build_train_config(args: argparse.Namespace) -> TrainConfig:
         train_full_only=bool(getattr(args, "train_full_only", False)),
         head_type=str(getattr(args, "head_type", "linear")),
         do_ensemble_logits=bool(getattr(args, "do_ensemble_logits", True)),
-
+        use_amp=(not getattr(args, "no_amp", False)),
+        amp_dtype=str(getattr(args, "amp_dtype", "fp16")),
+        adamw_foreach=bool(getattr(args, "adamw_foreach", False)),
+        adamw_fused=bool(getattr(args, "adamw_fused", False)),
     )
 
 

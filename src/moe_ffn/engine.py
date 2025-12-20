@@ -1,5 +1,6 @@
 from collections import deque
 from typing import Dict, Optional, Any
+from torch.cuda.amp import autocast, GradScaler
 
 import torch
 import torch.nn as nn
@@ -37,6 +38,10 @@ def train_one_epoch(
     fusion_method: str = "concat",
     f1_average: str = "macro",
     step_print_moe: float = 100,
+    use_amp: bool = True,
+    amp_dtype: str = "fp16",
+    scaler: Optional[GradScaler] = None,
+    max_grad_norm: Optional[float] = None,
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -46,33 +51,48 @@ def train_one_epoch(
     for step, batch in enumerate(dataloader):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
-        outputs = model(
-            input_ids_sent=batch["input_ids_sent"],
-            attention_mask_sent=batch["attention_mask_sent"],
-            input_ids_term=batch["input_ids_term"],
-            attention_mask_term=batch["attention_mask_term"],
-            labels=batch["label"],
-            fusion_method=fusion_method,
-        )
-        loss = outputs["loss"]
-        logits = outputs["logits"]
+        optimizer.zero_grad(set_to_none=True)
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        with autocast(
+            device_type="cuda",
+            enabled=bool(use_amp),
+            dtype=torch.float16 if amp_dtype == "fp16" else torch.bfloat16,
+        ):
+            outputs = model(
+                input_ids_sent=batch["input_ids_sent"],
+                attention_mask_sent=batch["attention_mask_sent"],
+                input_ids_term=batch["input_ids_term"],
+                attention_mask_term=batch["attention_mask_term"],
+                labels=batch["label"],
+                fusion_method=fusion_method,
+            )
+            loss = outputs["loss"]
+            logits = outputs["logits"]
+            
+        if use_amp and scaler is not None:
+            scaler.scale(loss).backward()
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+            optimizer.step()
 
         if scheduler is not None:
             scheduler.step()
 
-        total_loss += loss.item()
+        total_loss += float(loss.item())
 
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
-        
-        if step > 0 and step % step_print_moe == 0:
-            model.print_moe_debug(topn=3)
+
+        if step > 0 and step % int(step_print_moe) == 0:
+                model.print_moe_debug(topn=3)
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
@@ -207,8 +227,8 @@ def run_training_loop(
     val_loader: Optional[DataLoader],
     optimizer,
     scheduler,
-    lr: float = None,
-    warmup_ratio: float = None,
+    lr: float,
+    warmup_ratio: float,
     epochs: int,
     fusion_method: str,
     freeze_epochs: int,
@@ -217,63 +237,66 @@ def run_training_loop(
     id2label: Dict[int, str],
     tag: str = "",
     step_print_moe: float = 100,
+    use_amp: bool = True,
+    amp_dtype: str = "fp16",
+    adamw_foreach: bool = False,
+    adamw_fused: bool = False,
+    max_grad_norm: Optional[float] = None,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
-
-
-    def _trainable_params(m: nn.Module):
-        return [p for p in m.parameters() if p.requires_grad]
-
-    # Build phase-specific optimizer and scheduler to avoid allocating AdamW
-    # state for frozen parameters. When the encoder becomes trainable, the
-    # optimizer is rebuilt with the newly trainable parameters.
-    steps_per_epoch = max(1, len(train_loader))
-
-    # Ensure encoder trainable flags are correct before building the initial optimizer.
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
-
-    if optimizer is None or scheduler is None:
-        if lr is None or warmup_ratio is None:
-            raise ValueError("lr and warmup_ratio must be provided when optimizer/scheduler are None.")
-
-        if freeze_epochs > 0:
-            phase1_epochs = min(freeze_epochs, epochs)
-            phase1_steps = steps_per_epoch * max(1, phase1_epochs)
-        else:
-            phase1_steps = steps_per_epoch * max(1, epochs)
-
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model,
-            lr=lr,
-            warmup_ratio=warmup_ratio,
-            total_steps=phase1_steps,
-            params=_trainable_params(model),
-        )
 
     val_f1_window = deque(maxlen=rolling_k)
     best_val_f1_rolling = -1.0
     best_state_dict = None
     best_epoch = -1
     epochs_no_improve = 0
-    
+
     print("=======================================================================")
     print("Fusion Method:", fusion_method)
     print("=======================================================================")
-    
+
+    scaler = GradScaler() if (use_amp and amp_dtype == "fp16") else None
+    steps_per_epoch = max(1, len(train_loader))
+
+    def trainable_params():
+        return [p for p in model.parameters() if p.requires_grad]
+
+    # Ensure correct freeze state before building phase 1 optimizer
+    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
+
+    # Build phase 1 optimizer, only for trainable params
+    phase1_epochs = min(max(1, freeze_epochs), epochs) if freeze_epochs > 0 else epochs
+    optimizer, scheduler = build_optimizer_and_scheduler(
+        model=model,
+        lr=lr,
+        warmup_ratio=warmup_ratio,
+        total_steps=steps_per_epoch * max(1, phase1_epochs),
+        params=trainable_params(),
+        adamw_foreach=adamw_foreach,
+        adamw_fused=adamw_fused,
+    )
+
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
 
+        prev_trainable = True
+        if hasattr(model, "encoder"):
+            prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
+
         maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs)
+
+        now_trainable = True
+        if hasattr(model, "encoder"):
+            now_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
         if freeze_epochs > 0 and epoch < freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
-
         elif freeze_epochs > 0 and epoch == freeze_epochs:
             print("Encoder unfrozen")
 
-            # Rebuild optimizer and scheduler for the remaining epochs now that
-            # the encoder parameters are trainable.
-            remaining_steps = steps_per_epoch * max(1, epochs - epoch)
+        # Rebuild optimizer exactly when encoder becomes trainable
+        if (not prev_trainable) and now_trainable:
+            print("Rebuilding optimizer for unfrozen encoder params")
             try:
                 del optimizer
                 del scheduler
@@ -282,12 +305,15 @@ def run_training_loop(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+            remaining_steps = steps_per_epoch * max(1, epochs - epoch)
             optimizer, scheduler = build_optimizer_and_scheduler(
                 model=model,
                 lr=lr,
                 warmup_ratio=warmup_ratio,
                 total_steps=remaining_steps,
-                params=_trainable_params(model),
+                params=trainable_params(),
+                adamw_foreach=adamw_foreach,
+                adamw_fused=adamw_fused,
             )
 
         train_metrics = train_one_epoch(
@@ -298,6 +324,10 @@ def run_training_loop(
             fusion_method=fusion_method,
             f1_average="macro",
             step_print_moe=step_print_moe,
+            use_amp=use_amp,
+            amp_dtype=amp_dtype,
+            scaler=scaler,
+            max_grad_norm=max_grad_norm,
         )
         history["train_loss"].append(train_metrics["loss"])
         history["train_f1"].append(train_metrics["f1"])
@@ -322,7 +352,7 @@ def run_training_loop(
             history["val_f1"].append(val_metrics["f1"])
 
             val_f1_window.append(val_metrics["f1"])
-            val_f1_rolling = sum(val_f1_window) / len(val_f1_window)
+            val_f1_rolling = float(np.mean(val_f1_window))
 
             log += (
                 f" | Val loss {val_metrics['loss']:.4f} "
@@ -333,14 +363,15 @@ def run_training_loop(
 
             if val_f1_rolling > best_val_f1_rolling:
                 best_val_f1_rolling = val_f1_rolling
-                best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                best_epoch = epoch + 1
+                best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch
                 epochs_no_improve = 0
                 print("New best model on rolling val F1")
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve >= early_stop_patience:
                     print(f"Early stopping triggered after {early_stop_patience} epochs without improvement")
+                    print(log)
                     break
 
         print(log)
@@ -351,7 +382,6 @@ def run_training_loop(
         "best_val_f1_rolling": best_val_f1_rolling,
         "history": history,
     }
-
 
 def logits_to_metrics(logits: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
     preds = logits.argmax(axis=-1)
