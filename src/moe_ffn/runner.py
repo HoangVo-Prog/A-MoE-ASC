@@ -254,7 +254,7 @@ def run_phase1_benchmark_kfold_plus_full(
     train_path: str,
     test_path: str,
     output_path: str,
-    fusion_methods: list[str],
+    methods: list[str],
     seeds: list[int],
 ) -> dict:
 
@@ -280,7 +280,7 @@ def run_phase1_benchmark_kfold_plus_full(
 
     all_results = {
         "benchmark_type": "phase1_kfold_plus_full",
-        "methods": fusion_methods,
+        "methods": methods,
         "seeds": seeds,
         "k_folds": k_folds,
         "config": {**base_cfg.__dict__},
@@ -294,7 +294,7 @@ def run_phase1_benchmark_kfold_plus_full(
     samples = train_dataset_full.samples
     y = np.array([label2id[s["label"]] for s in samples], dtype=int)
 
-    for method in fusion_methods:
+    for method in methods:
         cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k_folds})
         per_method_seed_records[method] = []
 
@@ -464,7 +464,7 @@ def run_phase1_benchmark_kfold_plus_full(
 
     # ===== Aggregate summary across seeds per method =====
     summary: dict[str, dict] = {}
-    for method in fusion_methods:
+    for method in methods:
         recs = per_method_seed_records[method]
         cv_val_means = [float(r["cv_val_f1_mean"]) for r in recs]
         cv_test_means = [float(r["cv_test_f1_mean"]) for r in recs]
@@ -509,7 +509,7 @@ def run_phase1_benchmark_kfold_plus_full(
     # Deltas vs sent baseline (if present)
     if "sent" in summary:
         base = summary["sent"]["full_test_f1_mean_over_seeds"]
-        for method in fusion_methods:
+        for method in methods:
             summary[method]["delta_full_test_f1_vs_sent"] = float(
                 summary[method]["full_test_f1_mean_over_seeds"] - base
             )
