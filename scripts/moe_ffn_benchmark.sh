@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # để python thấy src/ là package root
 export PYTHONPATH="$ROOT_DIR/src"
 
-python -m moe_ffn.runner.py \
+python -m moe_ffn.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
