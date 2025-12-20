@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-# ===== Nhận input =====
 EPOCHS="${1:-10}"   
 
 echo "Running with epochs = $EPOCHS"
