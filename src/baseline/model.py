@@ -6,12 +6,12 @@ from shared import DEVICE, BaseBertConcatClassifier
 
 
 class BertConcatClassifier(BaseBertConcatClassifier):
-    pass 
+    pass
 
 def build_model(*, cfg, num_labels: int):
     return BertConcatClassifier(
-        cfg.model_name, 
-        num_labels=num_labels, 
+        model_name=cfg.model_name,
+        num_labels=num_labels,
         dropout=cfg.dropout,
         head_type=cfg.head_type,
     ).to(DEVICE)
