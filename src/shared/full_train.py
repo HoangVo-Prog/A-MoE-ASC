@@ -7,9 +7,9 @@ import torch
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
-from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed, cleanup_cuda
+from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed
 from .logit import collect_test_logits, logits_to_metrics
-from .utils import _mean_std
+from .utils import _mean_std, cleanup_cuda
 from .plotting import _print_confusion_matrix, _aggregate_confusions
 
 

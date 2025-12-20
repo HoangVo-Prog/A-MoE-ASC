@@ -10,8 +10,8 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 
 from .datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed, cleanup_cuda
-from .utils import _mean_std, _aggregate_confusions, _cfg_to_dict
+from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed
+from .utils import _mean_std, _aggregate_confusions, _cfg_to_dict, cleanup_cuda
 
 
 ModelFactory = Callable[[Any, int, Dict[str, Any]], torch.nn.Module]
