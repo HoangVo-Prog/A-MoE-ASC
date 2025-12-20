@@ -31,6 +31,8 @@ from shared import (
     train_full_multi_seed_then_test_generic
 )
 
+from moe_ffn.engine import run_training_loop as run_training_loop_fn
+
 
 def _resolve_seeds_from_args(cfg: TrainConfig, args) -> list[int]:
     seeds = _parse_int_list(getattr(args, "seeds", ""))
@@ -95,7 +97,7 @@ def main(args: argparse.Namespace) -> None:
             model_factory=lambda cfg_, num_labels, extra: build_model(
                 cfg=cfg_, moe_cfg=extra["moe_cfg"], num_labels=num_labels
             ),
-            run_training_loop_fn=run_training_loop,
+            run_training_loop_fn=run_training_loop_fn,
             eval_model_fn=eval_model,
             train_full_multi_seed_then_test_fn=train_full_multi_seed_then_test_generic,
             trainloop_kwargs_factory=_moe_trainloop_kwargs,

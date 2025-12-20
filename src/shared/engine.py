@@ -246,6 +246,8 @@ def run_training_loop(
     adamw_foreach: bool = False,
     adamw_fused: bool = False,
     max_grad_norm: Optional[float] = 1.0,
+    train_one_epoch_fn=train_one_epoch,
+    eval_model_fn=eval_model,
 ) -> Dict[str, Any]:
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -319,7 +321,7 @@ def run_training_loop(
                 adamw_fused=adamw_fused,
             )
 
-        train_metrics = train_one_epoch(
+        train_metrics = train_one_epoch_fn(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
@@ -342,7 +344,7 @@ def run_training_loop(
         )
 
         if val_loader is not None:
-            val_metrics = eval_model(
+            val_metrics = eval_model_fn(
                 model=model,
                 dataloader=val_loader,
                 id2label=id2label,
