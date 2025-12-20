@@ -217,18 +217,6 @@ def run_training_loop(
     # Ensure correct freeze state before building phase 1 optimizer
     maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
 
-    # Build phase 1 optimizer, only for trainable params
-    phase1_epochs = min(max(1, freeze_epochs), epochs) if freeze_epochs > 0 else epochs
-    optimizer, scheduler = build_optimizer_and_scheduler(
-        model=model,
-        lr=lr,
-        warmup_ratio=warmup_ratio,
-        total_steps=steps_per_epoch * max(1, phase1_epochs),
-        params=trainable_params(),
-        adamw_foreach=adamw_foreach,
-        adamw_fused=adamw_fused,
-    )
-
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
         
@@ -247,6 +235,16 @@ def run_training_loop(
             model.activate_freeze_base()
         elif freeze_epochs > 0 and epoch == freeze_epochs:
             print("Encoder unfrozen")
+
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model,
+            lr=lr,
+            warmup_ratio=warmup_ratio,
+            total_steps=steps_per_epoch * freeze_epochs,
+            params=trainable_params(),
+            adamw_foreach=adamw_foreach,
+            adamw_fused=adamw_fused,
+        )
 
         # Rebuild optimizer exactly when encoder becomes trainable
         if (not prev_trainable) and now_trainable:
