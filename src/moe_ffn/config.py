@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from utils import BaseTrainConfig
+from shared import BaseTrainConfig
 
 
 @dataclass
