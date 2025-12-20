@@ -38,6 +38,7 @@ from .plotting import (
 # utils
 from .utils import (
     DEVICE,
+    FUSION_METHOD_CHOICES,
     cleanup_cuda,
     _parse_int_list,
     _parse_str_list,
@@ -54,6 +55,7 @@ from .seed import (
 __all__ = [
     # constants
     "DEVICE",
+    "FUSION_METHOD_CHOICES",
 
     # datasets
     "AspectSentimentDataset",

@@ -1,18 +1,7 @@
 import argparse
 
 
-FUSION_METHOD_CHOICES = [
-    "sent",
-    "term",
-    "concat",
-    "add",
-    "mul",
-    "cross",
-    "gated_concat",
-    "bilinear",
-    "coattn",
-    "late_interaction",
-]
+from shared import FUSION_METHOD_CHOICES
 
 
 def parse_args() -> argparse.Namespace:

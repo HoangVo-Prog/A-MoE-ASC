@@ -17,6 +17,7 @@ from baseline.model import build_model
 
 from shared import (
     DEVICE,
+    FUSION_METHOD_CHOICES,
     AspectSentimentDataset,
     AspectSentimentDatasetFromSamples,
     set_all_seeds,
@@ -65,10 +66,6 @@ def write_locked_baseline_metadata(
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
-def _default_fusion_methods() -> list[str]:
-    return ["sent", "term", "concat", "add", "mul", "cross", "gated_concat", "bilinear", "coattn", "late_interaction"]
-
-
 def _resolve_seeds_from_args(cfg: TrainConfig, args) -> list[int]:
     seeds = _parse_int_list(getattr(args, "seeds", ""))
     if seeds:
@@ -105,7 +102,7 @@ def main(args) -> None:
     if bool(getattr(args, "benchmark_fusions", False)):
         methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
         if not methods:
-            methods = _default_fusion_methods()
+            methods = FUSION_METHOD_CHOICES
 
         seeds = _resolve_seeds_from_args(cfg, args)
 
