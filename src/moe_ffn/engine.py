@@ -20,6 +20,7 @@ from shared import (
     _print_confusion_matrix
 )
 
+
 def set_encoder_trainable(
     model: nn.Module,
     trainable: bool,
