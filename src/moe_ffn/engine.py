@@ -17,9 +17,53 @@ from shared import (
     DEVICE, 
     build_optimizer_and_scheduler, 
     cleanup_cuda,
-    maybe_freeze_encoder,
     _print_confusion_matrix
 )
+
+def set_encoder_trainable(
+    model: nn.Module,
+    trainable: bool,
+    *,
+    keep_moe_trainable: bool = True,
+) -> None:
+    """
+    Set requires_grad for encoder params.
+
+    If keep_moe_trainable=True:
+      - encoder base params follow `trainable`
+      - MoE FFN params are ALWAYS trainable
+    """
+    for name, p in model.encoder.named_parameters():
+        if keep_moe_trainable and "moe_ffn" in name:
+            p.requires_grad = True
+        else:
+            p.requires_grad = trainable
+
+
+def maybe_freeze_encoder(
+    model: nn.Module,
+    epoch_idx_0based: int,
+    freeze_epochs: int,
+) -> None:
+    """
+    Freeze base encoder for first `freeze_epochs` epochs,
+    but keep MoE FFN trainable.
+    """
+    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
+        # Phase 1: freeze encoder base, train MoE + heads
+        set_encoder_trainable(
+            model,
+            trainable=False,
+            keep_moe_trainable=True,
+        )
+    else:
+        # Phase 2: unfreeze everything
+        set_encoder_trainable(
+            model,
+            trainable=True,
+            keep_moe_trainable=False,
+        )
+
 
 
 def train_one_epoch(
@@ -214,41 +258,38 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    # Ensure correct freeze state before building phase 1 optimizer
+    # ===== PHASE INIT (epoch 0) =====
     maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs)
+
+    optimizer, scheduler = build_optimizer_and_scheduler(
+        model=model,
+        lr=lr,
+        warmup_ratio=warmup_ratio,
+        total_steps=steps_per_epoch * epochs,
+        params=trainable_params(),
+        adamw_foreach=adamw_foreach,
+        adamw_fused=adamw_fused,
+    )
 
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
-        
-        prev_trainable = True
-        if hasattr(model, "encoder"):
-            prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
-        
+
+        prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
+
+        # update freeze / unfreeze state
         maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs)
-        
-        now_trainable = True
-        if hasattr(model, "encoder"):
-            now_trainable = any(p.requires_grad for p in model.encoder.parameters())
+
+        now_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
         if freeze_epochs > 0 and epoch < freeze_epochs:
-            print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
-            model.activate_freeze_base()
+            print(f"Encoder base frozen (epoch {epoch + 1}/{freeze_epochs})")
         elif freeze_epochs > 0 and epoch == freeze_epochs:
-            print("Encoder unfrozen")
+            print("Encoder base unfrozen")
 
-        optimizer, scheduler = build_optimizer_and_scheduler(
-            model=model,
-            lr=lr,
-            warmup_ratio=warmup_ratio,
-            total_steps=steps_per_epoch * freeze_epochs,
-            params=trainable_params(),
-            adamw_foreach=adamw_foreach,
-            adamw_fused=adamw_fused,
-        )
-
-        # Rebuild optimizer exactly when encoder becomes trainable
+        # ===== rebuild optimizer EXACTLY ON TRANSITION =====
         if (not prev_trainable) and now_trainable:
-            print("Rebuilding optimizer for unfrozen encoder params")
+            print("Rebuilding optimizer for unfrozen encoder")
+
             try:
                 del optimizer
                 del scheduler
@@ -268,7 +309,7 @@ def run_training_loop(
                 adamw_fused=adamw_fused,
             )
 
-        
+        # ===== TRAIN =====
         train_metrics = train_one_epoch(
             model=model,
             dataloader=train_loader,
@@ -291,6 +332,7 @@ def run_training_loop(
             f"acc {train_metrics['acc']:.4f}"
         )
 
+        # ===== VALIDATION =====
         if val_loader is not None:
             val_metrics = eval_model(
                 model=model,
@@ -316,14 +358,20 @@ def run_training_loop(
 
             if val_f1_rolling > best_val_f1_rolling:
                 best_val_f1_rolling = val_f1_rolling
-                best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                best_state_dict = {
+                    k: v.detach().cpu().clone()
+                    for k, v in model.state_dict().items()
+                }
                 best_epoch = epoch
                 epochs_no_improve = 0
                 print("New best model on rolling val F1")
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve >= early_stop_patience:
-                    print(f"Early stopping triggered after {early_stop_patience} epochs without improvement")
+                    print(
+                        f"Early stopping triggered after "
+                        f"{early_stop_patience} epochs without improvement"
+                    )
                     print(log)
                     break
 
@@ -331,7 +379,7 @@ def run_training_loop(
 
     del optimizer, scheduler, scaler
     cleanup_cuda()
-    
+
     return {
         "best_state_dict": best_state_dict,
         "best_epoch": best_epoch,
