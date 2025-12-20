@@ -11,7 +11,7 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader
 
-from constants import DEVICE
+from utils import DEVICE
 import numpy as np 
 
 

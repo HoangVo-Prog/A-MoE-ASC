@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from config import MoEConfig
+from moe_ffn.config import MoEConfig
 
 
 def moe_load_balance_loss(

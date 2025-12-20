@@ -12,10 +12,9 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader
 
-from constants import DEVICE
+from utils import DEVICE, build_optimizer_and_scheduler
 import numpy as np
 
-from optim import build_optimizer_and_scheduler
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
     for p in model.encoder.parameters():
