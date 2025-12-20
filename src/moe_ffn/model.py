@@ -110,7 +110,7 @@ class BertConcatClassifier(BaseBertConcatClassifier):
         head_type: str,
         moe_cfg: MoEConfig,
         aux_loss_weight: float,
-        freeze_base: bool,
+        freeze_moe: bool,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -148,8 +148,6 @@ class BertConcatClassifier(BaseBertConcatClassifier):
         
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
-        if not self.use_moe:
-            return []
 
         stats = []
         E = None
@@ -225,5 +223,5 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         head_type=cfg.head_type,
         moe_cfg=moe_cfg,
         aux_loss_weight=float(cfg.aux_loss_weight),
-        freeze_base=bool(getattr(cfg, "freeze_base", False)),
+        freeze_moe=bool(getattr(cfg, "freeze_moe", False)),
     ).to(DEVICE)
