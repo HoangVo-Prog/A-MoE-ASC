@@ -231,7 +231,45 @@ def run_training_loop(
 
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
+        
+        prev_trainable = True
+        if hasattr(model, "encoder"):
+            prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
+        
         maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs)
+        
+        now_trainable = True
+        if hasattr(model, "encoder"):
+            now_trainable = any(p.requires_grad for p in model.encoder.parameters())
+
+        if freeze_epochs > 0 and epoch < freeze_epochs:
+            print(f"Encoder frozen (epoch {epoch + 1}/{freeze_epochs})")
+        elif freeze_epochs > 0 and epoch == freeze_epochs:
+            print("Encoder unfrozen")
+
+        # Rebuild optimizer exactly when encoder becomes trainable
+        if (not prev_trainable) and now_trainable:
+            print("Rebuilding optimizer for unfrozen encoder params")
+            try:
+                del optimizer
+                del scheduler
+            except Exception:
+                pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            remaining_steps = steps_per_epoch * max(1, epochs - epoch)
+            optimizer, scheduler = build_optimizer_and_scheduler(
+                model=model,
+                lr=lr,
+                warmup_ratio=warmup_ratio,
+                total_steps=remaining_steps,
+                params=trainable_params(),
+                adamw_foreach=adamw_foreach,
+                adamw_fused=adamw_fused,
+            )
+
+        
         train_metrics = train_one_epoch(
             model=model,
             dataloader=train_loader,
