@@ -39,6 +39,36 @@ class TrainConfig:
         return asdict(self)
 
 
+def build_train_config(args) -> TrainConfig:
+    if getattr(args, "locked_baseline", False):
+        return locked_baseline_config(
+            fusion_method=args.fusion_method,
+            output_dir=args.output_dir,
+            output_name=args.output_name,
+        )
+    return TrainConfig(
+        model_name=args.model_name,
+        fusion_method=args.fusion_method,
+        epochs=args.epochs,
+        train_batch_size=args.train_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        lr=args.lr,
+        warmup_ratio=args.warmup_ratio,
+        dropout=args.dropout,
+        freeze_epochs=args.freeze_epochs,
+        rolling_k=args.rolling_k,
+        early_stop_patience=args.early_stop_patience,
+        k_folds=args.k_folds,
+        seed=args.seed,
+        max_len_sent=args.max_len_sent,
+        max_len_term=args.max_len_term,
+        output_dir=args.output_dir,
+        output_name=args.output_name,
+        verbose_report=args.verbose_report,
+        train_full_only=args.train_full_only,
+        head_type=args.head_type,
+    )
+
 def locked_baseline_config(
     *,
     fusion_method: str,

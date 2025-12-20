@@ -16,47 +16,21 @@ from transformers import AutoTokenizer
 
 from moe_ffn.cli import FUSION_METHOD_CHOICES, parse_args
 from moe_ffn.config import TrainConfig, build_moe_config, build_train_config, locked_baseline_config
-from shared import DEVICE, AspectSentimentDataset, AspectSentimentDatasetFromSamples
-from moe_ffn.engine import _print_confusion_matrix, eval_model, run_training_loop, logits_to_metrics, collect_test_logits, cleanup_cuda
+from shared import (
+    DEVICE, 
+    AspectSentimentDataset, 
+    AspectSentimentDatasetFromSamples,
+    set_all_seeds,
+    set_determinism,
+    make_train_loader_with_seed,
+)
+from moe_ffn.engine import eval_model, run_training_loop, logits_to_metrics, collect_test_logits, cleanup_cuda
 from moe_ffn.model import build_model
 
 
 def _mean_std(xs: list[float]) -> tuple[float, float]:
     arr = np.asarray(xs, dtype=np.float64)
     return float(arr.mean()), float(arr.std(ddof=1) if arr.size > 1 else 0.0)
-
-
-def set_all_seeds(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def set_determinism(seed: int) -> None:
-    """Best-effort determinism for reproducible experiments."""
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-
-    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.allow_tf32 = False
-
-    try:
-        torch.use_deterministic_algorithms(True)
-    except Exception:
-        pass
-
-
-def _seed_worker(worker_id: int) -> None:
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
 
 
 def _parse_int_list(csv: str) -> list[int]:
@@ -71,18 +45,6 @@ def _parse_str_list(csv: str) -> list[str]:
     if not s:
         return []
     return [p.strip() for p in s.split(",") if p.strip()]
-
-
-def make_train_loader_with_seed(dataset, batch_size: int, seed: int) -> DataLoader:
-    g = torch.Generator()
-    g.manual_seed(int(seed))
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        generator=g,
-        worker_init_fn=_seed_worker,
-    )
 
 
 def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
@@ -131,7 +93,10 @@ def train_full_multi_seed_then_test(
 
     for seed in seeds:
         print(f"\n===== FULL seed={seed} fusion={cfg.fusion_method} =====")
+        set_all_seeds(int(seed))
         set_determinism(int(seed))
+        
+
 
         train_loader = make_train_loader_with_seed(train_dataset_full, cfg.train_batch_size, int(seed))
 
@@ -212,7 +177,7 @@ def train_full_multi_seed_then_test(
         if print_confusion_matrix:
             preds_list = ens_preds.tolist()
             labels_list = labels.tolist()
-            _print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
+            print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
 
     out = {
         "per_seed": per_seed_metrics,
@@ -277,6 +242,7 @@ def run_phase1_benchmark_kfold_plus_full(
 
         for seed in seeds:
             print(f"\n===== CV {method} seed={seed} k={k_folds} =====")
+            set_all_seeds(int(seed))
             set_determinism(int(seed))
 
             cfg = TrainConfig(**{**cfg_method.__dict__, "seed": int(seed)})
@@ -493,6 +459,7 @@ def run_phase1_benchmark_kfold_plus_full(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
 
+
 def main(args: argparse.Namespace) -> None:
     # Build configs from config.py (Phase 2 style)
     cfg = build_train_config(args)
@@ -503,6 +470,7 @@ def main(args: argparse.Namespace) -> None:
     val_path = args.val_path
     test_path = args.test_path
 
+    set_all_seeds(int(cfg.seed))
     set_determinism(int(cfg.seed))
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)

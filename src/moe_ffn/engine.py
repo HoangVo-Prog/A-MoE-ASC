@@ -11,21 +11,14 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 from torch.utils.data import DataLoader
-
-from shared import DEVICE, build_optimizer_and_scheduler
 import numpy as np
 
-
-def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
-    for p in model.encoder.parameters():
-        p.requires_grad = trainable
-
-
-def maybe_freeze_encoder(model: nn.Module, epoch_idx_0based: int, freeze_epochs: int) -> None:
-    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
-        set_encoder_trainable(model, False)
-    else:
-        set_encoder_trainable(model, True)
+from shared import (
+    DEVICE, 
+    build_optimizer_and_scheduler, 
+    cleanup_cuda,
+    maybe_freeze_encoder
+)
 
 
 def train_one_epoch(
@@ -99,44 +92,6 @@ def train_one_epoch(
     return {"loss": avg_loss, "acc": acc, "f1": f1}
 
 
-def _print_confusion_matrix(
-    y_true,
-    y_pred,
-    *,
-    id2label: Optional[Dict[int, str]] = None,
-    normalize: bool = True,
-    digits: int = 3,
-):
-    cm = confusion_matrix(y_true, y_pred)
-
-    if normalize:
-        cm = cm.astype(np.float32)
-        cm = cm / cm.sum(axis=1, keepdims=True)
-
-    if id2label is not None:
-        labels = [id2label[i] for i in range(len(id2label))]
-    else:
-        labels = [str(i) for i in range(cm.shape[0])]
-
-    max_label_len = max(len(l) for l in labels)
-
-    header = " " * (max_label_len + 2)
-    for lbl in labels:
-        header += f"{lbl:>{max_label_len+2}}"
-    print(header)
-
-    for i, row in enumerate(cm):
-        row_str = f"{labels[i]:>{max_label_len}} |"
-        for val in row:
-            if normalize:
-                row_str += f"{val:>{max_label_len+2}.{digits}f}"
-            else:
-                row_str += f"{int(val):>{max_label_len+2}d}"
-        print(row_str)
-
-    print()
-
-
 def eval_model(
     *,
     model: nn.Module,
@@ -200,7 +155,7 @@ def eval_model(
     )
 
     if print_confusion_matrix:
-        _print_confusion_matrix(
+        print_confusion_matrix(
             all_labels,
             all_preds,
             id2label=id2label,
@@ -346,6 +301,7 @@ def run_training_loop(
         "history": history,
     }
 
+
 def logits_to_metrics(logits: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
     preds = logits.argmax(axis=-1)
     acc = accuracy_score(labels, preds)
@@ -383,17 +339,3 @@ def collect_test_logits(
     logits_all = np.concatenate(logits_chunks, axis=0)
     labels_all = np.concatenate(labels_chunks, axis=0)
     return logits_all, labels_all
-
-
-def cleanup_cuda(*objs):
-    import gc, torch
-    for o in objs:
-        try:
-            del o
-        except Exception:
-            pass
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()

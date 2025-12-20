@@ -8,12 +8,19 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from baseline.config import TrainConfig, locked_baseline_config
-from baseline.engine import eval_model, run_training_loop, _print_confusion_matrix, logits_to_metrics, collect_test_logits
+from baseline.config import TrainConfig, build_train_config
+from baseline.engine import eval_model, run_training_loop, print_confusion_matrix, logits_to_metrics, collect_test_logits
 from baseline.model import BertConcatClassifier
-from shared import DEVICE, build_optimizer_and_scheduler, AspectSentimentDataset, AspectSentimentDatasetFromSamples
+from shared import (
+    DEVICE, 
+    build_optimizer_and_scheduler, 
+    AspectSentimentDataset, 
+    AspectSentimentDatasetFromSamples,
+    set_all_seeds, 
+    set_determinism,
+    make_train_loader_with_seed,
+)
 from baseline.cli import parse_args
-import random
 import json
 import hashlib
 import os
@@ -28,33 +35,6 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
         return float(arr.mean()), 0.0
     return float(arr.mean()), float(arr.std(ddof=1))
 
-
-def set_all_seeds(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        
-
-
-def set_determinism(seed: int) -> None:
-    """Best-effort determinism for reproducible experiments."""
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-
-    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.allow_tf32 = False
-
-    try:
-        torch.use_deterministic_algorithms(True)
-    except Exception:
-        pass
 
 def _sha256_file(path: str) -> str:
     h = hashlib.sha256()
@@ -86,16 +66,7 @@ def write_locked_baseline_metadata(
     }
     out_path = os.path.join(cfg.output_dir, f"{cfg.output_name}.baseline_lock.json")
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-def make_train_loader_with_seed(train_dataset_full, batch_size: int, seed: int) -> DataLoader:
-    g = torch.Generator()
-    g.manual_seed(seed)
-    return DataLoader(
-        train_dataset_full,
-        batch_size=batch_size,
-        shuffle=True,
-        generator=g,
-    )
+        json.dump(payload, f, indent=2, ensure_ascii=False)    
 
 
 def clear_model(model, optimizer, scheduler):
@@ -104,36 +75,6 @@ def clear_model(model, optimizer, scheduler):
     del scheduler
     torch.cuda.empty_cache()
     
-
-def build_train_config(args) -> TrainConfig:
-    if getattr(args, "locked_baseline", False):
-        return locked_baseline_config(
-            fusion_method=args.fusion_method,
-            output_dir=args.output_dir,
-            output_name=args.output_name,
-        )
-    return TrainConfig(
-        model_name=args.model_name,
-        fusion_method=args.fusion_method,
-        epochs=args.epochs,
-        train_batch_size=args.train_batch_size,
-        eval_batch_size=args.eval_batch_size,
-        lr=args.lr,
-        warmup_ratio=args.warmup_ratio,
-        dropout=args.dropout,
-        freeze_epochs=args.freeze_epochs,
-        rolling_k=args.rolling_k,
-        early_stop_patience=args.early_stop_patience,
-        k_folds=args.k_folds,
-        seed=args.seed,
-        max_len_sent=args.max_len_sent,
-        max_len_term=args.max_len_term,
-        output_dir=args.output_dir,
-        output_name=args.output_name,
-        verbose_report=args.verbose_report,
-        train_full_only=args.train_full_only,
-        head_type=args.head_type,
-    )
 
 def build_model(*, cfg: TrainConfig, num_labels: int):
     return BertConcatClassifier(
@@ -573,7 +514,7 @@ def train_full_multi_seed_then_test(
         if print_confusion_matrix:
             preds_list = ens_preds.tolist()
             labels_list = labels.tolist()
-            _print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
+            print_confusion_matrix(labels_list, preds_list, id2label=id2label, normalize=True)
 
     out = {
         "per_seed": per_seed_metrics,
