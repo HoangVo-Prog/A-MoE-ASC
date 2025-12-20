@@ -63,7 +63,7 @@ def locked_baseline_config(
 
         freeze_epochs=3,
         rolling_k=3,
-        early_stop_patience=3,
+        early_stop_patience=5,
 
         k_folds=5,
         seed=42,

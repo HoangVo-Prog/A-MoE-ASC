@@ -131,7 +131,7 @@ def locked_baseline_config(
     cfg.dropout=0.1
     cfg.freeze_epochs=3
     cfg.rolling_k=3
-    cfg.early_stop_patience=3
+    cfg.early_stop_patience=5
 
     cfg.k_folds=5
 
