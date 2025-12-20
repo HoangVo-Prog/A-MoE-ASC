@@ -292,7 +292,7 @@ def run_phase1_benchmark_kfold_plus_full(
 
     per_method_seed_records: dict[str, list[dict]] = {}
     samples = train_dataset_full.samples
-    y = np.array([label2id[s["label"]] for s in samples], dtype=int)
+    y = [label2id[s["sentiment"]] for s in samples]
 
     for method in methods:
         cfg_method = TrainConfig(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k_folds})
