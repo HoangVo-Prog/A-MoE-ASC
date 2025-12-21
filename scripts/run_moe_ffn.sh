@@ -1,16 +1,51 @@
 #!/usr/bin/env bash
 set -e
 
-EPOCHS="${1:-10}"   
+# =========================
+# Inputs
+# =========================
+EPOCHS="${1:-10}"
+LOSS_TYPE="${2:-ce}"
 
-echo "Running with epochs = $EPOCHS"
-
-# ===== Đi về project root =====
+# =========================
+# Project root
+# =========================
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-
-# ===== Để python thấy src/ là package root =====
 export PYTHONPATH="$ROOT_DIR/src"
 
+# =========================
+# Loss-specific flags
+# =========================
+LOSS_FLAGS="--loss_type ${LOSS_TYPE}"
+
+case "${LOSS_TYPE}" in
+  ce)
+    # CE 
+    ;;
+  weighted_ce)
+    # Neutral ~20% → boost neutral
+    LOSS_FLAGS="${LOSS_FLAGS} --class_weights 1.0,2.5,1.0"
+    ;;
+  focal)
+    # Focal + class weight
+    LOSS_FLAGS="${LOSS_FLAGS} --class_weights 1.0,2.5,1.0 --focal_gamma 2.0"
+    ;;
+  *)
+    echo "❌ Unsupported loss_type: ${LOSS_TYPE}"
+    echo "Supported: ce | weighted_ce | focal"
+    exit 1
+    ;;
+esac
+
+echo "▶ Running moe ffn with:"
+echo "  epochs     = ${EPOCHS}"
+echo "  loss_type  = ${LOSS_TYPE}"
+echo "  loss_flags = ${LOSS_FLAGS}"
+echo
+
+# =========================
+# Run
+# =========================
 python -m moe_ffn.runner \
   --locked_baseline \
   --benchmark_fusions \
@@ -26,4 +61,5 @@ python -m moe_ffn.runner \
   --aux_loss_weight 0.01 \
   --step_print_moe 100 \
   --amp_dtype fp16 \
-  --benchmark_methods concat
+  --benchmark_methods concat \
+  ${LOSS_FLAGS}
