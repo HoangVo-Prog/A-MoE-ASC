@@ -84,7 +84,7 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
         elif self.loss_type == "weighted_ce":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss = F.cross_entropy(logits, labels, weight=w)
-
+bui
         elif self.loss_type == "focal":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")

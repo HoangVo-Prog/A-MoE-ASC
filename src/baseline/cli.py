@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
         "--fusion_method",
         type=str,
         default="concat",
-        choices=["sent", "term", "concat", "add", "mul", "cross", "gated_concat", "bilinear", "coattn", "late_interaction", "moe"],
+        choices=["sent", "term", "concat", "add", "mul", "cross", "gated_concat", "bilinear", "coattn", "late_interaction"],
     )
     parser.add_argument("--locked_baseline", action="store_true", help="Lock the experimental baseline so only fusion_method changes across runs.")
 
