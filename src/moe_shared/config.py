@@ -43,11 +43,8 @@ def build_train_config(args: argparse.Namespace) -> TrainConfig:
 def build_moe_config(args: argparse.Namespace) -> Optional[MoEConfig]:
     if not bool(getattr(args, "use_moe", False)):
         return None
-    return MoEConfig(
-        num_experts=int(getattr(args, "moe_num_experts", 8)),
-        top_k=int(getattr(args, "moe_top_k", 1)),
-        route_mask_pad_tokens=bool(getattr(args, "route_mask_pad_tokens", False)),
-    )
+    args_dict = _filter_config_kwargs(vars(args), MoEConfig)
+    return MoEConfig(**args_dict)
 
 
 def locked_baseline_config(

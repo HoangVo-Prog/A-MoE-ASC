@@ -91,7 +91,7 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         self._topk_schedule_enabled = False
         self._topk_start = int(moe_cfg.top_k)
         self._topk_end = int(moe_cfg.top_k)
-        self._topk_switch_epoch = 0
+        self._topk_switch_epoch = 10
 
         moe_head = MoEHead(
             hidden_size=hidden_size,
