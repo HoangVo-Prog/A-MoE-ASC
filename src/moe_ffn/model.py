@@ -4,8 +4,11 @@ import math
 import torch
 import torch.nn as nn
 
-from moe_ffn.moe import MoEConfig, MoEFFN, moe_load_balance_loss
-from shared import DEVICE, BaseBertConcatClassifier
+from moe_ffn.moe import MoEFFN
+
+from shared import DEVICE
+
+from moe_shared import MoEBertConcatClassifier, MoEConfig, moe_load_balance_loss
 
 
 def _get_act_fn_from_intermediate(intermediate_module: nn.Module):
@@ -97,7 +100,7 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
         layer.forward = new_forward.__get__(layer, layer.__class__)
 
 
-class BertConcatClassifier(BaseBertConcatClassifier):
+class BertConcatClassifier(MoEBertConcatClassifier):
     def __init__(
         self,
         *,
@@ -107,109 +110,19 @@ class BertConcatClassifier(BaseBertConcatClassifier):
         head_type: str,
         moe_cfg: MoEConfig,
         aux_loss_weight: float,
-        freeze_moe: bool,
     ) -> None:
         super().__init__(
             model_name=model_name,
             num_labels=num_labels,
             dropout=dropout,
             head_type=head_type,
+            moe_cfg=moe_cfg,
+            aux_loss_weight=aux_loss_weight,
         )
 
-        self.aux_loss_weight = aux_loss_weight
+        # Attach MoE FFN into the encoder (this class is the "MoE-enabled" variant).
         replace_encoder_ffn_with_moe(self.encoder, moe_cfg)
 
-    def _collect_aux_loss(self):
-        total, count = 0.0, 0
-        for layer in self.encoder.encoder.layer:
-            moe = getattr(layer, "moe_ffn", None)
-            if moe is None or moe.last_router_logits is None:
-                continue
-            total += moe_load_balance_loss(
-                moe.last_router_logits, moe.last_topk_idx, moe.moe_cfg.num_experts
-            )
-            count += 1
-        return total / count if count > 0 else torch.tensor(0.0, device=self.device)
-
-    def _compute_loss(self, logits, labels):
-        if labels is None:
-            return {"loss": None, "logits": logits, "aux_loss": None}
-
-        ce = nn.CrossEntropyLoss()(logits, labels)
-        aux = self._collect_aux_loss()
-        return {
-            "loss": ce + self.aux_loss_weight * aux,
-            "logits": logits,
-            "aux_loss": aux,
-        }
-        
-    @torch.no_grad()
-    def _moe_debug_stats_per_layer(self):
-
-        stats = []
-        E = None
-
-        for li, layer in enumerate(self.encoder.encoder.layer):
-            moe = getattr(layer, "moe_ffn", None)
-            if moe is None:
-                continue
-            if moe.last_router_logits is None or moe.last_topk_idx is None:
-                continue
-
-            logits = moe.last_router_logits
-            topk_idx = moe.last_topk_idx
-            E = moe.moe_cfg.num_experts
-
-            if logits.dim() == 3:
-                logits2 = logits.reshape(-1, logits.size(-1))
-            else:
-                logits2 = logits
-
-            if topk_idx.dim() == 3:
-                topk2 = topk_idx.reshape(-1, topk_idx.size(-1))
-            else:
-                topk2 = topk_idx
-
-            probs = torch.softmax(logits2, dim=-1)
-
-            eps = 1e-9
-            ent = -(probs * (probs + eps).log()).sum(dim=-1).mean()
-            ent_norm = ent / math.log(E)
-
-            counts = torch.zeros(E, device=logits2.device, dtype=torch.float32)
-            counts.scatter_add_(
-                0,
-                topk2.reshape(-1),
-                torch.ones_like(topk2.reshape(-1), dtype=torch.float32),
-            )
-            usage = counts / counts.sum().clamp_min(1.0)
-
-            stats.append(
-                {
-                    "layer": li,
-                    "entropy_norm": float(ent_norm.item()),
-                    "max_load": float(usage.max().item()),
-                    "min_load": float(usage.min().item()),
-                    "usage": usage.detach().cpu(),
-                }
-            )
-
-        return stats
-
-    def print_moe_debug(self, topn: int = 3):
-        stats = self._moe_debug_stats_per_layer()
-        if not stats:
-            print("[MoE] No stats yet (maybe first batch not run or last_router_logits missing).")
-            return
-        print()
-        for s in stats:
-            usage = s["usage"]
-            topv, topi = torch.topk(usage, k=min(topn, usage.numel()))
-            top_pairs = ", ".join([f"e{int(i)}={float(v):.3f}" for v, i in zip(topv, topi)])
-            print(
-                f"[MoE][layer {s['layer']}] entropy_norm={s['entropy_norm']:.3f} "
-                f"max={s['max_load']:.3f} min={s['min_load']:.3f} | top: {top_pairs}"
-            )
 
 
 def build_model(*, cfg, moe_cfg, num_labels: int):
@@ -220,6 +133,4 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         head_type=cfg.head_type,
         moe_cfg=moe_cfg,
         aux_loss_weight=float(cfg.aux_loss_weight),
-        freeze_moe=bool(getattr(cfg, "freeze_moe", False)),
     ).to(DEVICE)
-    

@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from moe_shared import MoEConfig
+from moe_ffn.config import MoEConfig
+
 
 
 class MoEFFN(nn.Module):

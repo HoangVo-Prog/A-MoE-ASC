@@ -11,8 +11,6 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from moe_ffn.cli import FUSION_METHOD_CHOICES, parse_args
-from moe_ffn.config import TrainConfig, build_moe_config, build_train_config, locked_baseline_config
 from moe_ffn.model import build_model
 
 from shared import (
@@ -31,7 +29,16 @@ from shared import (
     train_full_multi_seed_then_test_generic
 )
 
-from moe_ffn.engine import run_training_loop as run_training_loop_fn
+from moe_shared import (
+    FUSION_METHOD_CHOICES,
+    parse_args,
+    TrainConfig,
+    build_moe_config,
+    build_train_config,
+    locked_baseline_config,    
+)
+
+from moe_shared import run_training_loop as run_training_loop_fn
 
 
 def _resolve_seeds_from_args(cfg: TrainConfig, args) -> list[int]:

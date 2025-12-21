@@ -6,7 +6,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from moe_shared import MoEConfig
+from moe_ffn.config import MoEConfig
+
+
+def moe_load_balance_loss(
+    router_logits: torch.Tensor,  # [N, E]
+    topk_idx: torch.Tensor,       # [N, K]
+    num_experts: int,
+) -> torch.Tensor:
+    probs = torch.softmax(router_logits, dim=-1)  # [N, E]
+    importance = probs.mean(dim=0)                # [E]
+
+    # load from hard top-1 routing
+    one_hot = torch.zeros((topk_idx.size(0), num_experts), device=topk_idx.device, dtype=probs.dtype)
+    one_hot.scatter_(1, topk_idx[:, :1], 1.0)
+    load = one_hot.mean(dim=0)                    # [E]
+
+    return num_experts * torch.sum(importance * load)
 
 
 class MoEFFN(nn.Module):
@@ -144,4 +160,78 @@ class MoEFFN(nn.Module):
 
         out = out.view(bsz, seqlen, h)
         out = self.layer_norm(out + x)
+        return out
+
+
+class MoEClassifierHead(nn.Module):
+    """Mixture-of-Experts classification head.
+
+    Routes each sample embedding to top-k experts and mixes expert logits.
+
+    Caches router outputs for load-balance aux loss and debugging (last_router_logits, last_topk_idx).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        num_labels: int,
+        moe_cfg: MoEConfig,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        assert 1 <= moe_cfg.top_k <= moe_cfg.num_experts
+
+        self.in_dim = int(in_dim)
+        self.num_labels = int(num_labels)
+        self.moe_cfg = moe_cfg
+
+        self.norm = nn.LayerNorm(in_dim)
+        self.drop = nn.Dropout(dropout)
+
+        self.router = nn.Linear(in_dim, moe_cfg.num_experts, bias=moe_cfg.router_bias)
+
+        # Each expert is a lightweight classifier.
+        self.expert = nn.ModuleList(
+            [nn.Linear(in_dim, num_labels) for _ in range(moe_cfg.num_experts)]
+        )
+
+        # init router near-uniform
+        nn.init.zeros_(self.router.weight)
+        if self.router.bias is not None:
+            nn.init.zeros_(self.router.bias)
+
+        self.last_router_logits: Optional[torch.Tensor] = None  # [B, E]
+        self.last_topk_idx: Optional[torch.Tensor] = None       # [B, K]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, D]
+        x = self.norm(x)
+        x = self.drop(x)
+
+        router_logits = self.router(x)  # [B, E]
+
+        topk_vals, topk_idx = torch.topk(router_logits, k=self.moe_cfg.top_k, dim=-1)  # [B, K]
+        topk_w = F.softmax(topk_vals, dim=-1)  # [B, K]
+
+        # cache for aux loss / debug
+        self.last_router_logits = router_logits
+        self.last_topk_idx = topk_idx
+
+        out = x.new_zeros((x.size(0), self.num_labels))  # [B, C]
+
+        # Mix expert logits
+        for e in range(self.moe_cfg.num_experts):
+            mask = topk_idx.eq(e)  # [B, K]
+            if not mask.any():
+                continue
+
+            b_pos, k_pos = torch.where(mask)  # positions where expert e is selected
+            w_e = topk_w[b_pos, k_pos].unsqueeze(-1)  # [M, 1]
+
+            x_e = x.index_select(0, b_pos)  # [M, D]
+            y_e = self.expert[e](x_e)       # [M, C]
+
+            out.index_add_(0, b_pos, y_e * w_e)
+
         return out
