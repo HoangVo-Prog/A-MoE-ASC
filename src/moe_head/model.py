@@ -6,8 +6,7 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
-from moe_shared.build_model import MoEBertConcatClassifier, moe_load_balance_loss
-from moe_shared.config import MoEConfig
+from moe_shared import MoEBertConcatClassifier, moe_load_balance_loss, MoEConfig
 from .moe import MoEHead
 
 from shared import (
