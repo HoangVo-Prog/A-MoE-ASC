@@ -52,7 +52,7 @@ python -m moe_head.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
-  --top-k "${TOP_K}" \
+  --moe_top_k "${TOP_K}" \
   --epochs "${EPOCHS}" \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name phase1_locked_baseline \
