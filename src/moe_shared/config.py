@@ -30,7 +30,7 @@ class MoEConfig:
     num_experts: int = 8
     top_k: int = 1
     router_bias: bool = True
-    router_jitter: float = 0.0
+    router_jitter: float = 0.05
     capacity_factor: Optional[float] = None
     route_mask_pad_tokens: bool = False
 
