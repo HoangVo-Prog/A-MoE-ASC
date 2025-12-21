@@ -210,8 +210,8 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         )
         
         moe = getattr(self.encoder, "moe_ffn", None)
-        cur_k = getattr(moe, "top_k", None)
-        print(f"[MoE][head] top_k={cur_k} ...")
+        cur_k = getattr(moe, "moe_top_k", None)
+        print(f"[MoE][head] moe_top_k={cur_k} ...")
 
 
     def configure_topk_schedule(
