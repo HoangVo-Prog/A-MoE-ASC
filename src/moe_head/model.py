@@ -88,9 +88,7 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         hidden_act = str(getattr(cfg, "hidden_act", "gelu")).lower()
         act_fn: nn.Module = nn.GELU() if hidden_act == "gelu" else nn.ReLU()
         dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
-        
-        print(moe_cfg)
-        
+                
         self._topk_schedule_enabled = moe_cfg.moe_topk_schedule
         self._topk_start = moe_cfg.moe_topk_start
         self._topk_end = moe_cfg.moe_topk_end
