@@ -52,19 +52,21 @@ def locked_baseline_config(
     fusion_method: str,
     seed: int,
     use_moe: Optional[bool] = None,
+    build_train_config_fn = build_train_config,
+    build_moe_config_fn = build_moe_config,
 ) -> Tuple[TrainConfig, Optional[MoEConfig]]:
     """Build a benchmark configuration that is locked across runs for fair comparison.
 
     Only a small set of fields is overridden per run (fusion_method, seed, optionally use_moe).
     All other hyperparameters are taken from args at the time the benchmark is launched.
     """
-    cfg = build_train_config(args)
+    cfg = build_train_config_fn(args)
     cfg.fusion_method = fusion_method
     cfg.seed = seed
     if use_moe is not None:
         cfg.use_moe = bool(use_moe)
 
-    moe_cfg = build_moe_config(args)
+    moe_cfg = build_moe_config_fn(args)
     if use_moe is not None and not bool(use_moe):
         moe_cfg = None
         
