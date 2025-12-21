@@ -8,7 +8,7 @@ from moe_ffn.moe import MoEFFN
 
 from shared import DEVICE
 
-from moe_shared import MoEBertConcatClassifier, MoEConfig, moe_load_balance_loss
+from moe_shared import MoEBertConcatClassifier, MoEConfig
 
 
 def _get_act_fn_from_intermediate(intermediate_module: nn.Module):
