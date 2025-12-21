@@ -133,3 +133,11 @@ class MoEHead(nn.Module):
 
         out = out.reshape(bsz, seqlen, hdim)
         return self.ln(out + hidden_states)
+
+    def set_top_k(self, k: int) -> None:
+        k = int(k)
+        if k < 1:
+            k = 1
+        if k > self.num_experts:
+            k = self.num_experts
+        self.top_k = k

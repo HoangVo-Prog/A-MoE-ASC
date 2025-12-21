@@ -68,7 +68,6 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         focal_gamma: float = 2.0,
         moe_cfg: MoEConfig,
         aux_loss_weight: float,
-        freeze_moe: bool = False,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -88,6 +87,11 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         hidden_act = str(getattr(cfg, "hidden_act", "gelu")).lower()
         act_fn: nn.Module = nn.GELU() if hidden_act == "gelu" else nn.ReLU()
         dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
+        
+        self._topk_schedule_enabled = False
+        self._topk_start = int(moe_cfg.top_k)
+        self._topk_end = int(moe_cfg.top_k)
+        self._topk_switch_epoch = 0
 
         moe_head = MoEHead(
             hidden_size=hidden_size,
@@ -106,9 +110,6 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         base_encoder = self.encoder
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
 
-        if freeze_moe:
-            for p in self.encoder.moe_ffn.parameters():
-                p.requires_grad = False
 
     def _collect_aux_loss(self):
         moe = getattr(self.encoder, "moe_ffn", None)
@@ -205,6 +206,36 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
             f"max={s['topk_max']:.3f} min={s['topk_min']:.3f} | topk: {topk_pairs}"
         )
 
+    def configure_topk_schedule(
+        self,
+        *,
+        enabled: bool,
+        start_k: int,
+        end_k: int,
+        switch_epoch: int,
+    ) -> None:
+        self._topk_schedule_enabled = bool(enabled)
+        self._topk_start = int(start_k)
+        self._topk_end = int(end_k)
+        self._topk_switch_epoch = int(switch_epoch)
+
+        if self._topk_schedule_enabled:
+            self.encoder.moe_ffn.set_top_k(self._topk_start)
+        else:
+            self.encoder.moe_ffn.set_top_k(self._topk_end)
+
+    def set_epoch(self, epoch_idx_0based: int) -> None:
+        if not self._topk_schedule_enabled:
+            return
+
+        if epoch_idx_0based < self._topk_switch_epoch:
+            k = self._topk_start
+        else:
+            k = self._topk_end
+
+        self.encoder.moe_ffn.set_top_k(k)
+
+
 def build_model(cfg, moe_cfg: Optional[MoEConfig], num_labels: int) -> nn.Module:
     assert moe_cfg is not None, "moe_head requires moe_cfg, but got None"
     model = HeadBertConcatClassifier(
@@ -217,6 +248,5 @@ def build_model(cfg, moe_cfg: Optional[MoEConfig], num_labels: int) -> nn.Module
         focal_gamma=cfg.focal_gamma,
         moe_cfg=moe_cfg,
         aux_loss_weight=cfg.aux_loss_weight,
-        freeze_moe=cfg.freeze_moe,
     )
     return model.to(device=DEVICE)

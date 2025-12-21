@@ -31,14 +31,13 @@ from shared import (
 
 from moe_shared import (
     FUSION_METHOD_CHOICES,
-    parse_args,
     TrainConfig,
     build_moe_config,
     build_train_config,
     locked_baseline_config,    
 )
 
-
+from moe_head.cli import parse_args
 from moe_head.model import build_model
 from moe_head.engine import run_training_loop
 from moe_head.engine import run_training_loop as run_training_loop_fn

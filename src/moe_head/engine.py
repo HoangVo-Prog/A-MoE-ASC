@@ -264,6 +264,10 @@ def run_training_loop(
         return [p for p in model.parameters() if p.requires_grad]
 
     # ===== PHASE INIT (epoch 0) =====
+    
+    if hasattr(model, "set_epoch"):
+        model.set_epoch(0)
+        
     maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
@@ -275,9 +279,12 @@ def run_training_loop(
         adamw_foreach=adamw_foreach,
         adamw_fused=adamw_fused,
     )
-
+    
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
+        
+        if hasattr(model, "set_epoch"):
+            model.set_epoch(epoch)
 
         prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
