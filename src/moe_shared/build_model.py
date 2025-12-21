@@ -1,9 +1,12 @@
 import torch
 import torch.nn as nn
 import math
+from typing import Optional, Dict, Sequence, Union
+import torch.nn.functional as F
+
 
 from .config import MoEConfig
-from shared import BaseBertConcatClassifier
+from shared import BaseBertConcatClassifier, FocalLoss
 
 
 def moe_load_balance_loss(
@@ -29,6 +32,9 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
         num_labels: int,
         dropout: float,
         head_type: str,
+        loss_type: str = "ce",
+        class_weights: Optional[Union[torch.Tensor, Sequence[float]]] = None,
+        focal_gamma: float = 2.0,
         moe_cfg: MoEConfig,
         aux_loss_weight: float,
     ) -> None:
@@ -37,6 +43,9 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
             num_labels=num_labels,
             dropout=dropout,
             head_type=head_type,
+            loss_type=loss_type,
+            class_weights=class_weights,
+            focal_gamma=focal_gamma
         )
 
         self.aux_loss_weight = aux_loss_weight
@@ -64,6 +73,33 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
             "logits": logits,
             "aux_loss": aux,
         }
+        
+    def _compute_loss(self, logits, labels):
+        if labels is None:
+            return {"loss": None, "logits": logits}
+
+        if self.loss_type == "ce":
+            loss = F.cross_entropy(logits, labels)
+
+        elif self.loss_type == "weighted_ce":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss = F.cross_entropy(logits, labels, weight=w)
+
+        elif self.loss_type == "focal":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
+            loss = loss_fn(logits, labels)
+
+        else:
+            raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+        
+        aux = self._collect_aux_loss()
+        return {
+            "loss": loss + self.aux_loss_weight * aux,
+            "logits": logits,
+            "aux_loss": aux,
+        }
+
         
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):

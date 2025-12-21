@@ -5,7 +5,7 @@ from .datasets import (
 )
 
 # model
-from .build_model import BaseBertConcatClassifier
+from .build_model import BaseBertConcatClassifier, FocalLoss
 
 # training engine
 from .engine import (
@@ -64,6 +64,7 @@ __all__ = [
 
     # model
     "BaseBertConcatClassifier",
+    "FocalLoss"
 
     # config
     "BaseTrainConfig",

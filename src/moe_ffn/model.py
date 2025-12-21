@@ -138,6 +138,9 @@ def build_model(*, cfg, moe_cfg, num_labels: int):
         num_labels=num_labels,
         dropout=cfg.dropout,
         head_type=cfg.head_type,
+        loss_type=cfg.loss_type,
+        class_weights=cfg.class_weights,
+        focal_gamma=cfg.focal_gamma,
         moe_cfg=moe_cfg,
         aux_loss_weight=float(cfg.aux_loss_weight),
     ).to(DEVICE)
