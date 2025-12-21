@@ -48,7 +48,6 @@ def locked_baseline_config(
         fusion_method=fusion_method,
 
         # training setup
-        epochs=10,
         train_batch_size=16,
         eval_batch_size=32,
         lr=2e-5,
