@@ -66,6 +66,8 @@ def _moe_trainloop_kwargs(cfg: TrainConfig, extra: dict) -> dict:
 def main(args: argparse.Namespace) -> None:
     cfg: TrainConfig = build_train_config(args)
     moe_cfg = build_moe_config(args)
+    
+    print("MoE Config:", moe_cfg)
 
     train_path = args.train_path
     val_path = args.val_path
