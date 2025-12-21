@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import math
+from typing import Optional, Dict, Sequence, Union
 import torch
 import torch.nn as nn
 
@@ -116,6 +116,9 @@ class BertConcatClassifier(MoEBertConcatClassifier):
         num_labels: int,
         dropout: float,
         head_type: str,
+        loss_type: str = "ce",
+        class_weights: Optional[Union[torch.Tensor, Sequence[float]]] = None,
+        focal_gamma: float = 2.0,
         moe_cfg: MoEConfig,
         aux_loss_weight: float,
     ) -> None:
@@ -124,6 +127,9 @@ class BertConcatClassifier(MoEBertConcatClassifier):
             num_labels=num_labels,
             dropout=dropout,
             head_type=head_type,
+            loss_type=loss_type,
+            class_weights=class_weights,
+            focal_gamma=focal_gamma,
             moe_cfg=moe_cfg,
             aux_loss_weight=aux_loss_weight,
         )
