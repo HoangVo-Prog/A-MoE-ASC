@@ -205,6 +205,11 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
             f"[MoE][head] topk entropy_norm={s['topk_entropy_norm']:.3f} "
             f"max={s['topk_max']:.3f} min={s['topk_min']:.3f} | topk: {topk_pairs}"
         )
+        
+        moe = getattr(self.encoder, "moe_ffn", None)
+        cur_k = getattr(moe, "top_k", None)
+        print(f"[MoE][head] top_k={cur_k} ...")
+
 
     def configure_topk_schedule(
         self,
@@ -225,7 +230,7 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
             self.encoder.moe_ffn.set_top_k(self._topk_end)
 
     def set_epoch(self, epoch_idx_0based: int) -> None:
-        if not self._topk_schedule_enabled:
+        if not getattr(self, "_topk_schedule_enabled", False):
             return
 
         if epoch_idx_0based < self._topk_switch_epoch:
@@ -234,6 +239,7 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
             k = self._topk_end
 
         self.encoder.moe_ffn.set_top_k(k)
+
 
 
 def build_model(cfg, moe_cfg: Optional[MoEConfig], num_labels: int) -> nn.Module:

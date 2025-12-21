@@ -5,8 +5,9 @@ set -e
 # Inputs
 # =========================
 EPOCHS="${1:-10}"
-TOP_K="${2:-1}"
-LOSS_TYPE="${3:-ce}"
+START_K="${2:-4}"
+END_K="${3:-2}"
+LOSS_TYPE="${4:-ce}"
 
 # =========================
 # Project root
@@ -38,9 +39,10 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running moe head with:"
+echo "▶ Running multi moe with:"
 echo "  epochs     = ${EPOCHS}"
-echo "  top_k      = ${TOP_K}"
+echo "  start k    = ${START_K}"
+echo "  end k      = ${END_K}"
 echo "  loss_type  = ${LOSS_TYPE}"
 echo "  loss_flags = ${LOSS_FLAGS}"
 echo
@@ -52,10 +54,10 @@ python -m moe_head.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
-  --moe_top_k "${TOP_K}" \
+  --moe_top_k "${START_K}" \
   --moe_topk_schedule \
-  --moe_topk_start 4 \
-  --moe_topk_end 2 \
+  --moe_topk_start "${START_K}" \
+  --moe_topk_end "${END_K}" \
   --epochs "${EPOCHS}" \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name phase1_locked_baseline \
