@@ -19,5 +19,5 @@ def build_multi_moe_config(args: argparse.Namespace) -> Optional[MultiMoEConfig]
     args_dict = _filter_config_kwargs(vars(args), MultiMoEConfig)
     print("ARGS")
     print(args_dict)
-    print()
+    print(MultiMoEConfig)
     return MultiMoEConfig(**args_dict)
