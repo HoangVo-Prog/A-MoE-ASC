@@ -29,7 +29,7 @@ class MoEFFN(nn.Module):
         moe_cfg: MoEConfig,
     ):
         super().__init__()
-        assert 1 <= moe_cfg.top_k <= moe_cfg.num_experts
+        assert 1 <= moe_cfg.moe_top_k <= moe_cfg.num_experts
 
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
@@ -90,14 +90,14 @@ class MoEFFN(nn.Module):
                 out = self.layer_norm(hidden_states + 0.0)
                 # cache empty để aux loss không crash
                 self.last_router_logits = logits[:0]
-                self.last_topk_idx = torch.empty((0, self.moe_cfg.top_k), device=logits.device, dtype=torch.long)
+                self.last_topk_idx = torch.empty((0, self.moe_cfg.moe_top_k), device=logits.device, dtype=torch.long)
                 return out
 
             logits_active = logits.index_select(0, active_idx)  # [Na, E]
         else:
             logits_active = logits  # [N, E]
 
-        topk_vals, topk_idx = torch.topk(logits_active, k=self.moe_cfg.top_k, dim=-1)  # [Na, K] or [N, K]
+        topk_vals, topk_idx = torch.topk(logits_active, k=self.moe_cfg.moe_top_k, dim=-1)  # [Na, K] or [N, K]
         topk_w = F.softmax(topk_vals, dim=-1)
 
         # cache for aux loss (only active tokens)

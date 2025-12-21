@@ -37,7 +37,7 @@ class MoEHead(nn.Module):
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
         self.num_experts = int(num_experts)
-        self.top_k = int(top_k)
+        self.moe_top_k = int(top_k)
         self.dropout = nn.Dropout(float(dropout_p))
         self.act_fn = act_fn
         self.router_jitter = float(router_jitter)
@@ -86,7 +86,7 @@ class MoEHead(nn.Module):
             x_route = x_active
 
         router_logits = self.router(x_route)  # [N_active, E]
-        topk_vals, topk_idx = torch.topk(router_logits, k=self.top_k, dim=-1)  # [N_active, K]
+        topk_vals, topk_idx = torch.topk(router_logits, k=self.moe_top_k, dim=-1)  # [N_active, K]
         topk_w = torch.softmax(topk_vals, dim=-1)  # [N_active, K]
 
         # cache for aux loss and debug
@@ -101,8 +101,8 @@ class MoEHead(nn.Module):
         out_active = torch.zeros_like(x_active)
 
         flat_idx = topk_idx.reshape(-1)  # [N_active*K]
-        flat_tok = torch.arange(x_active.shape[0], device=x_active.device).repeat_interleave(self.top_k)
-        flat_kpos = torch.arange(self.top_k, device=x_active.device).repeat(x_active.shape[0])
+        flat_tok = torch.arange(x_active.shape[0], device=x_active.device).repeat_interleave(self.moe_top_k)
+        flat_kpos = torch.arange(self.moe_top_k, device=x_active.device).repeat(x_active.shape[0])
 
         for e in range(self.num_experts):
             sel = (flat_idx == e)
@@ -140,4 +140,4 @@ class MoEHead(nn.Module):
             k = 1
         if k > self.num_experts:
             k = self.num_experts
-        self.top_k = k
+        self.moe_top_k = k

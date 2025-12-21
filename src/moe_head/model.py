@@ -89,15 +89,15 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
         
         self._topk_schedule_enabled = False
-        self._topk_start = int(moe_cfg.top_k)
-        self._topk_end = int(moe_cfg.top_k)
+        self._topk_start = int(moe_cfg.moe_top_k)
+        self._topk_end = int(moe_cfg.moe_top_k)
         self._topk_switch_epoch = 10
 
         moe_head = MoEHead(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             num_experts=moe_cfg.num_experts,
-            top_k=moe_cfg.top_k,
+            top_k=moe_cfg.moe_top_k,
             dropout_p=dropout_p,
             act_fn=act_fn,
             router_bias=bool(getattr(moe_cfg, "router_bias", True)),
