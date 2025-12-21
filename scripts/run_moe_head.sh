@@ -5,7 +5,8 @@ set -e
 # Inputs
 # =========================
 EPOCHS="${1:-10}"
-LOSS_TYPE="${2:-ce}"
+TOP_K="${2:-1}"
+LOSS_TYPE="${3:-ce}"
 
 # =========================
 # Project root
@@ -20,7 +21,7 @@ LOSS_FLAGS="--loss_type ${LOSS_TYPE}"
 
 case "${LOSS_TYPE}" in
   ce)
-    # CE 
+    # Cross-Entropy
     ;;
   weighted_ce)
     # Neutral ~20% → boost neutral
@@ -37,8 +38,9 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running moe ffn with:"
+echo "▶ Running moe head with:"
 echo "  epochs     = ${EPOCHS}"
+echo "  top_k      = ${TOP_K}"
 echo "  loss_type  = ${LOSS_TYPE}"
 echo "  loss_flags = ${LOSS_FLAGS}"
 echo
@@ -50,7 +52,8 @@ python -m moe_head.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
-  --epochs "$EPOCHS" \
+  --top-k "${TOP_K}" \
+  --epochs "${EPOCHS}" \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name phase1_locked_baseline \
   --train_path "$ROOT_DIR/dataset/atsa/laptop14/train.json" \
