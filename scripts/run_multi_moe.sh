@@ -7,7 +7,8 @@ set -e
 EPOCHS="${1:-10}"
 START_K="${2:-4}"
 END_K="${3:-2}"
-LOSS_TYPE="${4:-ce}"
+SWITCH_EPOCH="${4:-3}"
+LOSS_TYPE="${5:-ce}"
 
 # =========================
 # Project root
@@ -40,11 +41,12 @@ case "${LOSS_TYPE}" in
 esac
 
 echo "▶ Running multi moe with:"
-echo "  epochs     = ${EPOCHS}"
-echo "  start k    = ${START_K}"
-echo "  end k      = ${END_K}"
-echo "  loss_type  = ${LOSS_TYPE}"
-echo "  loss_flags = ${LOSS_FLAGS}"
+echo "  epochs        = ${EPOCHS}"
+echo "  start k       = ${START_K}"
+echo "  end k         = ${END_K}"
+echo "  switch epoch  = ${SWITCH_EPOCH}"
+echo "  loss_type     = ${LOSS_TYPE}"
+echo "  loss_flags    = ${LOSS_FLAGS}"
 echo
 
 # =========================
@@ -58,6 +60,7 @@ python -m moe_head.runner \
   --moe_topk_schedule \
   --moe_topk_start "${START_K}" \
   --moe_topk_end "${END_K}" \
+  --moe_topk_switch_epoch "${SWITCH_EPOCH}" \
   --epochs "${EPOCHS}" \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name phase1_locked_baseline \
