@@ -59,18 +59,26 @@ def replace_encoder_ffn_with_moe(encoder: nn.Module, moe_cfg: MoEConfig) -> None
             output_attentions=False,
             **kwargs,
         ):
-            # transformers can pass past_key_value or past_key_values depending on version
-            past = kwargs.get("past_key_value", None)
+            past = kwargs.get("past_key_values", None)
             if past is None:
-                past = kwargs.get("past_key_values", None)
+                past = kwargs.get("past_key_value", None)
 
-            self_attention_outputs = self.attention(
-                hidden_states,
-                attention_mask,
-                head_mask,
-                output_attentions=output_attentions,
-                past_key_value=past,
-            )
+            try:
+                self_attention_outputs = self.attention(
+                    hidden_states,
+                    attention_mask,
+                    head_mask,
+                    output_attentions=output_attentions,
+                    past_key_values=past,
+                )
+            except TypeError:
+                self_attention_outputs = self.attention(
+                    hidden_states,
+                    attention_mask,
+                    head_mask,
+                    output_attentions=output_attentions,
+                    past_key_value=past,
+                )
             attention_output = self_attention_outputs[0]
             outputs = self_attention_outputs[1:]
 
