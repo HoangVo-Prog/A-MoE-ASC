@@ -10,6 +10,9 @@ from moe_shared.build_model import MoEBertConcatClassifier, moe_load_balance_los
 from moe_shared.config import MoEConfig
 from .moe import MoEHead
 
+from shared import (
+    DEVICE,
+)
 
 class EncoderWithMoEHead(nn.Module):
     """Wrap a base encoder and apply MoEHead on last_hidden_state.
@@ -168,4 +171,4 @@ def build_model(cfg, moe_cfg: Optional[MoEConfig], num_labels: int) -> nn.Module
         aux_loss_weight=cfg.aux_loss_weight,
         freeze_moe=cfg.freeze_moe,
     )
-    return model.to(device=cfg.device)
+    return model.to(device=DEVICE)
