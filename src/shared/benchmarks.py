@@ -84,15 +84,15 @@ def run_benchmark_kfold_plus_full(
     per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
 
     for method in methods:
-        oof_logits = None
-        oof_filled = None  
-        fold_test_logits = []
         cfg_method = type(base_cfg)(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k_folds})
         per_method_seed_records[method] = []
         seed_oof_logits_list: list[np.ndarray] = []
         seed_test_logits_list: list[np.ndarray] = []
 
         for seed in seeds:
+            oof_logits = None
+            oof_filled = None  
+            fold_test_logits = []
             set_all_seeds(int(seed))
             set_determinism(int(seed))
 
@@ -164,11 +164,11 @@ def run_benchmark_kfold_plus_full(
                     )
                     # Assign OOF logits back to original training indices
                     if oof_logits is None:
-                        num_train = len(train_ds)
+                        num_train = len(samples)  # hoặc len(y)
                         num_classes = int(val_logits.shape[1])
                         oof_logits = np.zeros((num_train, num_classes), dtype=np.float32)
                         oof_filled = np.zeros((num_train,), dtype=bool)
-                    
+                                        
                     oof_logits[va_idx] = val_logits.astype(np.float32)
                     oof_filled[va_idx] = True
                     fold_test_logits.append(test_logits.astype(np.float32))
