@@ -53,7 +53,6 @@ python -m moe_head.runner \
   --benchmark_fusions \
   --num_seeds 3 \
   --moe_top_k "${TOP_K}" \
-  --moe_top_k 4 \
   --moe_topk_schedule \
   --moe_topk_start 4 \
   --moe_topk_end 2 \
