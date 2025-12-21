@@ -6,8 +6,9 @@ from typing import Any, Optional
 import torch
 import torch.nn as nn
 
-from moe_shared import MoEBertConcatClassifier, moe_load_balance_loss, MoEConfig
-from .moe import MoEHead
+from moe_shared import MoEBertConcatClassifier, moe_load_balance_loss
+from moe_head.moe import MoEHead
+from moe_head.config import MultiMoEConfig as MoEConfig
 
 from shared import (
     DEVICE,
@@ -89,9 +90,9 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
         
         self._topk_schedule_enabled = False
-        self._topk_start = int(moe_cfg.moe_top_k)
-        self._topk_end = int(moe_cfg.moe_top_k)
-        self._topk_switch_epoch = 10
+        self._topk_start = moe_cfg.moe_topk_start
+        self._topk_end = moe_cfg.moe_topk_end
+        self._topk_switch_epoch = moe_cfg.moe_topk_switch_epoch
 
         moe_head = MoEHead(
             hidden_size=hidden_size,
