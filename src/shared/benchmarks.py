@@ -163,6 +163,12 @@ def run_benchmark_kfold_plus_full(
                         fusion_method=cfg.fusion_method,
                     )
                     # Assign OOF logits back to original training indices
+                    if oof_logits is None:
+                        num_train = len(train_ds)
+                        num_classes = int(val_logits.shape[1])
+                        oof_logits = np.zeros((num_train, num_classes), dtype=np.float32)
+                        oof_filled = np.zeros((num_train,), dtype=bool)
+                    
                     oof_logits[va_idx] = val_logits.astype(np.float32)
                     oof_filled[va_idx] = True
                     fold_test_logits.append(test_logits.astype(np.float32))
