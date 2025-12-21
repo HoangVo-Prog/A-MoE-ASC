@@ -26,7 +26,7 @@ class MoEHead(nn.Module):
         dropout_p: float,
         act_fn: nn.Module,
         router_bias: bool = True,
-        router_jitter: float = 0.0,
+        router_jitter: float = 0.05,
         capacity_factor: Optional[float] = None,
         route_mask_pad_tokens: bool = False,
         layer_norm: Optional[nn.Module] = None,

@@ -97,7 +97,7 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
             dropout_p=dropout_p,
             act_fn=act_fn,
             router_bias=bool(getattr(moe_cfg, "router_bias", True)),
-            router_jitter=float(getattr(moe_cfg, "router_jitter", 0.0)),
+            router_jitter=float(getattr(moe_cfg, "router_jitter", 0.05)),
             capacity_factor=getattr(moe_cfg, "capacity_factor", None),
             route_mask_pad_tokens=bool(getattr(moe_cfg, "route_mask_pad_tokens", False)),
             layer_norm=nn.LayerNorm(hidden_size),
