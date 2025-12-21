@@ -38,7 +38,10 @@ from moe_shared import (
     locked_baseline_config,    
 )
 
-from moe_shared import run_training_loop as run_training_loop_fn
+
+from moe_head.model import build_model
+from moe_head.engine import run_training_loop
+from moe_head.engine import run_training_loop as run_training_loop_fn
 
 
 def _resolve_seeds_from_args(cfg: TrainConfig, args) -> list[int]:
