@@ -158,14 +158,12 @@ class BaseBertConcatClassifier(nn.Module):
         elif isinstance(class_weights, torch.Tensor):
             cw = class_weights.detach().float()
         else:
-            cw = torch.tensor(list(class_weights), dtype=torch.float)
-            
-        if isinstance(class_weights, str):
-            s = class_weights.strip()
-            if not s:
-                cw = None
-            else:
-                cw = torch.tensor([float(x.strip()) for x in s.split(",") if x.strip()], dtype=torch.float)
+            if isinstance(class_weights, str):
+                s = class_weights.strip()
+                if not s:
+                    cw = None
+                else:
+                    cw = torch.tensor([float(x.strip()) for x in s.split(",") if x.strip()], dtype=torch.float)
 
 
         self.register_buffer("class_weights", cw if cw is not None else None)
