@@ -161,6 +161,32 @@ class BaseBertConcatClassifier(nn.Module):
 
             logits = self.head_single(self.dropout(term_ctx.squeeze(1) + sent_ctx.squeeze(1)))
 
+        elif fusion_method == "late_interaction":
+            sent_tok = out_sent.last_hidden_state  # [B, Ls, H]
+            term_tok = out_term.last_hidden_state  # [B, Lt, H]
+
+            sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
+            term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
+
+            sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))  # [B, Lt, Ls]
+
+            if attention_mask_sent is not None:
+                mask = attention_mask_sent.unsqueeze(1).eq(0)  # [B, 1, Ls]
+                sim = sim.masked_fill(mask, -1e9)
+
+            max_sim = sim.max(dim=-1).values  # [B, Lt]
+
+            if attention_mask_term is not None:
+                term_valid = attention_mask_term.float()
+                denom = term_valid.sum(dim=1).clamp_min(1.0)
+                pooled = (max_sim * term_valid).sum(dim=1) / denom  # [B]
+            else:
+                pooled = max_sim.mean(dim=1)
+
+            cond = self.gate(torch.cat([cls_sent, cls_term], dim=-1))  # [B, H]
+            fused = cond * pooled.unsqueeze(-1)
+            logits = self.head_single(self.dropout(fused))
+            
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
