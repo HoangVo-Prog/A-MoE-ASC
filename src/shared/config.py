@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Optional, Sequence
 
 
 @dataclass
@@ -32,3 +33,7 @@ class BaseTrainConfig:
     head_type: str = "linear"  # "linear" or "mlp"
 
     do_ensemble_logits: bool = True
+    
+    loss_type: str = "ce"  # "ce" | "weighted_ce" | "focal"
+    class_weights: Optional[Sequence[float]] = None
+    focal_gamma: float = 2.0

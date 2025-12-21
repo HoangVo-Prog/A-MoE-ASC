@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import gc
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from typing import Any
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -83,3 +83,7 @@ def _cfg_to_dict(cfg: Any) -> dict:
         return asdict(cfg)
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
+
+def _filter_config_kwargs(d: dict, config) -> dict:
+    allowed = {f.name for f in fields(config)}
+    return {k: v for k, v in d.items() if k in allowed}

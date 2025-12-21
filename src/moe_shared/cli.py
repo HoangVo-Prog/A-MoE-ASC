@@ -60,6 +60,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--locked_baseline", action="store_true")
     parser.add_argument("--ensemble_logits", action="store_true")
 
+    parser.add_argument(
+        "--loss_type",
+        type=str,
+        default="ce",
+        choices=["ce", "weighted_ce", "focal"],
+        help="Loss type. Use weighted_ce or focal with --class_weights.",
+    )
+    parser.add_argument(
+        "--class_weights",
+        type=str,
+        default="",
+        help="Optional comma-separated class weights, example: 1.0,2.5,1.0",
+    )
+    parser.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=2.0,
+        help="Gamma for focal loss (only used when --loss_type focal).",
+    )
+
     # MoE options
     parser.add_argument("--use_moe", action="store_true")
     parser.add_argument("--moe_num_experts", type=int, default=8)

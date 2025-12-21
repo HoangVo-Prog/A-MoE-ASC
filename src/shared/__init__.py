@@ -42,6 +42,7 @@ from .utils import (
     cleanup_cuda,
     _parse_int_list,
     _parse_str_list,
+    _filter_config_kwargs,
 )
 
 # seeding
@@ -90,6 +91,7 @@ __all__ = [
     "cleanup_cuda",
     "_parse_int_list",
     "_parse_str_list",
+    "_filter_config_kwargs",
 
     # seeding
     "set_all_seeds",

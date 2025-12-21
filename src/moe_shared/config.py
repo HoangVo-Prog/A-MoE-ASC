@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from shared import BaseTrainConfig
+from shared import BaseTrainConfig, _filter_config_kwargs
 
 
 @dataclass
@@ -36,37 +36,8 @@ class MoEConfig:
 
 
 def build_train_config(args: argparse.Namespace) -> TrainConfig:
-    return TrainConfig(
-        model_name=args.model_name,
-        fusion_method=args.fusion_method,
-        epochs=args.epochs,
-        train_batch_size=args.train_batch_size,
-        eval_batch_size=args.eval_batch_size,
-        lr=args.lr,
-        warmup_ratio=args.warmup_ratio,
-        dropout=args.dropout,
-        freeze_epochs=args.freeze_epochs,
-        rolling_k=args.rolling_k,
-        early_stop_patience=args.early_stop_patience,
-        k_folds=args.k_folds,
-        seed=args.seed,
-        max_len_sent=args.max_len_sent,
-        max_len_term=args.max_len_term,
-        output_dir=args.output_dir,
-        output_name=args.output_name,
-        verbose_report=args.verbose_report,
-        use_moe=bool(getattr(args, "use_moe", False)),
-        freeze_moe=bool(getattr(args, "freeze_moe", False)),
-        aux_loss_weight=float(getattr(args, "aux_loss_weight", 0.01)),
-        step_print_moe=float(getattr(args, "step_print_moe", 100)),
-        train_full_only=bool(getattr(args, "train_full_only", False)),
-        head_type=str(getattr(args, "head_type", "linear")),
-        do_ensemble_logits=bool(getattr(args, "do_ensemble_logits", True)),
-        use_amp=(not getattr(args, "no_amp", False)),
-        amp_dtype=str(getattr(args, "amp_dtype", "fp16")),
-        adamw_foreach=bool(getattr(args, "adamw_foreach", False)),
-        adamw_fused=bool(getattr(args, "adamw_fused", False)),
-    )
+    args_dict = _filter_config_kwargs(vars(args), TrainConfig)
+    return TrainConfig(**args_dict)
 
 
 def build_moe_config(args: argparse.Namespace) -> Optional[MoEConfig]:

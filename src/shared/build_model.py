@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModel
 
-from typing import Optional, Dict
+from typing import Optional, Dict, Sequence, Union
 
 
 def build_head(head_type: str, in_dim: int, num_labels: int, dropout: float) -> nn.Module:
@@ -52,6 +53,51 @@ class MLPHead(nn.Module):
         return x
 
 
+class FocalLoss(nn.Module):
+    """
+    Multi-class focal loss.
+
+    Args:
+        gamma: focusing parameter
+        alpha: optional class weights (same semantics as CrossEntropy weight)
+        reduction: "mean" | "sum" | "none"
+    """
+    def __init__(
+        self,
+        *,
+        gamma: float = 2.0,
+        alpha: Optional[torch.Tensor] = None,
+        reduction: str = "mean",
+    ) -> None:
+        super().__init__()
+        if gamma < 0:
+            raise ValueError("gamma must be >= 0")
+        if reduction not in {"mean", "sum", "none"}:
+            raise ValueError("reduction must be one of: mean, sum, none")
+        self.gamma = float(gamma)
+        self.register_buffer("alpha", alpha if alpha is not None else None)
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # CE per sample
+        ce = F.cross_entropy(
+            logits,
+            targets,
+            weight=self.alpha,
+            reduction="none",
+        )  # [B]
+
+        # pt = P(correct class)
+        pt = torch.exp(-ce).clamp_min(1e-8)  # [B]
+        loss = ((1.0 - pt) ** self.gamma) * ce  # [B]
+
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 class BaseBertConcatClassifier(nn.Module):
     def __init__(
         self,
@@ -60,6 +106,9 @@ class BaseBertConcatClassifier(nn.Module):
         num_labels: int,
         dropout: float,
         head_type: str,
+        loss_type: str = "ce",
+        class_weights: Optional[Union[torch.Tensor, Sequence[float]]] = None,
+        focal_gamma: float = 2.0,
     ) -> None:
         super().__init__()
 
@@ -99,7 +148,28 @@ class BaseBertConcatClassifier(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
         self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
-        
+
+        # Loss config
+        self.loss_type = loss_type.lower().strip()
+
+        cw: Optional[torch.Tensor]
+        if class_weights is None:
+            cw = None
+        elif isinstance(class_weights, torch.Tensor):
+            cw = class_weights.detach().float()
+        else:
+            cw = torch.tensor(list(class_weights), dtype=torch.float)
+
+        self.register_buffer("class_weights", cw if cw is not None else None)
+
+        self.focal_gamma = float(focal_gamma)
+
+        if self.loss_type not in {"ce", "weighted_ce", "focal"}:
+            raise ValueError("loss_type must be one of: ce, weighted_ce, focal")
+
+        if self.loss_type in {"weighted_ce", "focal"} and self.class_weights is None:
+            raise ValueError("class_weights must be provided for weighted_ce or focal")
+
     def forward(
         self,
         input_ids_sent: torch.Tensor,
@@ -186,15 +256,29 @@ class BaseBertConcatClassifier(nn.Module):
             cond = self.gate(torch.cat([cls_sent, cls_term], dim=-1))  # [B, H]
             fused = cond * pooled.unsqueeze(-1)
             logits = self.head_single(self.dropout(fused))
-            
+
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
         return self._compute_loss(logits, labels)
-    
+
     def _compute_loss(self, logits, labels):
         if labels is None:
             return {"loss": None, "logits": logits}
-        loss = nn.CrossEntropyLoss()(logits, labels)
-        return {"loss": loss, "logits": logits}
 
+        if self.loss_type == "ce":
+            loss = F.cross_entropy(logits, labels)
+
+        elif self.loss_type == "weighted_ce":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss = F.cross_entropy(logits, labels, weight=w)
+
+        elif self.loss_type == "focal":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
+            loss = loss_fn(logits, labels)
+
+        else:
+            raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+
+        return {"loss": loss, "logits": logits}

@@ -72,5 +72,25 @@ def parse_args() -> argparse.Namespace:
         type=bool,
         default=True,
     )
+    
+    parser.add_argument(
+        "--loss_type",
+        type=str,
+        default="ce",
+        choices=["ce", "weighted_ce", "focal"],
+        help="Loss type. Use weighted_ce or focal with --class_weights.",
+    )
+    parser.add_argument(
+        "--class_weights",
+        type=str,
+        default="",
+        help="Optional comma-separated class weights, example: 1.0,2.5,1.0",
+    )
+    parser.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=2.0,
+        help="Gamma for focal loss (only used when --loss_type focal).",
+    )
 
     return parser.parse_args()
