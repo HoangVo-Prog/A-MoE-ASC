@@ -2,13 +2,15 @@ from moe_shared import MoEConfig
 from shared import _filter_config_kwargs
 import argparse
 from typing import Optional
+from dataclasses import dataclass
 
 
+@dataclass
 class MultiMoEConfig(MoEConfig):
-    moe_topk_schudule: bool = False
-    moe_topk_start: int 
-    moe_topk_end: int 
-    moe_topk_switch_epoch: int
+    moe_topk_schedule: bool = False
+    moe_topk_start: int = 4
+    moe_topk_end: int = 2
+    moe_topk_switch_epoch: int = 3
     
     
 def build_multi_moe_config(args: argparse.Namespace) -> Optional[MoEConfig]:
