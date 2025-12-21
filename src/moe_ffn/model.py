@@ -124,7 +124,6 @@ class BertConcatClassifier(MoEBertConcatClassifier):
         replace_encoder_ffn_with_moe(self.encoder, moe_cfg)
 
 
-
 def build_model(*, cfg, moe_cfg, num_labels: int):
     return BertConcatClassifier(
         model_name=cfg.model_name,
