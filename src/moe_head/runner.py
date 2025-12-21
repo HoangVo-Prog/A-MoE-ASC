@@ -84,6 +84,7 @@ def main(args: argparse.Namespace) -> None:
             args,
             fusion_method=str(getattr(cfg, "fusion_method", "sent")),
             seed=int(getattr(cfg, "seed", 0)),
+            build_moe_config_fn = build_moe_config,
         )
         cfg = cfg_locked
         moe_cfg = moe_locked
