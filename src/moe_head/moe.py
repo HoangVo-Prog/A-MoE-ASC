@@ -90,8 +90,8 @@ class MoEHead(nn.Module):
         topk_w = torch.softmax(topk_vals, dim=-1)  # [N_active, K]
 
         # cache for aux loss and debug
-        self.last_router_logits = router_logits.detach()
-        self.last_topk_idx = topk_idx.detach()
+        self.last_router_logits = router_logits
+        self.last_topk_idx = topk_idx 
 
         cap = None
         if self.capacity_factor is not None:
