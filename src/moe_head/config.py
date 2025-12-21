@@ -17,4 +17,7 @@ def build_multi_moe_config(args: argparse.Namespace) -> Optional[MultiMoEConfig]
     if not bool(getattr(args, "use_moe", False)):
         return None
     args_dict = _filter_config_kwargs(vars(args), MultiMoEConfig)
+    print("ARGS")
+    print(args_dict)
+    print()
     return MultiMoEConfig(**args_dict)
