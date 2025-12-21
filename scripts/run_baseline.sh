@@ -4,8 +4,7 @@ set -e
 # =========================
 # Inputs
 # =========================
-EPOCHS="${1:-10}"
-LOSS_TYPE="${2:-ce}"
+LOSS_TYPE="${1:-ce}"
 
 # =========================
 # Project root
@@ -38,7 +37,6 @@ case "${LOSS_TYPE}" in
 esac
 
 echo "▶ Running baseline with:"
-echo "  epochs     = ${EPOCHS}"
 echo "  loss_type  = ${LOSS_TYPE}"
 echo "  loss_flags = ${LOSS_FLAGS}"
 echo
@@ -50,7 +48,6 @@ python -m baseline.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
-  --epochs "${EPOCHS}" \
   --output_dir "${ROOT_DIR}/saved_model" \
   --output_name phase1_locked_baseline \
   --train_path "${ROOT_DIR}/dataset/atsa/laptop14/train.json" \
