@@ -6,11 +6,13 @@ from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import torch
+from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 
 from .datasets import AspectSentimentDataset, AspectSentimentDatasetFromSamples
 from .seed import set_all_seeds, set_determinism, make_train_loader_with_seed
+from .logit import collect_test_logits, logits_to_metrics
 from .utils import _mean_std, _aggregate_confusions, _cfg_to_dict, cleanup_cuda
 
 
@@ -82,8 +84,13 @@ def run_benchmark_kfold_plus_full(
     per_method_seed_records: dict[str, list[dict]] = {m: [] for m in methods}
 
     for method in methods:
+        oof_logits = None
+        oof_filled = None  
+        fold_test_logits = []
         cfg_method = type(base_cfg)(**{**base_cfg.__dict__, "fusion_method": method, "k_folds": k_folds})
         per_method_seed_records[method] = []
+        seed_oof_logits_list: list[np.ndarray] = []
+        seed_test_logits_list: list[np.ndarray] = []
 
         for seed in seeds:
             set_all_seeds(int(seed))
@@ -144,6 +151,22 @@ def run_benchmark_kfold_plus_full(
                     if best_sd is not None:
                         model.load_state_dict(best_sd)
 
+                    # Collect logits for OOF (val) + test to enable ensemble
+                    val_logits, val_labels = collect_test_logits(
+                        model=model,
+                        test_loader=val_loader,
+                        fusion_method=cfg.fusion_method,
+                    )
+                    test_logits, test_labels = collect_test_logits(
+                        model=model,
+                        test_loader=test_loader,
+                        fusion_method=cfg.fusion_method,
+                    )
+                    # Assign OOF logits back to original training indices
+                    oof_logits[va_idx] = val_logits.astype(np.float32)
+                    oof_filled[va_idx] = True
+                    fold_test_logits.append(test_logits.astype(np.float32))
+
                     val_m = eval_model_fn(
                         model=model,
                         dataloader=val_loader,
@@ -176,6 +199,25 @@ def run_benchmark_kfold_plus_full(
                 cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
                 cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
 
+                # Per-seed ensembles
+                if not bool(oof_filled.all()):
+                    missing = int((~oof_filled).sum())
+                    raise RuntimeError(f"OOF logits not fully filled (missing={missing})")
+
+                y_true = np.asarray(y, dtype=int)
+                oof_metrics = logits_to_metrics(oof_logits, y_true)
+                oof_preds = oof_logits.argmax(axis=-1)
+                oof_cm = confusion_matrix(y_true, oof_preds, labels=list(range(num_classes)))
+
+                seed_test_ens_logits = np.mean(np.stack(fold_test_logits, axis=0), axis=0)
+                seed_test_metrics = logits_to_metrics(seed_test_ens_logits, test_labels)
+                seed_test_preds = seed_test_ens_logits.argmax(axis=-1)
+                seed_test_cm = confusion_matrix(test_labels, seed_test_preds, labels=list(range(num_classes)))
+
+                # keep logits for seed-level ensemble across seeds
+                seed_oof_logits_list.append(oof_logits.astype(np.float32))
+                seed_test_logits_list.append(seed_test_ens_logits.astype(np.float32))
+
                 record = {
                     "fusion_method": method,
                     "seed": int(seed),
@@ -186,9 +228,38 @@ def run_benchmark_kfold_plus_full(
                     "cv_test_f1_mean": float(cv_test_mean),
                     "cv_test_f1_std": float(cv_test_std),
                     "cv_val_confusion": _aggregate_confusions(fold_val_cms),
-                    "cv_test_confusion": _aggregate_confusions(fold_test_cms),
+                                        "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
+                    "cv_val_oof_ens_f1": float(oof_metrics["f1"]),
+                    "cv_val_oof_ens_confusion": _aggregate_confusions([oof_cm]),
+                    "cv_test_ens_acc": float(seed_test_metrics["acc"]),
+                    "cv_test_ens_f1": float(seed_test_metrics["f1"]),
+                    "cv_test_ens_confusion": _aggregate_confusions([seed_test_cm]),
                 }
                 per_method_seed_records[method].append(record)
+
+        # Benchmark-level ensemble across seeds (using OOF logits for CV-val, and seed-ensembled logits for test)
+        if len(seed_oof_logits_list) >= 2:
+            ens_oof = np.mean(np.stack(seed_oof_logits_list, axis=0), axis=0)
+            y_true = np.asarray(y, dtype=int)
+            m_oof = logits_to_metrics(ens_oof, y_true)
+            p_oof = ens_oof.argmax(axis=-1)
+            cm_oof = confusion_matrix(y_true, p_oof, labels=list(range(num_classes)))
+
+            ens_test = np.mean(np.stack(seed_test_logits_list, axis=0), axis=0)
+            # test_labels is same for all seeds, reuse from last fold collection
+            m_test = logits_to_metrics(ens_test, test_labels)
+            p_test = ens_test.argmax(axis=-1)
+            cm_test = confusion_matrix(test_labels, p_test, labels=list(range(num_classes)))
+
+            all_results.setdefault("ensemble", {}).setdefault(method, {})
+            all_results["ensemble"][method].update({
+                "cv_val_seed_ens_acc": float(m_oof["acc"]),
+                "cv_val_seed_ens_f1": float(m_oof["f1"]),
+                "cv_val_seed_ens_confusion": _aggregate_confusions([cm_oof]),
+                "cv_test_seed_ens_acc": float(m_test["acc"]),
+                "cv_test_seed_ens_f1": float(m_test["f1"]),
+                "cv_test_seed_ens_confusion": _aggregate_confusions([cm_test]),
+            })
 
         cfg_full = type(cfg_method)(**{**cfg_method.__dict__})
         full_out = train_full_multi_seed_then_test_fn(
@@ -217,11 +288,12 @@ def run_benchmark_kfold_plus_full(
         all_results["full_confusion"][method] = full_out.get("confusion", {})
         ens = full_out.get("ensemble", None)
         if ens is not None:
-            all_results["ensemble"][method] = {
+            all_results.setdefault("ensemble", {}).setdefault(method, {})
+            all_results["ensemble"][method].update({
                 "full_ens_test_acc": float(ens["metrics"]["acc"]),
                 "full_ens_test_f1": float(ens["metrics"]["f1"]),
                 "confusion": ens.get("confusion", None),
-            }
+            })
 
     all_results["runs"] = per_method_seed_records
 
