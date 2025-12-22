@@ -5,6 +5,7 @@ set -e
 # Inputs
 # =========================
 LOSS_TYPE="${1:-ce}"
+DATASET_TYPE="${2:-laptop14}"
 
 # =========================
 # Project root
@@ -36,9 +37,10 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running baseline with:"
+echo "▶ Running benchmark baseline with:"
 echo "  loss_type  = ${LOSS_TYPE}"
 echo "  loss_flags = ${LOSS_FLAGS}"
+echo "  dataset = ${DATASET_TYPE}"
 echo
 
 # =========================
@@ -48,10 +50,10 @@ python -m baseline.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
-  --output_dir "${ROOT_DIR}/saved_model" \
+  --output_dir "$ROOT_DIR/saved_model" \
   --output_name phase1_locked_baseline \
-  --train_path "${ROOT_DIR}/dataset/atsa/laptop14/train.json" \
-  --val_path   "${ROOT_DIR}/dataset/atsa/laptop14/val.json" \
-  --test_path  "${ROOT_DIR}/dataset/atsa/laptop14/test.json" \
+  --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
+  --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
+  --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --benchmark_methods concat \
   ${LOSS_FLAGS}
