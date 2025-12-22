@@ -3,8 +3,8 @@ from pathlib import Path
 import pandas as pd
 
 # ====== CONFIG ======
-json_path = Path("../../results/baseline/laptop14_ce.json")          # đường dẫn file benchmark
-output_csv = Path("../../results/baseline/laptop14_ce.csv")
+json_path = Path("../../results/baseline/laptop14_focal.json")         
+output_csv = Path("../../results/baseline/laptop14_focal.csv")
 
 FIELDS = [
     "cv_val_f1_mean_over_seeds",
