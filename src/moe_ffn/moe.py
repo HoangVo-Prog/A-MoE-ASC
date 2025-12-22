@@ -98,7 +98,6 @@ class MoEFFN(nn.Module):
             logits_active = logits  # [N, E]
 
         topk_vals, topk_idx = torch.topk(logits_active, k=self.moe_cfg.moe_top_k, dim=-1)  # [Na, K] or [N, K]
-        print("MoE top k:", self.moe_cfg.moe_top_k)
         topk_w = F.softmax(topk_vals, dim=-1)
 
         # cache for aux loss (only active tokens)
