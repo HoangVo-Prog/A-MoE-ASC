@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--benchmark_methods",
         type=str,
-        default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction,moe",
+        default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction",
         help="Comma-separated fusion methods to benchmark.",
     )
     parser.add_argument(
