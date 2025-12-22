@@ -36,15 +36,15 @@ case "${DATASET_TYPE}" in
     # Recommended:
     # alpha = [1.0, 1.3, 1.9]
     # focal gamma (if used) = 0.5
-    CLASS_WEIGHTS="1.0,1.3,1.9"
+    CLASS_WEIGHTS="1.0,1.1,1.5"
     FOCAL_GAMMA="0.5"
     ;;
   rest14)
     # Recommended:
     # alpha = [0.6, 1.7, 2.0]
     # focal gamma = 1.0 (fallback 0.5 if unstable, but default here is 1.0)
-    CLASS_WEIGHTS="0.6,1.7,2.0"
-    FOCAL_GAMMA="1.0"
+    CLASS_WEIGHTS="0.7,1.3,1.6"
+    FOCAL_GAMMA="0.5"
     ;;
 esac
 
@@ -77,7 +77,6 @@ echo "  dataset_type = ${DATASET_TYPE}"
 echo "  loss_type    = ${LOSS_TYPE}"
 echo "  loss_flags   = ${LOSS_FLAGS}"
 echo
-
 # =========================
 # Run
 # =========================
