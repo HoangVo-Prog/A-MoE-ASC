@@ -168,9 +168,10 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
                 f"[MoE][layer {s['layer']}] entropy_norm={s['entropy_norm']:.3f} "
                 f"max={s['max_load']:.3f} min={s['min_load']:.3f} | top: {top_pairs}"
             )
-        moe = getattr(self.encoder, "moe_ffn", None)
-        print(self.encoder)
-        print(moe)
-        cur_k = getattr(moe, "moe_top_k", None)
+        cur_k = None
+        for layer in getattr(self.encoder, "layer", []):
+            moe = getattr(layer, "moe_ffn", None)
+            if moe is not None:
+                cur_k = getattr(getattr(moe, "moe_cfg", None), "moe_top_k", None)
+                break
         print(f"[MoE] top_k={cur_k} ...")
-
