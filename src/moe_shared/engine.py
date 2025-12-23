@@ -240,6 +240,8 @@ def run_training_loop(
         "train_lambda_loss": [],
         "train_f1": [],
         "train_acc": [],
+        "val_loss": [],
+        "val_f1": [],
     }
 
     val_f1_window = deque(maxlen=rolling_k)
