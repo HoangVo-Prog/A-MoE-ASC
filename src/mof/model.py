@@ -4,7 +4,7 @@ from transformers import AutoModel
 from typing import Optional
 from shared import DEVICE, BaseBertConcatClassifier
 
-from baseline.mof import MoFBertConcatClassifier
+from .mof import MoFBertConcatClassifier
 
 
 class BertConcatClassifier(BaseBertConcatClassifier):
