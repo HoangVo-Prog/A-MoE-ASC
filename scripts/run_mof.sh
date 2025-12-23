@@ -79,13 +79,12 @@ echo "▶ Running benchmark baseline with:"
 echo "  dataset_type           = ${DATASET_TYPE}"
 echo "  loss_type              = ${LOSS_TYPE}"
 echo "  loss_flags             = ${LOSS_FLAGS}"
-echo "  mof_flags              = ${MOF_FLAGS}"
 echo
 
 # =========================
 # Run
 # =========================
-python -m baseline.runner \
+python -m mof.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
