@@ -28,6 +28,7 @@ from shared import (
     _parse_int_list,
     eval_model,
     run_training_loop,
+    maybe_freeze_encoder,
     run_benchmark_kfold_plus_full,
     train_full_multi_seed_then_test_generic
 )
@@ -118,6 +119,7 @@ def main(args) -> None:
             output_path=out_path,
             model_factory=lambda cfg_, num_labels, extra: build_model(cfg=cfg_, num_labels=num_labels),
             run_training_loop_fn=run_training_loop,
+            maybe_freeze_encoder_fn=maybe_freeze_encoder,
             eval_model_fn=eval_model,
             train_full_multi_seed_then_test_fn=train_full_multi_seed_then_test_generic,
             trainloop_kwargs_factory=lambda cfg_, extra: {},
@@ -178,6 +180,7 @@ def main(args) -> None:
             early_stop_patience=cfg.early_stop_patience,
             id2label=id2label,
             tag="",
+            maybe_freeze_encoder_fn=maybe_freeze_encoder,
         )
 
         if out.get("best_state_dict") is not None:
@@ -255,6 +258,7 @@ def main(args) -> None:
                 early_stop_patience=cfg.early_stop_patience,
                 id2label=id2label,
                 tag=f"[Fold {fold_idx}] ",
+                maybe_freeze_encoder_fn=maybe_freeze_encoder
             )
 
             if out.get("best_state_dict") is not None:
@@ -319,6 +323,7 @@ def main(args) -> None:
         model_factory=lambda cfg_, num_labels, extra: build_model(cfg=cfg_, num_labels=num_labels),
         run_training_loop_fn=run_training_loop,
         trainloop_kwargs_factory=lambda cfg_, extra: {},
+        maybe_freeze_encoder_fn=maybe_freeze_encoder
     )
 
 

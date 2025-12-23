@@ -248,6 +248,7 @@ def run_training_loop(
     max_grad_norm: Optional[float] = 1.0,
     train_one_epoch_fn=train_one_epoch,
     eval_model_fn=eval_model,
+    maybe_freeze_encoder_fn=maybe_freeze_encoder,
 ) -> Dict[str, Any]:
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -267,7 +268,7 @@ def run_training_loop(
         return [p for p in model.parameters() if p.requires_grad]
 
     # Ensure correct freeze state before building phase-1 optimizer
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+    maybe_freeze_encoder_fn(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
@@ -288,7 +289,7 @@ def run_training_loop(
         if hasattr(model, "encoder"):
             prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
-        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+        maybe_freeze_encoder_fn(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
         now_trainable = True
         if hasattr(model, "encoder"):

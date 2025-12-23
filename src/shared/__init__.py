@@ -11,6 +11,7 @@ from .build_model import BaseBertConcatClassifier, FocalLoss
 from .engine import (
     eval_model,
     run_training_loop,
+    maybe_freeze_encoder,
 )
 
 # training workflows
@@ -76,6 +77,7 @@ __all__ = [
     # training engine
     "eval_model",
     "run_training_loop",
+    "maybe_freeze_encoder",
 
     # workflows
     "run_benchmark_kfold_plus_full",

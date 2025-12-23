@@ -1,7 +1,6 @@
 import torch.nn as nn
 
 
-
 def set_encoder_trainable(
     model: nn.Module,
     trainable: bool,
