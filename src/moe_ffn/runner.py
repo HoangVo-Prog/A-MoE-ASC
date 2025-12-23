@@ -1,14 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-from typing import Dict
-
-import numpy as np
-import torch
-from sklearn.model_selection import StratifiedKFold
-from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from moe_ffn.model import build_model
@@ -61,7 +54,6 @@ def main(args: argparse.Namespace) -> None:
     moe_cfg = build_moe_config(args)
 
     train_path = args.train_path
-    val_path = args.val_path
     test_path = args.test_path
 
     set_all_seeds(int(cfg.seed))

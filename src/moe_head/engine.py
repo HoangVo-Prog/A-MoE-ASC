@@ -22,6 +22,7 @@ from shared import (
 
 from moe_shared import eval_model, train_one_epoch
 
+
 def set_encoder_trainable(
     model: nn.Module,
     trainable: bool,
@@ -92,6 +93,7 @@ def run_training_loop(
     adamw_foreach: bool = False,
     adamw_fused: bool = False,
     max_grad_norm: Optional[float] = None,
+    maybe_freeze_encoder_fn=None,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -115,7 +117,7 @@ def run_training_loop(
     
     model.set_epoch(0)
         
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+    maybe_freeze_encoder_fn(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
@@ -135,7 +137,7 @@ def run_training_loop(
         prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
         # update freeze / unfreeze state
-        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+        maybe_freeze_encoder_fn(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
         now_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
