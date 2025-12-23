@@ -331,12 +331,14 @@ def run_training_loop(
         history["train_f1"].append(train_metrics["f1"])
         history["train_acc"].append(train_metrics["acc"])
 
-        print(
+        log = (
             f"Train main_loss {train_metrics['loss_main']:.6f} "
+            f"aux_loss {train_metrics['aux_loss'] }"
             f"lambda_loss {train_metrics['loss_lambda']:.6f} "
             f"total_loss {train_metrics['loss_total']:.6f} "
             f"F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
         )
+        log += ("\n")
 
         # ===== VALIDATION =====
         if val_loader is not None:
