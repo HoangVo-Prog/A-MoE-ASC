@@ -41,6 +41,7 @@ def train_one_epoch(
     
     total_loss_sum = 0.0
     main_loss_sum = 0.0
+    aux_loss_sum = 0.0
     lambda_loss_sum = 0.0
     n_steps = 0
     
@@ -71,6 +72,7 @@ def train_one_epoch(
             
             loss_main = outputs.get("loss_main", None)
             loss_lambda = outputs.get("loss_lambda", None)
+            loss_aux = outputs.get("aux_loss", None)
             
         if use_amp and scaler is not None:
             scaler.scale(loss_total).backward()
@@ -91,6 +93,7 @@ def train_one_epoch(
         total_loss_sum += _safe_float(loss_total)
         main_loss_sum += _safe_float(loss_main)
         lambda_loss_sum += _safe_float(loss_lambda)
+        aux_loss_sum += _safe_float(loss_aux)
         n_steps += 1
 
         preds = torch.argmax(logits, dim=-1)
@@ -116,6 +119,7 @@ def train_one_epoch(
     avg_total = total_loss_sum / denom
     avg_main = main_loss_sum / denom
     avg_lambda = lambda_loss_sum / denom
+    avg_aux = aux_loss_sum / denom
 
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average=f1_average)
@@ -124,6 +128,7 @@ def train_one_epoch(
         "loss_total": avg_total,
         "loss_main": avg_main,
         "loss_lambda": avg_lambda,
+        "aux_loss": avg_aux,
         "acc": float(acc),
         "f1": float(f1),
     }
