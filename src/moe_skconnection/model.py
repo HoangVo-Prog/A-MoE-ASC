@@ -11,6 +11,8 @@ from transformers import AutoModel
 from shared import DEVICE
 
 from .moe import SeqMoELogits, SeqMoELogitsConfig
+from moe_shared import moe_load_balance_loss
+
 
 
 @dataclass
@@ -101,12 +103,12 @@ class SkBertConcatClassifier(nn.Module):
         moe_router_bias: bool = True,
         moe_router_jitter: float = 0.0,
         beta_schedule: Optional[SkBetaSchedule] = None,
+        aux_loss_weight: float = 0.0,  # lambda cho MoE loss
     ) -> None:
         super().__init__()
         base = AutoModel.from_pretrained(model_name)
         hidden_size = int(base.config.hidden_size)
 
-        # Attention modules mirror shared baseline
         _candidates = [8, 4, 2, 1]
         num_heads = next((x for x in _candidates if hidden_size % x == 0), 1)
 
@@ -141,7 +143,6 @@ class SkBertConcatClassifier(nn.Module):
         self.head_single = build_head(head_type, hidden_size, num_labels, dropout)
         self.head_concat = build_head(head_type, 2 * hidden_size, num_labels, dropout)
 
-        # MoE modules
         moe_h = SeqMoELogits(
             SeqMoELogitsConfig(
                 in_dim=hidden_size,
@@ -165,9 +166,12 @@ class SkBertConcatClassifier(nn.Module):
             )
         )
 
-        self.encoder = EncoderWithSkMoE(base_encoder=base, moe_ffn_h=moe_h, moe_ffn_2h=moe_2h)
+        self.encoder = EncoderWithSkMoE(
+            base_encoder=base,
+            moe_ffn_h=moe_h,
+            moe_ffn_2h=moe_2h,
+        )
 
-        # Loss config
         self.loss_type = loss_type.lower().strip()
         cw: Optional[torch.Tensor]
         if class_weights is None:
@@ -193,7 +197,15 @@ class SkBertConcatClassifier(nn.Module):
 
         self.beta_schedule = beta_schedule or SkBetaSchedule()
         self._beta_current: float = float(self.beta_schedule.beta_end)
+
+        self.aux_loss_weight: float = float(aux_loss_weight)
+
         self.device = DEVICE
+
+        self._last_loss_main = None
+        self._last_loss_moe = None
+        self._last_loss_moe_weighted = None
+        self._last_loss_ratio = None
 
     def set_epoch(self, epoch_idx_0based: int) -> None:
         sch = self.beta_schedule
@@ -210,9 +222,25 @@ class SkBertConcatClassifier(nn.Module):
             self._beta_current = float(sch.beta_end)
             return
 
-        # Linear warmup
         t = e / float(warm)
         self._beta_current = float(sch.beta_start + (sch.beta_end - sch.beta_start) * t)
+
+    def _collect_moe_loss_from_module(self, moe_mod: nn.Module) -> torch.Tensor:
+        """
+        Lấy MoE loss (ví dụ load-balance) từ cache router của module.
+        Nếu cache chưa có thì trả 0.
+        """
+        # Nếu bạn đang dùng moe_shared.moe_load_balance_loss, hãy import và dùng ở đây.
+        # from moe_shared import moe_load_balance_loss
+
+        logits = getattr(moe_mod, "last_router_logits", None)
+        topk_idx = getattr(moe_mod, "last_topk_idx", None)
+        num_experts = getattr(moe_mod, "num_experts", None)
+
+        if logits is None or topk_idx is None or num_experts is None:
+            return torch.tensor(0.0, device=self.device)
+
+        return moe_load_balance_loss(logits, topk_idx, int(num_experts))
 
     def forward(
         self,
@@ -232,8 +260,6 @@ class SkBertConcatClassifier(nn.Module):
 
         fusion_method = fusion_method.lower().strip()
 
-        # Compute baseline logits and router input aligned to method.
-        # Router input should match the representation feeding the head.
         if fusion_method == "sent":
             rep = cls_sent
             logits_base = self.head_single(self.dropout(rep))
@@ -243,7 +269,7 @@ class SkBertConcatClassifier(nn.Module):
             logits_base = self.head_single(self.dropout(rep))
 
         elif fusion_method == "concat":
-            rep = torch.cat([cls_sent, cls_term], dim=-1)  # [B, 2H]
+            rep = torch.cat([cls_sent, cls_term], dim=-1)
             logits_base = self.head_concat(self.dropout(rep))
 
         elif fusion_method == "add":
@@ -257,7 +283,9 @@ class SkBertConcatClassifier(nn.Module):
         elif fusion_method == "cross":
             q = out_term.last_hidden_state[:, 0:1, :]
             kpm = attention_mask_sent.eq(0)
-            attn_out, _ = self.cross_attn(q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm)
+            attn_out, _ = self.cross_attn(
+                q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
+            )
             rep = attn_out.squeeze(1)
             logits_base = self.head_single(self.dropout(rep))
 
@@ -276,8 +304,12 @@ class SkBertConcatClassifier(nn.Module):
             kpm_sent = attention_mask_sent.eq(0)
             kpm_term = attention_mask_term.eq(0)
 
-            term_ctx, _ = self.coattn_term_to_sent(q_term, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_sent)
-            sent_ctx, _ = self.coattn_sent_to_term(q_sent, out_term.last_hidden_state, out_term.last_hidden_state, key_padding_mask=kpm_term)
+            term_ctx, _ = self.coattn_term_to_sent(
+                q_term, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_sent
+            )
+            sent_ctx, _ = self.coattn_sent_to_term(
+                q_sent, out_term.last_hidden_state, out_term.last_hidden_state, key_padding_mask=kpm_term
+            )
 
             rep = term_ctx.squeeze(1) + sent_ctx.squeeze(1)
             logits_base = self.head_single(self.dropout(rep))
@@ -311,36 +343,67 @@ class SkBertConcatClassifier(nn.Module):
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
-        # MoE delta logits
         beta = float(self._beta_current)
+
+        moe_mod = self.encoder.moe_ffn_2h if fusion_method == "concat" else self.encoder.moe_ffn_h
+
         if beta == 0.0:
+            delta = None
             logits = logits_base
         else:
-            if fusion_method == "concat":
-                delta = self.encoder.moe_ffn_2h(rep)
-            else:
-                delta = self.encoder.moe_ffn_h(rep)
+            delta = moe_mod(rep)
             logits = logits_base + (beta * delta)
 
-        return self._compute_loss(logits, labels)
+        # MoE loss cho debug và để set lambda
+        loss_moe = self._collect_moe_loss_from_module(moe_mod)
 
-    def _compute_loss(self, logits: torch.Tensor, labels: Optional[torch.Tensor]) -> Dict[str, torch.Tensor]:
+        return self._compute_loss(logits, labels, loss_moe=loss_moe)
+
+    def _compute_loss(
+        self,
+        logits: torch.Tensor,
+        labels: Optional[torch.Tensor],
+        *,
+        loss_moe: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         if labels is None:
+            self._last_loss_main = None
+            self._last_loss_moe = None
+            self._last_loss_moe_weighted = None
+            self._last_loss_ratio = None
             return {"loss": None, "logits": logits}
 
+        # main loss
         if self.loss_type == "ce":
-            loss = F.cross_entropy(logits, labels)
+            loss_main = F.cross_entropy(logits, labels)
         elif self.loss_type == "weighted_ce":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
-            loss = F.cross_entropy(logits, labels, weight=w)
+            loss_main = F.cross_entropy(logits, labels, weight=w)
         elif self.loss_type == "focal":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
-            loss = loss_fn(logits, labels)
+            loss_main = loss_fn(logits, labels)
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
 
-        return {"loss": loss, "logits": logits}
+        # moe loss (aux)
+        if loss_moe is None:
+            loss_moe = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+        else:
+            loss_moe = loss_moe.to(device=logits.device, dtype=logits.dtype)
+
+        lw = float(self.aux_loss_weight)
+        loss_total = loss_main + (lw * loss_moe)
+
+        # Cache for step debug print (detach to avoid holding graph)
+        lm = float(loss_main.detach().item())
+        la = float(loss_moe.detach().item())
+        self._last_loss_main = lm
+        self._last_loss_moe = la
+        self._last_loss_moe_weighted = lw * la
+        self._last_loss_ratio = (self._last_loss_moe_weighted / (lm + 1e-12))
+
+        return {"loss": loss_total, "logits": logits}
 
     def print_moe_debug(self, topn: int = 3) -> None:
         s_h = self.encoder.moe_ffn_h.debug_stats()
@@ -364,8 +427,18 @@ class SkBertConcatClassifier(nn.Module):
             frac = s_2h["topk_frac"]
             print(f"[MoE][sk][2H] k={s_2h['moe_top_k']} soft: {_fmt_top(usage, topn)} topk: {_fmt_top(frac, topn)}")
 
-        print(f"[MoE][sk] beta={self._beta_current:.4f}")
+        print(f"[MoE][sk] beta={self._beta_current:.4f} lambda={self.aux_loss_weight:.6f}")
 
+        # Step loss print (Mức A)
+        if self._last_loss_main is None:
+            print("[MoE][loss] No cached losses yet.")
+        else:
+            print(
+                f"[MoE][loss] main={self._last_loss_main:.6f} "
+                f"moe={self._last_loss_moe:.6f} "
+                f"lambda*moe={self._last_loss_moe_weighted:.6f} "
+                f"ratio={self._last_loss_ratio:.4f}"
+            )
 
 def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
     # Scaffold uses cfg fields that exist in moe_head and shared configs.
