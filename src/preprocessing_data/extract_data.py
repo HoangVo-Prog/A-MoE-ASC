@@ -21,6 +21,26 @@ FIELDS = [
     "cv_test_seed_ens_f1",
 ]
 
+METHOD_ORDER = [
+    "sent",
+    "term",
+    "concat",
+    "add",
+    "mul",
+    "cross",
+    "gated_concat",
+    "bilinear",
+    "coattn",
+    "late_interaction",
+]
+
+def sort_methods(methods: list[str]) -> list[str]:
+    priority = {m: i for i, m in enumerate(METHOD_ORDER)}
+    return sorted(
+        methods,
+        key=lambda m: (priority.get(m, len(priority)), m),
+    )
+
 def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFrame:
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -28,16 +48,15 @@ def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFram
     summary = data.get("summary", {}) or {}
     ensemble = data.get("ensemble", {}) or {}
 
+    all_methods = sort_methods(list(set(summary) | set(ensemble)))
     rows = []
-    methods = set(summary.keys()) | set(ensemble.keys())
 
-    for method in sorted(methods):
+    for method in all_methods:
         row = {"method": method}
 
         sum_m = summary.get(method, {}) or {}
         ens_m = ensemble.get(method, {}) or {}
 
-        # ưu tiên ensemble nếu field nằm ở cả hai (vì thường ensemble là kết quả cuối)
         for k in fields:
             if k in sum_m:
                 row[k] = sum_m[k]
@@ -48,7 +67,6 @@ def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFram
 
     df = pd.DataFrame(rows).set_index("method")
 
-    # giữ đúng thứ tự cột, thiếu field thì vẫn tạo cột (NaN)
     for k in fields:
         if k not in df.columns:
             df[k] = pd.NA
@@ -65,10 +83,12 @@ def batch_convert_json_dir(input_dir: str | Path, output_dir: str | Path, glob_p
 
     json_files = sorted(input_dir.rglob(glob_pattern))
     if not json_files:
-        print(f"[WARN] No JSON files found in: {input_dir} (pattern={glob_pattern})")
+        print(f"[WARN] No JSON files found in {input_dir}")
         return
 
-    ok, fail = 0, 0
+    ok = 0
+    fail = 0
+
     for jp in json_files:
         out_csv = output_dir / f"{jp.stem}.csv"
         try:
@@ -76,14 +96,13 @@ def batch_convert_json_dir(input_dir: str | Path, output_dir: str | Path, glob_p
             ok += 1
         except Exception as e:
             fail += 1
-            print(f"[FAIL] {jp} -> {out_csv}: {type(e).__name__}: {e}")
+            print(f"[FAIL] {jp.name}: {e}")
 
-    print(f"[DONE] Converted: {ok} | Failed: {fail} | Output dir: {output_dir}")
+    print(f"[DONE] Converted {ok} files, failed {fail}, output at {output_dir}")
 
 if __name__ == "__main__":
-    # ====== CONFIG ======
     INPUT_DIR = Path("../../results/baseline/rest14/json")         
-    OUTPUT_DIR = Path("../../results/baseline/rest14/csv")    
-    PATTERN = "*.json"                                
+    OUTPUT_DIR = Path("../../results/baseline/rest14/csv")   
+    PATTERN = "*.json"
 
-    batch_convert_json_dir(INPUT_DIR, OUTPUT_DIR, glob_pattern=PATTERN)
+    batch_convert_json_dir(INPUT_DIR, OUTPUT_DIR, PATTERN)
