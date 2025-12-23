@@ -1,5 +1,8 @@
+import argparse
 import json
 from pathlib import Path
+from typing import Sequence
+
 import pandas as pd
 
 FIELDS = [
@@ -34,14 +37,13 @@ METHOD_ORDER = [
     "late_interaction",
 ]
 
-def sort_methods(methods: list[str]) -> list[str]:
-    priority = {m: i for i, m in enumerate(METHOD_ORDER)}
-    return sorted(
-        methods,
-        key=lambda m: (priority.get(m, len(priority)), m),
-    )
 
-def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFrame:
+def sort_methods(methods: list[str], method_order: Sequence[str] = METHOD_ORDER) -> list[str]:
+    priority = {m: i for i, m in enumerate(method_order)}
+    return sorted(methods, key=lambda m: (priority.get(m, len(priority)), m))
+
+
+def json_to_csv(json_path: Path, output_csv: Path, fields: Sequence[str] = FIELDS) -> pd.DataFrame:
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -70,39 +72,112 @@ def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFram
     for k in fields:
         if k not in df.columns:
             df[k] = pd.NA
-    df = df[fields]
+    df = df[list(fields)]
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, float_format="%.6f")
     return df
 
-def batch_convert_json_dir(input_dir: str | Path, output_dir: str | Path, glob_pattern: str = "*.json"):
+
+def batch_convert_json_dir(
+    input_dir: str | Path,
+    output_dir: str | Path,
+    glob_pattern: str = "*.json",
+    recursive: bool = True,
+    overwrite: bool = True,
+    quiet: bool = False,
+) -> None:
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    json_files = sorted(input_dir.rglob(glob_pattern))
+    if recursive:
+        json_files = sorted(input_dir.rglob(glob_pattern))
+    else:
+        json_files = sorted(input_dir.glob(glob_pattern))
+
     if not json_files:
-        print(f"[WARN] No JSON files found in {input_dir}")
+        if not quiet:
+            print(f"[WARN] No JSON files found in {input_dir} with pattern {glob_pattern}")
         return
 
     ok = 0
     fail = 0
+    skipped = 0
 
     for jp in json_files:
         out_csv = output_dir / f"{jp.stem}.csv"
+
+        if out_csv.exists() and not overwrite:
+            skipped += 1
+            continue
+
         try:
             json_to_csv(jp, out_csv)
             ok += 1
         except Exception as e:
             fail += 1
-            print(f"[FAIL] {jp.name}: {e}")
+            if not quiet:
+                print(f"[FAIL] {jp.name}: {e}")
 
-    print(f"[DONE] Converted {ok} files, failed {fail}, output at {output_dir}")
+    if not quiet:
+        print(f"[DONE] Converted {ok} files, failed {fail}, skipped {skipped}, output at {output_dir}")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Convert ATSC result JSON files (summary/ensemble) into CSV tables."
+    )
+    p.add_argument(
+        "-i",
+        "--input-dir",
+        type=Path,
+        default=Path("../../results/baseline/laptop14/json"),
+        help="Input directory containing JSON files.",
+    )
+    p.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=Path("../../results/baseline/laptop14/csv"),
+        help="Output directory for generated CSV files.",
+    )
+    p.add_argument(
+        "-p",
+        "--pattern",
+        type=str,
+        default="*.json",
+        help='Glob pattern for JSON files. Example: "*.json" or "*_focal.json".',
+    )
+    p.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="Disable recursive search (use glob instead of rglob).",
+    )
+    p.add_argument(
+        "--no-overwrite",
+        action="store_true",
+        help="Skip CSV files that already exist instead of overwriting.",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Reduce logging output.",
+    )
+    return p
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    batch_convert_json_dir(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        glob_pattern=args.pattern,
+        recursive=not args.no_recursive,
+        overwrite=not args.no_overwrite,
+        quiet=args.quiet,
+    )
+
 
 if __name__ == "__main__":
-    INPUT_DIR = Path("../../results/baseline/rest14/json")         
-    OUTPUT_DIR = Path("../../results/baseline/rest14/csv")   
-    PATTERN = "*.json"
-
-    batch_convert_json_dir(INPUT_DIR, OUTPUT_DIR, PATTERN)
+    main()
