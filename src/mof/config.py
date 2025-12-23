@@ -47,5 +47,8 @@ def locked_baseline_config(cfg_dict) -> TrainConfig:
         
     config.max_len_sent=24
     config.max_len_term=4
+    
+    print("CONFIG")
+    print(config)
 
     return config
