@@ -95,5 +95,6 @@ python -m baseline.runner \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
+  --headtype mof \
   ${LOSS_FLAGS} \
   ${MOF_FLAGS}
