@@ -11,7 +11,7 @@ from transformers import AutoModel
 from shared import DEVICE
 
 from .moe import SeqMoELogits, SeqMoELogitsConfig
-from moe_shared import moe_load_balance_loss, MoEBertConcatClassifier
+from moe_shared import moe_load_balance_loss
 
 
 
@@ -225,23 +225,6 @@ class SkBertConcatClassifier(nn.Module):
         t = e / float(warm)
         self._beta_current = float(sch.beta_start + (sch.beta_end - sch.beta_start) * t)
 
-    def _collect_moe_loss_from_module(self, moe_mod: nn.Module) -> torch.Tensor:
-        """
-        Lấy MoE loss (ví dụ load-balance) từ cache router của module.
-        Nếu cache chưa có thì trả 0.
-        """
-        # Nếu bạn đang dùng moe_shared.moe_load_balance_loss, hãy import và dùng ở đây.
-        # from moe_shared import moe_load_balance_loss
-
-        logits = getattr(moe_mod, "last_router_logits", None)
-        topk_idx = getattr(moe_mod, "last_topk_idx", None)
-        num_experts = getattr(moe_mod, "num_experts", None)
-
-        if logits is None or topk_idx is None or num_experts is None:
-            return torch.tensor(0.0, device=self.device)
-
-        return moe_load_balance_loss(logits, topk_idx, int(num_experts))
-
     def forward(
         self,
         input_ids_sent: torch.Tensor,
@@ -354,10 +337,7 @@ class SkBertConcatClassifier(nn.Module):
             delta = moe_mod(rep)
             logits = logits_base + (beta * delta)
 
-        # MoE loss cho debug và để set lambda
-        loss_moe = self._collect_moe_loss_from_module(moe_mod)
-
-        return self._compute_loss(logits, labels, loss_moe=loss_moe)
+        return self._compute_loss(logits, labels)
 
     def _compute_loss(self, logits, labels):
         if labels is None:

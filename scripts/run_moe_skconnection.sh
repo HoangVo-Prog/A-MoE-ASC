@@ -39,7 +39,7 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running moe head with:"
+echo "▶ Running moe connection with:"
 echo "  epochs     = ${EPOCHS}"
 echo "  top_k      = ${TOP_K}"
 echo "  loss_type  = ${LOSS_TYPE}"
