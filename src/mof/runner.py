@@ -11,9 +11,9 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from baseline.cli import parse_args
-from baseline.config import TrainConfig, build_train_config
-from baseline.model import build_model
+from .cli import parse_args
+from .config import TrainConfig, build_train_config
+from .model import build_model
 
 from shared import (
     DEVICE,
