@@ -7,6 +7,7 @@ set -e
 EPOCHS="${1:-10}"
 TOP_K="${2:-1}"
 LOSS_TYPE="${3:-ce}"
+METHOD="${4:-logits}"
 
 # =========================
 # Project root
@@ -65,4 +66,5 @@ python -m moe_skconnection.runner \
   --step_print_moe 100 \
   --amp_dtype fp16 \
   --benchmark_methods concat \
+  --sk_mix_mode "${METHOD}"\
   ${LOSS_FLAGS}
