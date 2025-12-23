@@ -38,8 +38,7 @@ from moe_skconnection.config import build_multi_moe_config as build_moe_config
 from moe_skconnection.cli import parse_args
 from moe_skconnection.model import build_model
 
-# Keep the same training engine behavior as moe_head engine
-from moe_head.engine import run_training_loop as run_training_loop_fn
+from moe_share import run_training_loop as run_training_loop_fn
 
 
 def _resolve_seeds_from_args(cfg: TrainConfig, args) -> list[int]:
