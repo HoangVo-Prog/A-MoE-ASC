@@ -338,6 +338,19 @@ class SkBertConcatClassifier(nn.Module):
             logits = logits_base + (beta * delta)
 
         return self._compute_loss(logits, labels)
+    
+    def _collect_aux_loss(self):
+        total, count = 0.0, 0
+        for layer in self.encoder.encoder.layer:
+            moe = getattr(layer, "moe_ffn", None)
+            if moe is None or moe.last_router_logits is None:
+                continue
+            total += moe_load_balance_loss(
+                moe.last_router_logits, moe.last_topk_idx, moe.moe_cfg.num_experts
+            )
+            count += 1
+        return total / count if count > 0 else torch.tensor(0.0, device=self.device)
+
 
     def _compute_loss(self, logits, labels):
         if labels is None:
