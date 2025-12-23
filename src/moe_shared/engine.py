@@ -17,7 +17,8 @@ from shared import (
     DEVICE, 
     build_optimizer_and_scheduler, 
     cleanup_cuda,
-    _print_confusion_matrix
+    _print_confusion_matrix,
+    _safe_float
 )
 
 
@@ -37,6 +38,12 @@ def train_one_epoch(
     max_grad_norm: Optional[float] = None,
 ) -> Dict[str, float]:
     model.train()
+    
+    total_loss_sum = 0.0
+    main_loss_sum = 0.0
+    lambda_loss_sum = 0.0
+    n_steps = 0
+    
     total_loss = 0.0
     all_preds = []
     all_labels = []
@@ -59,18 +66,21 @@ def train_one_epoch(
                 labels=batch["label"],
                 fusion_method=fusion_method,
             )
-            loss = outputs["loss"]
+            loss_total = outputs["loss"]
             logits = outputs["logits"]
             
+            loss_main = outputs.get("loss_main", None)
+            loss_lambda = outputs.get("loss_lambda", None)
+            
         if use_amp and scaler is not None:
-            scaler.scale(loss).backward()
+            scaler.scale(loss_total).backward()
             if max_grad_norm is not None:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
             scaler.step(optimizer)
             scaler.update()
         else:
-            loss.backward()
+            loss_total.backward()
             if max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
             optimizer.step()
@@ -78,19 +88,45 @@ def train_one_epoch(
         if scheduler is not None:
             scheduler.step()
 
-        total_loss += float(loss.item())
+        total_loss_sum += _safe_float(loss_total)
+        main_loss_sum += _safe_float(loss_main)
+        lambda_loss_sum += _safe_float(loss_lambda)
+        n_steps += 1
 
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
-        if step > 0 and step % int(step_print_moe) == 0:
-                model.print_moe_debug(topn=3)
+        if step_print_moe is not None and int(step_print_moe) > 0:
+            if step > 0 and step % int(step_print_moe) == 0:
+                # Keep existing MoE stats print
+                if hasattr(model, "print_moe_debug"):
+                    model.print_moe_debug(topn=3)
 
-    avg_loss = total_loss / max(1, len(dataloader))
+                # Step-level loss print (train only)
+                lm = _safe_float(loss_main)
+                ll = _safe_float(loss_lambda)
+                lt = _safe_float(loss_total)
+                print(
+                    f"[Train step {step}] main_loss={lm:.6f} "
+                    f"lambda_loss={ll:.6f} total_loss={lt:.6f}"
+                )
+
+    denom = max(1, n_steps)
+    avg_total = total_loss_sum / denom
+    avg_main = main_loss_sum / denom
+    avg_lambda = lambda_loss_sum / denom
+
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average=f1_average)
-    return {"loss": avg_loss, "acc": acc, "f1": f1}
+
+    return {
+        "loss_total": avg_total,
+        "loss_main": avg_main,
+        "loss_lambda": avg_lambda,
+        "acc": float(acc),
+        "f1": float(f1),
+    }
 
 
 def eval_model(
@@ -198,7 +234,13 @@ def run_training_loop(
     max_grad_norm: Optional[float] = None,
     maybe_freeze_encoder_fn = None,
 ):
-    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+    history = {
+        "train_total_loss": [],
+        "train_main_loss": [],
+        "train_lambda_loss": [],
+        "train_f1": [],
+        "train_acc": [],
+    }
 
     val_f1_window = deque(maxlen=rolling_k)
     best_val_f1_rolling = -1.0
@@ -281,13 +323,17 @@ def run_training_loop(
             scaler=scaler,
             max_grad_norm=max_grad_norm,
         )
-        history["train_loss"].append(train_metrics["loss"])
+        history["train_total_loss"].append(train_metrics["loss_total"])
+        history["train_main_loss"].append(train_metrics["loss_main"])
+        history["train_lambda_loss"].append(train_metrics["loss_lambda"])
         history["train_f1"].append(train_metrics["f1"])
+        history["train_acc"].append(train_metrics["acc"])
 
-        log = (
-            f"Train loss {train_metrics['loss']:.4f} "
-            f"F1 {train_metrics['f1']:.4f} "
-            f"acc {train_metrics['acc']:.4f}"
+        print(
+            f"Train main_loss {train_metrics['loss_main']:.6f} "
+            f"lambda_loss {train_metrics['loss_lambda']:.6f} "
+            f"total_loss {train_metrics['loss_total']:.6f} "
+            f"F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
         )
 
         # ===== VALIDATION =====

@@ -87,3 +87,12 @@ def _cfg_to_dict(cfg: Any) -> dict:
 def _filter_config_kwargs(d: dict, config) -> dict:
     allowed = {f.name for f in fields(config)}
     return {k: v for k, v in d.items() if k in allowed}
+
+def _safe_float(x) -> float:
+    if x is None:
+        return float("nan")
+    if isinstance(x, (float, int)):
+        return float(x)
+    if torch.is_tensor(x):
+        return float(x.detach().item())
+    return float("nan")

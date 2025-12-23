@@ -62,42 +62,45 @@ class MoEBertConcatClassifier(BaseBertConcatClassifier):
             count += 1
         return total / count if count > 0 else torch.tensor(0.0, device=self.device)
 
-    def _compute_loss(self, logits, labels):
-        if labels is None:
-            return {"loss": None, "logits": logits, "aux_loss": None}
 
-        ce = nn.CrossEntropyLoss()(logits, labels)
-        aux = self._collect_aux_loss()
-        return {
-            "loss": ce + self.aux_loss_weight * aux,
-            "logits": logits,
-            "aux_loss": aux,
-        }
-        
     def _compute_loss(self, logits, labels):
         if labels is None:
-            return {"loss": None, "logits": logits}
+            return {
+                "loss": None,
+                "logits": logits,
+                "aux_loss": None,
+                "loss_main": None,
+                "loss_lambda": None,
+                "loss_total": None,
+            }
 
         if self.loss_type == "ce":
-            loss = F.cross_entropy(logits, labels)
+            loss_main = F.cross_entropy(logits, labels)
 
         elif self.loss_type == "weighted_ce":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
-            loss = F.cross_entropy(logits, labels, weight=w)
+            loss_main = F.cross_entropy(logits, labels, weight=w)
 
         elif self.loss_type == "focal":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
-            loss = loss_fn(logits, labels)
+            loss_main = loss_fn(logits, labels)
 
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
         
         aux = self._collect_aux_loss()
+        loss_lambda = self.aux_loss_weight * aux
+
+        loss_total = loss_main + loss_lambda
+
         return {
-            "loss": loss + self.aux_loss_weight * aux,
-            "logits": logits,
-            "aux_loss": aux,
+            "loss": loss_total,          
+            "logits": logits,            
+            "aux_loss": aux,            
+            "loss_main": loss_main,      
+            "loss_lambda": loss_lambda,  
+            "loss_total": loss_total,    
         }
 
         

@@ -59,17 +59,9 @@ def maybe_freeze_encoder(
     MoE head and classifier remain trainable.
     """
     if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
-        set_encoder_trainable(
-            model,
-            trainable=False,
-            keep_moe_trainable=not freeze_moe,
-        )
+        set_encoder_trainable(model, trainable=False, keep_moe_trainable=not freeze_moe)
     else:
-        set_encoder_trainable(
-            model,
-            trainable=True,
-            keep_moe_trainable=False,
-        )
+        set_encoder_trainable(model, trainable=True, keep_moe_trainable=False)
 
     
 def run_training_loop(
