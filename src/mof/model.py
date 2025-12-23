@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-from transformers import AutoModel
 from typing import Optional
 from shared import DEVICE, BaseBertConcatClassifier
 
@@ -24,6 +21,10 @@ def build_model(*, cfg, num_labels: int):
             class_weights=cfg.class_weights,
             focal_gamma=cfg.focal_gamma,
             mof_include_sent_term=bool(getattr(cfg, "mof_include_sent_term", False)),
+            mof_debug=bool(getattr(cfg, "mof_debug", False)),
+            mof_debug_every=int(getattr(cfg, "mof_debug_every", 200)),
+            mof_debug_max_batch=int(getattr(cfg, "mof_debug_max_batch", 1)),
+            mof_debug_max_experts=int(getattr(cfg, "mof_debug_max_experts", 0)),
         ).to(DEVICE)
 
     return BertConcatClassifier(

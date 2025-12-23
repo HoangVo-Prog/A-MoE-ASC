@@ -94,5 +94,6 @@ python -m mof.runner \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --head_type mof \
+  --mof_debug \
   ${LOSS_FLAGS} \
   ${MOF_FLAGS}

@@ -82,7 +82,6 @@ class _MoFBase:
                 "late_interaction",
             ]
             if bool(include_sent_term):
-                # add as extra experts, can be toggled via flag
                 base = ["sent", "term"] + base
             self.mof_experts = base
 
@@ -93,6 +92,59 @@ class _MoFBase:
             dropout=float(dropout),
             temperature=1.0,
         )
+
+    def _mof_debug_print(
+        self,
+        *,
+        weights: torch.Tensor,                 # [B, E]
+        expert_logits: List[torch.Tensor],      # list of [B, C]
+        final_logits: torch.Tensor,             # [B, C]
+    ) -> None:
+        if not bool(getattr(self, "_mof_debug", False)):
+            return
+
+        every = int(getattr(self, "_mof_debug_every", 1))
+        if every <= 0:
+            every = 1
+
+        self._mof_debug_calls = int(getattr(self, "_mof_debug_calls", 0)) + 1
+        if (self._mof_debug_calls % every) != 0:
+            return
+
+        max_b = int(getattr(self, "_mof_debug_max_batch", 1))
+        if max_b <= 0:
+            max_b = 1
+
+        max_e = int(getattr(self, "_mof_debug_max_experts", 0))
+        if max_e <= 0:
+            max_e = len(self.mof_experts)
+
+        B = int(final_logits.size(0))
+        C = int(final_logits.size(-1))
+        bshow = min(B, max_b)
+        eshow = min(len(self.mof_experts), max_e)
+
+        print("")
+        print(f"[MoF][debug] call={self._mof_debug_calls} B={B} C={C} E={len(self.mof_experts)}")
+        print(f"[MoF][debug] experts={self.mof_experts[:eshow]}{' ...' if eshow < len(self.mof_experts) else ''}")
+
+        w0 = weights[:bshow, :eshow].detach().float().cpu()
+        for bi in range(bshow):
+            wline = ", ".join([f"{self.mof_experts[i]}={float(w0[bi, i]):.4f}" for i in range(eshow)])
+            print(f"[MoF][debug] sample{bi} weights: {wline}")
+
+        for i in range(eshow):
+            name = self.mof_experts[i]
+            li = expert_logits[i][:bshow].detach().float().cpu()  # [bshow, C]
+            for bi in range(bshow):
+                vec = ", ".join([f"{float(li[bi, c]):.6f}" for c in range(C)])
+                print(f"[MoF][debug] sample{bi} expert={name} logits: [{vec}]")
+
+        fout = final_logits[:bshow].detach().float().cpu()
+        for bi in range(bshow):
+            vec = ", ".join([f"{float(fout[bi, c]):.6f}" for c in range(C)])
+            print(f"[MoF][debug] sample{bi} final logits: [{vec}]")
+        print("", flush=True)
 
     def _mof_logits(
         self,
@@ -248,10 +300,12 @@ class _MoFBase:
             [cls_sent, cls_term, cls_sent * cls_term, torch.abs(cls_sent - cls_term)],
             dim=-1,
         )
-        weights, _ = self.mof_router(router_x)
+        weights, _ = self.mof_router(router_x)  # [B, E]
 
         logits_stack = torch.stack(expert_logits, dim=1)  # [B, E, C]
         logits = torch.sum(logits_stack * weights.unsqueeze(-1), dim=1)  # [B, C]
+
+        self._mof_debug_print(weights=weights, expert_logits=expert_logits, final_logits=logits)
 
         return self._compute_loss(logits, labels)
 
@@ -269,6 +323,10 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
         focal_gamma: float = 2.0,
         mof_include_sent_term: bool = False,
         mof_experts: Optional[List[str]] = None,
+        mof_debug: bool = False,
+        mof_debug_every: int = 200,
+        mof_debug_max_batch: int = 1,
+        mof_debug_max_experts: int = 0,
     ) -> None:
         head_type_in = str(head_type).lower()
         base_head_type = "linear" if head_type_in == "mof" else str(head_type)
@@ -289,6 +347,12 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
             include_sent_term=bool(mof_include_sent_term),
             experts=mof_experts,
         )
+
+        self._mof_debug = bool(mof_debug)
+        self._mof_debug_every = int(mof_debug_every)
+        self._mof_debug_max_batch = int(mof_debug_max_batch)
+        self._mof_debug_max_experts = int(mof_debug_max_experts)
+        self._mof_debug_calls = 0
 
     def forward(
         self,
