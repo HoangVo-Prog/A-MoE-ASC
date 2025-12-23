@@ -79,7 +79,6 @@ echo "▶ Running benchmark baseline with:"
 echo "  dataset_type           = ${DATASET_TYPE}"
 echo "  loss_type              = ${LOSS_TYPE}"
 echo "  loss_flags             = ${LOSS_FLAGS}"
-echo "  mof_include_sent_term  = ${MOF_INCLUDE_SENT_TERM}"
 echo "  mof_flags              = ${MOF_FLAGS}"
 echo
 
@@ -95,6 +94,6 @@ python -m baseline.runner \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
-  --headtype mof \
+  --head_type mof \
   ${LOSS_FLAGS} \
   ${MOF_FLAGS}
