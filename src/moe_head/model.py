@@ -242,7 +242,6 @@ class HeadBertConcatClassifier(MoEBertConcatClassifier):
         self.encoder.moe_ffn.set_top_k(k)
 
 
-
 def build_model(cfg, moe_cfg: Optional[MoEConfig], num_labels: int) -> nn.Module:
     assert moe_cfg is not None, "moe_head requires moe_cfg, but got None"
     model = HeadBertConcatClassifier(
