@@ -2,10 +2,6 @@ import json
 from pathlib import Path
 import pandas as pd
 
-# ====== CONFIG ======
-json_path = Path("../../results/baseline/laptop14_focal.json")         
-output_csv = Path("../../results/baseline/laptop14_focal.csv")
-
 FIELDS = [
     "cv_val_f1_mean_over_seeds",
     "cv_val_f1_std_over_seeds",
@@ -25,35 +21,69 @@ FIELDS = [
     "cv_test_seed_ens_f1",
 ]
 
-# ====== LOAD JSON ======
-with open(json_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
+def json_to_csv(json_path: Path, output_csv: Path, fields=FIELDS) -> pd.DataFrame:
+    with json_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
 
-summary = data.get("summary", {})
-ensemble = data.get("ensemble", {})
+    summary = data.get("summary", {}) or {}
+    ensemble = data.get("ensemble", {}) or {}
 
-# ====== COLLECT ======
-rows = []
+    rows = []
+    methods = set(summary.keys()) | set(ensemble.keys())
 
-for method, sum_m in summary.items():
-    row = {"method": method}
+    for method in sorted(methods):
+        row = {"method": method}
 
-    # from summary
-    for k in FIELDS:
-        if k in sum_m:
-            row[k] = sum_m[k]
+        sum_m = summary.get(method, {}) or {}
+        ens_m = ensemble.get(method, {}) or {}
 
-    # from ensemble block
-    ens_m = ensemble.get(method, {})
-    for k in FIELDS:
-        if k in ens_m:
-            row[k] = ens_m[k]
+        # ưu tiên ensemble nếu field nằm ở cả hai (vì thường ensemble là kết quả cuối)
+        for k in fields:
+            if k in sum_m:
+                row[k] = sum_m[k]
+            if k in ens_m:
+                row[k] = ens_m[k]
 
-    rows.append(row)
+        rows.append(row)
 
-# ====== SAVE CSV ======
-df = pd.DataFrame(rows)
-df = df.set_index("method")
-df = df[FIELDS]  # giữ đúng thứ tự cột
+    df = pd.DataFrame(rows).set_index("method")
 
-df.to_csv(output_csv, float_format="%.6f")
+    # giữ đúng thứ tự cột, thiếu field thì vẫn tạo cột (NaN)
+    for k in fields:
+        if k not in df.columns:
+            df[k] = pd.NA
+    df = df[fields]
+
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_csv, float_format="%.6f")
+    return df
+
+def batch_convert_json_dir(input_dir: str | Path, output_dir: str | Path, glob_pattern: str = "*.json"):
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    json_files = sorted(input_dir.rglob(glob_pattern))
+    if not json_files:
+        print(f"[WARN] No JSON files found in: {input_dir} (pattern={glob_pattern})")
+        return
+
+    ok, fail = 0, 0
+    for jp in json_files:
+        out_csv = output_dir / f"{jp.stem}.csv"
+        try:
+            json_to_csv(jp, out_csv)
+            ok += 1
+        except Exception as e:
+            fail += 1
+            print(f"[FAIL] {jp} -> {out_csv}: {type(e).__name__}: {e}")
+
+    print(f"[DONE] Converted: {ok} | Failed: {fail} | Output dir: {output_dir}")
+
+if __name__ == "__main__":
+    # ====== CONFIG ======
+    INPUT_DIR = Path("../../results/baseline/rest14/json")         
+    OUTPUT_DIR = Path("../../results/baseline/rest14/csv")    
+    PATTERN = "*.json"                                
+
+    batch_convert_json_dir(INPUT_DIR, OUTPUT_DIR, glob_pattern=PATTERN)
