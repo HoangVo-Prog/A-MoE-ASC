@@ -285,7 +285,6 @@ def run_benchmark_kfold_plus_full(
             run_training_loop_fn=run_training_loop_fn,
             maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
             trainloop_kwargs_factory=trainloop_kwargs_factory,
-            maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
         )
 
         full_by_seed = {int(r["seed"]): r for r in full_out.get("per_seed", [])}
