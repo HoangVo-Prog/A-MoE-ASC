@@ -36,17 +36,16 @@ def locked_baseline_config(cfg_dict) -> TrainConfig:
     """
     config = TrainConfig(**cfg_dict)
      
-    config.train_batch_size=16,
-    config.eval_batch_size=32,
-    config.lr=2e-5,
-    config.warmup_ratio=0.1,
-    config.dropout=0.1,
-    config.rolling_k=3,
-    config.early_stop_patience=5,
-
-    config.k_folds=5,
+    config.train_batch_size=16
+    config.eval_batch_size=32
+    config.lr=2e-5
+    config.warmup_ratio=0.1
+    config.dropout=0.1
+    config.rolling_k=3
+    config.early_stop_patience=5
+    config.k_folds=5
         
-    config.max_len_sent=24,
-    config.max_len_term=4,
+    config.max_len_sent=24
+    config.max_len_term=4
 
     return config
