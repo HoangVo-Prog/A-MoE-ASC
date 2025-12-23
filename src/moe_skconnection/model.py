@@ -103,7 +103,7 @@ class SkBertConcatClassifier(nn.Module):
         moe_router_bias: bool = True,
         moe_router_jitter: float = 0.0,
         beta_schedule: Optional[SkBetaSchedule] = None,
-        aux_loss_weight: float = 0.0,
+        aux_loss_weight: float = 0.05,
     ) -> None:
         super().__init__()
         base = AutoModel.from_pretrained(model_name)
@@ -417,8 +417,8 @@ class SkBertConcatClassifier(nn.Module):
 
         print(f"[MoE][sk] beta={self._beta_current:.4f} lambda={self.aux_loss_weight:.6f}")
 
+
 def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
-    # Scaffold uses cfg fields that exist in moe_head and shared configs.
     beta = SkBetaSchedule(
         beta_start=float(getattr(cfg, "sk_beta_start", 0.0)),
         beta_end=float(getattr(cfg, "sk_beta_end", 1.0)),
@@ -426,10 +426,10 @@ def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
     )
 
     model = SkBertConcatClassifier(
-        model_name=str(getattr(cfg, "model_name")),
+        model_name=str(cfg.model_name),
         num_labels=int(num_labels),
-        dropout=float(getattr(cfg, "dropout")),
-        head_type=str(getattr(cfg, "head_type")),
+        dropout=float(cfg.dropout),
+        head_type=str(cfg.head_type),
         loss_type=str(getattr(cfg, "loss_type", "ce")),
         class_weights=getattr(cfg, "class_weights", None),
         focal_gamma=float(getattr(cfg, "focal_gamma", 2.0)),
@@ -438,5 +438,7 @@ def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
         moe_router_bias=bool(getattr(moe_cfg, "router_bias", True)) if moe_cfg is not None else True,
         moe_router_jitter=float(getattr(moe_cfg, "router_jitter", 0.0)) if moe_cfg is not None else 0.0,
         beta_schedule=beta,
+        aux_loss_weight=float(getattr(cfg, "aux_loss_weight", 0.05)),
     )
+
     return model.to(device=DEVICE)
