@@ -103,7 +103,7 @@ class SkBertConcatClassifier(nn.Module):
         moe_router_bias: bool = True,
         moe_router_jitter: float = 0.0,
         beta_schedule: Optional[SkBetaSchedule] = None,
-        aux_loss_weight: float = 0.0,  # lambda cho MoE loss
+        aux_loss_weight: float = 0.0,
     ) -> None:
         super().__init__()
         base = AutoModel.from_pretrained(model_name)
@@ -192,20 +192,13 @@ class SkBertConcatClassifier(nn.Module):
 
         if self.loss_type not in {"ce", "weighted_ce", "focal"}:
             raise ValueError("loss_type must be one of: ce, weighted_ce, focal")
-        if self.loss_type in {"weighted_ce", "focal"} and self.class_weights is None:
+        if self.loss_type in {"weighted_ce", "focal"} and cw is None:
             raise ValueError("class_weights must be provided for weighted_ce or focal")
 
         self.beta_schedule = beta_schedule or SkBetaSchedule()
         self._beta_current: float = float(self.beta_schedule.beta_end)
 
         self.aux_loss_weight: float = float(aux_loss_weight)
-
-        self.device = DEVICE
-
-        self._last_loss_main = None
-        self._last_loss_moe = None
-        self._last_loss_moe_weighted = None
-        self._last_loss_ratio = None
 
     def set_epoch(self, epoch_idx_0based: int) -> None:
         sch = self.beta_schedule
@@ -224,6 +217,24 @@ class SkBertConcatClassifier(nn.Module):
 
         t = e / float(warm)
         self._beta_current = float(sch.beta_start + (sch.beta_end - sch.beta_start) * t)
+
+    def _collect_aux_loss(self, moe_mod: nn.Module, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        router_logits = getattr(moe_mod, "last_router_logits", None)
+        topk_idx = getattr(moe_mod, "last_topk_idx", None)
+
+        if router_logits is None or topk_idx is None:
+            return torch.zeros((), device=device, dtype=dtype)
+
+        num_experts = getattr(moe_mod, "num_experts", None)
+        if num_experts is None:
+            moe_cfg = getattr(moe_mod, "moe_cfg", None)
+            num_experts = getattr(moe_cfg, "num_experts", None)
+
+        if num_experts is None:
+            return torch.zeros((), device=device, dtype=dtype)
+
+        aux = moe_load_balance_loss(router_logits, topk_idx, int(num_experts))
+        return aux.to(device=device, dtype=dtype)
 
     def forward(
         self,
@@ -274,7 +285,7 @@ class SkBertConcatClassifier(nn.Module):
 
         elif fusion_method == "gated_concat":
             g = torch.sigmoid(self.gate(torch.cat([cls_sent, cls_term], dim=-1)))
-            rep = g * cls_sent + (1 - g) * cls_term
+            rep = g * cls_sent + (1.0 - g) * cls_term
             logits_base = self.head_single(self.dropout(rep))
 
         elif fusion_method == "bilinear":
@@ -331,28 +342,14 @@ class SkBertConcatClassifier(nn.Module):
         moe_mod = self.encoder.moe_ffn_2h if fusion_method == "concat" else self.encoder.moe_ffn_h
 
         if beta == 0.0:
-            delta = None
             logits = logits_base
         else:
             delta = moe_mod(rep)
             logits = logits_base + (beta * delta)
 
-        return self._compute_loss(logits, labels)
-    
-    def _collect_aux_loss(self):
-        total, count = 0.0, 0
-        for layer in self.encoder.encoder.layer:
-            moe = getattr(layer, "moe_ffn", None)
-            if moe is None or moe.last_router_logits is None:
-                continue
-            total += moe_load_balance_loss(
-                moe.last_router_logits, moe.last_topk_idx, moe.moe_cfg.num_experts
-            )
-            count += 1
-        return total / count if count > 0 else torch.tensor(0.0, device=self.device)
+        return self._compute_loss(logits, labels, moe_mod=moe_mod)
 
-
-    def _compute_loss(self, logits, labels):
+    def _compute_loss(self, logits, labels, *, moe_mod: Optional[nn.Module] = None):
         if labels is None:
             return {
                 "loss": None,
@@ -377,22 +374,26 @@ class SkBertConcatClassifier(nn.Module):
 
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
-        
-        aux = self._collect_aux_loss()
-        loss_lambda = self.aux_loss_weight * aux
 
+        if moe_mod is None:
+            aux = torch.zeros((), device=logits.device, dtype=logits.dtype)
+        else:
+            aux = self._collect_aux_loss(moe_mod, device=logits.device, dtype=logits.dtype)
+
+        loss_lambda = float(self.aux_loss_weight) * aux
         loss_total = loss_main + loss_lambda
 
         return {
-            "loss": loss_total,          
-            "logits": logits,            
-            "aux_loss": aux,            
-            "loss_main": loss_main,      
-            "loss_lambda": loss_lambda,  
-            "loss_total": loss_total,    
+            "loss": loss_total,
+            "logits": logits,
+            "aux_loss": aux,
+            "loss_main": loss_main,
+            "loss_lambda": loss_lambda,
+            "loss_total": loss_total,
         }
 
     def print_moe_debug(self, topn: int = 3) -> None:
+        # Giữ nguyên để engine gọi được, không in loss nữa nếu bạn đã xử lý ở engine.
         s_h = self.encoder.moe_ffn_h.debug_stats()
         s_2h = self.encoder.moe_ffn_2h.debug_stats()
 
@@ -415,7 +416,6 @@ class SkBertConcatClassifier(nn.Module):
             print(f"[MoE][sk][2H] k={s_2h['moe_top_k']} soft: {_fmt_top(usage, topn)} topk: {_fmt_top(frac, topn)}")
 
         print(f"[MoE][sk] beta={self._beta_current:.4f} lambda={self.aux_loss_weight:.6f}")
-
 
 def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
     # Scaffold uses cfg fields that exist in moe_head and shared configs.
