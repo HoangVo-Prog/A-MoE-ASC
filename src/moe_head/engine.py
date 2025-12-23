@@ -85,9 +85,17 @@ def run_training_loop(
     adamw_foreach: bool = False,
     adamw_fused: bool = False,
     max_grad_norm: Optional[float] = None,
-    maybe_freeze_encoder_fn=None,
+    maybe_freeze_encoder_fn = None,
 ):
-    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+    history = {
+        "train_total_loss": [],
+        "train_main_loss": [],
+        "train_lambda_loss": [],
+        "train_f1": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_f1": [],
+    }
 
     val_f1_window = deque(maxlen=rolling_k)
     best_val_f1_rolling = -1.0
@@ -108,7 +116,7 @@ def run_training_loop(
     # ===== PHASE INIT (epoch 0) =====
     
     model.set_epoch(0)
-        
+    
     maybe_freeze_encoder_fn(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
@@ -120,7 +128,7 @@ def run_training_loop(
         adamw_foreach=adamw_foreach,
         adamw_fused=adamw_fused,
     )
-    
+
     for epoch in range(epochs):
         print(f"{tag}Epoch {epoch + 1}/{epochs}")
         
@@ -175,14 +183,20 @@ def run_training_loop(
             scaler=scaler,
             max_grad_norm=max_grad_norm,
         )
-        history["train_loss"].append(train_metrics["loss"])
+        history["train_total_loss"].append(train_metrics["loss_total"])
+        history["train_main_loss"].append(train_metrics["loss_main"])
+        history["train_lambda_loss"].append(train_metrics["loss_lambda"])
         history["train_f1"].append(train_metrics["f1"])
+        history["train_acc"].append(train_metrics["acc"])
 
         log = (
-            f"Train loss {train_metrics['loss']:.4f} "
-            f"F1 {train_metrics['f1']:.4f} "
-            f"acc {train_metrics['acc']:.4f}"
+            f"Train main_loss {train_metrics['loss_main']:.6f} "
+            f"aux_loss {train_metrics['aux_loss']:.6f} "
+            f"lambda_loss {train_metrics['loss_lambda']:.6f} "
+            f"total_loss {train_metrics['loss_total']:.6f} "
+            f"F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
         )
+        log += ("\n")
 
         # ===== VALIDATION =====
         if val_loader is not None:
@@ -202,7 +216,7 @@ def run_training_loop(
             val_f1_rolling = float(np.mean(val_f1_window))
 
             log += (
-                f" | Val loss {val_metrics['loss']:.4f} "
+                f"Val loss {val_metrics['loss']:.4f} "
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
                 f"| Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
