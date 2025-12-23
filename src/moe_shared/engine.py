@@ -106,15 +106,6 @@ def train_one_epoch(
                 if hasattr(model, "print_moe_debug"):
                     model.print_moe_debug(topn=3)
 
-                # Step-level loss print (train only)
-                lm = _safe_float(loss_main)
-                ll = _safe_float(loss_lambda)
-                lt = _safe_float(loss_total)
-                print(
-                    f"[Train step {step}] main_loss={lm:.6f} "
-                    f"lambda_loss={ll:.6f} total_loss={lt:.6f}"
-                )
-
     denom = max(1, n_steps)
     avg_total = total_loss_sum / denom
     avg_main = main_loss_sum / denom
