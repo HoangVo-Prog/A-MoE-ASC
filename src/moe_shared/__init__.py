@@ -1,7 +1,7 @@
 from .cli import FUSION_METHOD_CHOICES, parse_args
 from .config import TrainConfig, MoEConfig, build_moe_config, build_train_config, locked_baseline_config
 from .build_model import MoEBertConcatClassifier, moe_load_balance_loss
-from .engine import run_training_loop
+from .engine import run_training_loop, eval_model, train_one_epoch
 
 __all__ = [
     "FUSION_METHOD_CHOICES",
@@ -14,4 +14,6 @@ __all__ = [
     "MoEBertConcatClassifier",
     "moe_load_balance_loss",
     "run_training_loop",
+    "eval_model",
+    "train_one_epoch",
 ]
