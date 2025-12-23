@@ -21,51 +21,6 @@ from shared import (
 )
 
 
-def set_encoder_trainable(
-    model: nn.Module,
-    trainable: bool,
-    *,
-    keep_moe_trainable: bool = True,
-) -> None:
-    """
-    Set requires_grad for encoder params.
-
-    If keep_moe_trainable=True:
-      - encoder base params follow `trainable`
-      - MoE FFN params are ALWAYS trainable
-    """
-    for name, p in model.encoder.named_parameters():
-        if keep_moe_trainable and "moe_ffn" in name:
-            p.requires_grad = True
-        else:
-            p.requires_grad = trainable
-
-
-def maybe_freeze_encoder(
-    model: nn.Module,
-    epoch_idx_0based: int,
-    freeze_epochs: int,
-    freeze_moe: bool = False
-) -> None:
-    """
-    Freeze base encoder for first `freeze_epochs` epochs,
-    but keep MoE FFN trainable.
-    """
-    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
-        # Phase 1: freeze encoder base, train MoE + heads
-        set_encoder_trainable(
-            model,
-            trainable=False,
-            keep_moe_trainable=not freeze_moe,
-        )
-    else:
-        # Phase 2: unfreeze everything
-        set_encoder_trainable(
-            model,
-            trainable=True,
-            keep_moe_trainable=False,
-        )
-
 
 def train_one_epoch(
     *,
@@ -241,6 +196,7 @@ def run_training_loop(
     adamw_foreach: bool = False,
     adamw_fused: bool = False,
     max_grad_norm: Optional[float] = None,
+    maybe_freeze_encoder_fn = None,
 ):
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
@@ -261,7 +217,7 @@ def run_training_loop(
         return [p for p in model.parameters() if p.requires_grad]
 
     # ===== PHASE INIT (epoch 0) =====
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+    maybe_freeze_encoder_fn(model, epoch_idx_0based=0, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
@@ -279,7 +235,7 @@ def run_training_loop(
         prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
         # update freeze / unfreeze state
-        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
+        maybe_freeze_encoder_fn(model, epoch_idx_0based=epoch, freeze_epochs=freeze_epochs, freeze_moe=freeze_moe)
 
         now_trainable = any(p.requires_grad for p in model.encoder.parameters())
 

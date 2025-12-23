@@ -34,6 +34,7 @@ def run_benchmark_kfold_plus_full(
     output_path: str,
     model_factory: ModelFactory,
     run_training_loop_fn: TrainLoopFn,
+    maybe_freeze_encoder_fn,
     eval_model_fn: EvalFn,
     train_full_multi_seed_then_test_fn: FullTrainFn,
     trainloop_kwargs_factory: Optional[TrainLoopKwargsFactory] = None,
@@ -145,6 +146,7 @@ def run_benchmark_kfold_plus_full(
                         id2label=id2label,
                         tag=f"[CV {method} seed={seed} fold={fold_idx}] ",
                         **trainloop_kwargs_factory(cfg, extra),
+                        maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
                     )
 
                     best_sd = out.get("best_state_dict", None)
@@ -281,7 +283,9 @@ def run_benchmark_kfold_plus_full(
             extra=extra,
             model_factory=model_factory,
             run_training_loop_fn=run_training_loop_fn,
+            maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
             trainloop_kwargs_factory=trainloop_kwargs_factory,
+            maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
         )
 
         full_by_seed = {int(r["seed"]): r for r in full_out.get("per_seed", [])}

@@ -32,6 +32,7 @@ def train_full_multi_seed_then_test_generic(
     extra: Optional[Dict[str, Any]] = None,
     model_factory: Optional[ModelFactory] = None,
     run_training_loop_fn: Optional[TrainLoopFn] = None,
+    maybe_freeze_encoder_fn = None,
     trainloop_kwargs_factory: Optional[TrainLoopKwargsFactory] = None,
 ) -> dict:
     if model_factory is None:
@@ -76,6 +77,7 @@ def train_full_multi_seed_then_test_generic(
             id2label=id2label,
             tag=f"[FULL seed={seed}] ",
             **trainloop_kwargs_factory(cfg, extra),
+            maybe_freeze_encoder_fn=maybe_freeze_encoder_fn,
         )
 
         if out.get("best_state_dict") is not None:
