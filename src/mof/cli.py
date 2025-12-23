@@ -91,6 +91,6 @@ def parse_args() -> argparse.Namespace:
         help="Gamma for focal loss (only used when --loss_type focal).",
     )
     parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp", "mof"])
-
+    parser.add_argument("--mof_include_sent_term", action="store_true")
 
     return parser.parse_args()
