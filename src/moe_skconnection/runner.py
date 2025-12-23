@@ -39,6 +39,8 @@ def _ensure_dir(path: str) -> None:
 def main(args) -> None:
     cfg: TrainConfig = build_train_config(args)
     cfg = apply_skconnection_config(cfg, args)
+    
+    print(cfg)
 
     if bool(getattr(args, "locked_baseline", False)):
         cfg = locked_baseline_config(cfg)
