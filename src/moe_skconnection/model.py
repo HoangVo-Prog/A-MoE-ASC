@@ -11,7 +11,7 @@ from transformers import AutoModel
 from shared import DEVICE
 
 from .moe import SeqMoELogits, SeqMoELogitsConfig
-from moe_shared import moe_load_balance_loss
+from moe_shared import moe_load_balance_loss, MoEBertConcatClassifier
 
 
 
@@ -359,51 +359,45 @@ class SkBertConcatClassifier(nn.Module):
 
         return self._compute_loss(logits, labels, loss_moe=loss_moe)
 
-    def _compute_loss(
-        self,
-        logits: torch.Tensor,
-        labels: Optional[torch.Tensor],
-        *,
-        loss_moe: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+    def _compute_loss(self, logits, labels):
         if labels is None:
-            self._last_loss_main = None
-            self._last_loss_moe = None
-            self._last_loss_moe_weighted = None
-            self._last_loss_ratio = None
-            return {"loss": None, "logits": logits}
+            return {
+                "loss": None,
+                "logits": logits,
+                "aux_loss": None,
+                "loss_main": None,
+                "loss_lambda": None,
+                "loss_total": None,
+            }
 
-        # main loss
         if self.loss_type == "ce":
             loss_main = F.cross_entropy(logits, labels)
+
         elif self.loss_type == "weighted_ce":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_main = F.cross_entropy(logits, labels, weight=w)
+
         elif self.loss_type == "focal":
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
             loss_main = loss_fn(logits, labels)
+
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+        
+        aux = self._collect_aux_loss()
+        loss_lambda = self.aux_loss_weight * aux
 
-        # moe loss (aux)
-        if loss_moe is None:
-            loss_moe = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
-        else:
-            loss_moe = loss_moe.to(device=logits.device, dtype=logits.dtype)
+        loss_total = loss_main + loss_lambda
 
-        lw = float(self.aux_loss_weight)
-        loss_total = loss_main + (lw * loss_moe)
-
-        # Cache for step debug print (detach to avoid holding graph)
-        lm = float(loss_main.detach().item())
-        la = float(loss_moe.detach().item())
-        self._last_loss_main = lm
-        self._last_loss_moe = la
-        self._last_loss_moe_weighted = lw * la
-        self._last_loss_ratio = (self._last_loss_moe_weighted / (lm + 1e-12))
-
-        return {"loss": loss_total, "logits": logits}
+        return {
+            "loss": loss_total,          
+            "logits": logits,            
+            "aux_loss": aux,            
+            "loss_main": loss_main,      
+            "loss_lambda": loss_lambda,  
+            "loss_total": loss_total,    
+        }
 
     def print_moe_debug(self, topn: int = 3) -> None:
         s_h = self.encoder.moe_ffn_h.debug_stats()
@@ -429,16 +423,6 @@ class SkBertConcatClassifier(nn.Module):
 
         print(f"[MoE][sk] beta={self._beta_current:.4f} lambda={self.aux_loss_weight:.6f}")
 
-        # Step loss print (Mức A)
-        if self._last_loss_main is None:
-            print("[MoE][loss] No cached losses yet.")
-        else:
-            print(
-                f"[MoE][loss] main={self._last_loss_main:.6f} "
-                f"moe={self._last_loss_moe:.6f} "
-                f"lambda*moe={self._last_loss_moe_weighted:.6f} "
-                f"ratio={self._last_loss_ratio:.4f}"
-            )
 
 def build_model(cfg: Any, moe_cfg: Optional[Any], num_labels: int) -> nn.Module:
     # Scaffold uses cfg fields that exist in moe_head and shared configs.
