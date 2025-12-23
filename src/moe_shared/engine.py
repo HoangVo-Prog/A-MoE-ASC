@@ -170,7 +170,7 @@ def train_one_epoch_train_only(
     }
 
 
-def run_training_loop_train_only(
+def run_training_loop(
     *,
     model: nn.Module,
     train_loader: DataLoader,
