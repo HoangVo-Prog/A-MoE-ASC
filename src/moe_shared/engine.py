@@ -338,7 +338,7 @@ def run_training_loop(
 
         log = (
             f"Train main_loss {train_metrics['loss_main']:.6f} "
-            f"aux_loss {train_metrics['aux_loss']}"
+            f"aux_loss {train_metrics['aux_loss']:.6f} "
             f"lambda_loss {train_metrics['loss_lambda']:.6f} "
             f"total_loss {train_metrics['loss_total']:.6f} "
             f"F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
@@ -363,7 +363,7 @@ def run_training_loop(
             val_f1_rolling = float(np.mean(val_f1_window))
 
             log += (
-                f" | Val loss {val_metrics['loss']:.4f} "
+                f"Val loss {val_metrics['loss']:.4f} "
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
                 f"| Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
