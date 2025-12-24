@@ -94,6 +94,9 @@ def main(args) -> None:
         methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
         if not methods:
             methods = FUSION_METHOD_CHOICES
+            
+        if cfg.head_type=="mof":
+            cfg.fusion_method = "mof"
 
         seeds = _resolve_seeds_from_args(cfg, args)
 
