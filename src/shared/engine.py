@@ -398,4 +398,5 @@ def run_training_loop(
         "best_epoch": best_epoch,
         "best_val_f1_rolling": best_val_f1_rolling,
         "history": history,
+        "var_metrics": val_metrics,
     }

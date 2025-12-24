@@ -175,16 +175,7 @@ def run_benchmark_kfold_plus_full(
                     oof_filled[va_idx] = True
                     fold_test_logits.append(test_logits.astype(np.float32))
 
-                    val_m = eval_model_fn(
-                        model=model,
-                        dataloader=val_loader,
-                        id2label=id2label,
-                        verbose_report=False,
-                        print_confusion_matrix=False,
-                        fusion_method=cfg.fusion_method,
-                        f1_average="macro",
-                        return_confusion=True,
-                    )
+                    val_m = out["var_metrics"]
                     test_m = eval_model_fn(
                         model=model,
                         dataloader=test_loader,
@@ -194,6 +185,12 @@ def run_benchmark_kfold_plus_full(
                         fusion_method=cfg.fusion_method,
                         f1_average="macro",
                         return_confusion=True,
+                    )
+                    
+                    print(
+                        f" | Test loss {test_m['loss']:.4f} "
+                        f"F1 {test_m['f1']:.4f} "
+                        f"acc {test_m['acc']:.4f} "
                     )
 
                     fold_val_f1.append(float(val_m["f1"]))
