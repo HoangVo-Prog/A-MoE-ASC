@@ -96,7 +96,7 @@ def main(args) -> None:
             methods = FUSION_METHOD_CHOICES
             
         if cfg.head_type=="mof":
-            cfg.fusion_method = "mof"
+            methods = ["mof"]
 
         seeds = _resolve_seeds_from_args(cfg, args)
 
