@@ -218,7 +218,8 @@ def eval_model(
     if print_confusion_matrix:
         _print_confusion_matrix(all_labels, all_preds, id2label=id2label, normalize=True)
 
-    out: Dict[str, Any] = {"loss": avg_loss, "acc": acc, "f1": f1}
+    f1_per_class = f1_score(all_labels, all_preds, average=None)
+    out: Dict[str, Any] = {"loss": avg_loss, "acc": acc, "f1": f1, "f1_per_class": f1_per_class}
     if return_confusion:
         out["confusion"] = cm  # raw counts [C, C]
     return out
@@ -255,6 +256,8 @@ def run_training_loop(
 
     val_f1_window = deque(maxlen=max(1, int(rolling_k)))
     best_val_f1_rolling = -1.0
+    best_macro_f1 = -1.0
+    best_f1_neutral = -1.0
     best_state_dict = None
     best_epoch = -1
     epochs_no_improve = 0
@@ -264,6 +267,14 @@ def run_training_loop(
     print("=======================================================================")
 
     steps_per_epoch = max(1, len(train_loader))
+    
+    neutral_idx = None
+    for k, v in id2label.items():
+        if str(v).lower().strip() == "neutral":
+            neutral_idx = int(k)
+            break
+    if neutral_idx is None:
+        raise RuntimeError("Cannot find 'neutral' in id2label")
 
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
@@ -360,6 +371,8 @@ def run_training_loop(
 
             val_f1_window.append(float(val_metrics["f1"]))
             val_f1_rolling = float(np.mean(list(val_f1_window)))
+            macro_f1 = float(val_metrics["f1"])
+            neutral_f1 = float(val_metrics["f1_per_class"][neutral_idx])
 
             log += (
                 f" | Val loss {val_metrics['loss']:.4f} "
@@ -368,12 +381,15 @@ def run_training_loop(
                 f"| Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
             )
 
-            if val_f1_rolling > best_val_f1_rolling:
+            should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral)
+            if should_save:
+                best_macro_f1 = macro_f1
+                best_f1_neutral = neutral_f1
                 best_val_f1_rolling = val_f1_rolling
                 best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch
                 epochs_no_improve = 0
-                print("New best model on rolling val F1")
+                print("[MoE] New best model on macro_f1 with neutral_f1 constraint")
             else:
                 epochs_no_improve += 1
                 if early_stop_patience > 0 and epochs_no_improve >= int(early_stop_patience):

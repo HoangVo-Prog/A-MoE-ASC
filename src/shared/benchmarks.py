@@ -199,7 +199,7 @@ def run_benchmark_kfold_plus_full(
                     )
                     
                     print(
-                        f" | Test loss {test_m['loss']:.4f} "
+                        f"Test loss {test_m['loss']:.4f} "
                         f"F1 {test_m['f1']:.4f} "
                         f"acc {test_m['acc']:.4f} "
                     )
