@@ -1,7 +1,7 @@
 # src/acte/model.py
 from __future__ import annotations
 from shared import DEVICE
-from .config import ACTokenEvidenceMoEClassifier, ACTEConfig
+from .ac_temoe import ACTokenEvidenceMoEClassifier, ACTEConfig
 
 def build_model(*, cfg, num_labels: int):
     acte_cfg = ACTEConfig(
