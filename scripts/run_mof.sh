@@ -75,6 +75,7 @@ echo "▶ Running benchmark baseline with:"
 echo "  dataset_type           = ${DATASET_TYPE}"
 echo "  loss_type              = ${LOSS_TYPE}"
 echo "  loss_flags             = ${LOSS_FLAGS}"
+echo "  moe_experts            = ${EXPERTS}"
 echo
 
 # =========================
