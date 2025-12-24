@@ -254,8 +254,6 @@ def run_training_loop(
 ) -> Dict[str, Any]:
     history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
-    val_f1_window = deque(maxlen=max(1, int(rolling_k)))
-    best_val_f1_rolling = -1.0
     best_macro_f1 = -1.0
     best_f1_neutral = -1.0
     best_state_dict = None
@@ -370,8 +368,6 @@ def run_training_loop(
             history["val_loss"].append(float(val_metrics["loss"]))
             history["val_f1"].append(float(val_metrics["f1"]))
 
-            val_f1_window.append(float(val_metrics["f1"]))
-            val_f1_rolling = float(np.mean(list(val_f1_window)))
             macro_f1 = float(val_metrics["f1"])
             neutral_f1 = float(val_metrics["f1_per_class"][neutral_idx])
 
@@ -379,14 +375,15 @@ def run_training_loop(
                 f" | Val loss {val_metrics['loss']:.4f} "
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
-                f"| Val F1 rolling({rolling_k}) {val_f1_rolling:.4f}"
+                f"| Val macro f1 {macro_f1:.4f}"
+                f"| Val neutral f1 {neutral_f1:.4f}"
+
             )
 
             should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral)
             if should_save:
                 best_macro_f1 = macro_f1
                 best_f1_neutral = neutral_f1
-                best_val_f1_rolling = val_f1_rolling
                 best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch
                 epochs_no_improve = 0
@@ -431,7 +428,5 @@ def run_training_loop(
     return {
         "best_state_dict": best_state_dict,
         "best_epoch": best_epoch,
-        "best_val_f1_rolling": best_val_f1_rolling,
         "history": history,
-        "var_metrics": val_metrics,
     }
