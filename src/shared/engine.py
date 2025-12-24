@@ -229,6 +229,7 @@ def run_training_loop(
     model: nn.Module,
     train_loader: DataLoader,
     val_loader: Optional[DataLoader],
+    test_loader: Optional[DataLoader] = None,
     lr: float,
     warmup_ratio: float,
     epochs: int,
@@ -381,6 +382,22 @@ def run_training_loop(
                     )
                     print(log)
                     break
+                
+        if test_loader is not None:
+            test_metrics =  eval_model_fn(
+                model=model,
+                dataloader=test_loader,
+                id2label=id2label,
+                print_confusion_matrix=True,
+                verbose_report=False,
+                fusion_method=fusion_method,
+                f1_average="macro",
+            )
+            log += (
+                f"\nTest loss {test_metrics['loss']:.4f} "
+                f"F1 {test_metrics['f1']:.4f} "
+                f"acc {test_metrics['acc']:.4f} "
+            )
 
         print(log)
 

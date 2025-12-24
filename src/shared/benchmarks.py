@@ -136,6 +136,7 @@ def run_benchmark_kfold_plus_full(
                         model=model,
                         train_loader=train_loader,
                         val_loader=val_loader,
+                        test_loader=test_loader,
                         lr=cfg.lr,
                         warmup_ratio=cfg.warmup_ratio,
                         epochs=cfg.epochs,
@@ -175,7 +176,17 @@ def run_benchmark_kfold_plus_full(
                     oof_filled[va_idx] = True
                     fold_test_logits.append(test_logits.astype(np.float32))
 
-                    val_m = out["var_metrics"]
+                    val_m = eval_model_fn(
+                        model=model,
+                        dataloader=val_loader,
+                        id2label=id2label,
+                        verbose_report=False,
+                        print_confusion_matrix=False,
+                        fusion_method=cfg.fusion_method,
+                        f1_average="macro",
+                        return_confusion=True,
+                    )
+                    
                     test_m = eval_model_fn(
                         model=model,
                         dataloader=test_loader,
