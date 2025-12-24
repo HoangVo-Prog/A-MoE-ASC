@@ -357,6 +357,7 @@ def run_training_loop(
         )
 
         if val_loader is not None:
+            print("Validation Confusion Matrix")
             val_metrics = eval_model_fn(
                 model=model,
                 dataloader=val_loader,
@@ -389,7 +390,7 @@ def run_training_loop(
                 best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch
                 epochs_no_improve = 0
-                print("[MoE] New best model on macro_f1 with neutral_f1 constraint")
+                print("[MODEL] New best model on macro_f1 with neutral_f1 constraint")
             else:
                 epochs_no_improve += 1
                 if early_stop_patience > 0 and epochs_no_improve >= int(early_stop_patience):
@@ -400,6 +401,7 @@ def run_training_loop(
                     break
                 
         if test_loader is not None:
+            print("Test Confusion Matrix")
             test_metrics =  eval_model_fn(
                 model=model,
                 dataloader=test_loader,
