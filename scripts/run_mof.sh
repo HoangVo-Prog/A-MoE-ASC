@@ -6,7 +6,7 @@ set -e
 # =========================
 LOSS_TYPE="${1:-ce}"
 DATASET_TYPE="${2:-laptop14}"
-MOF_INCLUDE_SENT_TERM="${3:-false}"   # input thứ 3
+EXPERTS="${3:-sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction}"
 
 # Only support these dataset types
 case "${DATASET_TYPE}" in
@@ -70,10 +70,6 @@ esac
 # =========================
 # MoF include sent/term flag (store_true)
 # =========================
-MOF_FLAGS=""
-if [[ "${MOF_INCLUDE_SENT_TERM}" == "true" || "${MOF_INCLUDE_SENT_TERM}" == "1" || "${MOF_INCLUDE_SENT_TERM}" == "yes" ]]; then
-  MOF_FLAGS="--mof_include_sent_term"
-fi
 
 echo "▶ Running benchmark baseline with:"
 echo "  dataset_type           = ${DATASET_TYPE}"
@@ -94,6 +90,6 @@ python -m mof.runner \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --head_type mof \
+  --mof_experts "$EXPERTS"\
   --mof_debug \
   ${LOSS_FLAGS} \
-  ${MOF_FLAGS}
