@@ -1,3 +1,4 @@
+# cli.py
 import argparse
 
 
@@ -25,9 +26,25 @@ def parse_args() -> argparse.Namespace:
         "--fusion_method",
         type=str,
         default="concat",
-        choices=["sent", "term", "concat", "add", "mul", "cross", "gated_concat", "bilinear", "coattn", "late_interaction"],
+        choices=[
+            "sent",
+            "term",
+            "concat",
+            "add",
+            "mul",
+            "cross",
+            "gated_concat",
+            "bilinear",
+            "coattn",
+            "late_interaction",
+            "mof",
+        ],
     )
-    parser.add_argument("--locked_baseline", action="store_true", help="Lock the experimental baseline so only fusion_method changes across runs.")
+    parser.add_argument(
+        "--locked_baseline",
+        action="store_true",
+        help="Lock the experimental baseline so only fusion_method changes across runs.",
+    )
 
     parser.add_argument("--output_dir", type=str, default="saved_model")
     parser.add_argument("--output_name", type=str, default="bert_concat_asc.pt")
@@ -40,37 +57,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rolling_k", type=int, default=3)
     parser.add_argument("--early_stop_patience", type=int, default=3)
     parser.add_argument("--freeze_epochs", type=int, default=0)
-    
+
     parser.add_argument("--train_full_only", action="store_true")
+
     parser.add_argument(
         "--benchmark_fusions",
         action="store_true",
         help="Run fusion benchmark across multiple methods and multiple seeds.",
     )
-    parser.add_argument(
-        "--num_seeds",
-        type=int,
-        default=3,
-        help="Number of seeds per fusion method when --benchmark_fusions is enabled.",
-    )
-    parser.add_argument(
-        "--seeds",
-        type=str,
-        default="",
-        help="Optional comma-separated seed list (overrides --num_seeds). Example: 42,43,44",
-    )
+    parser.add_argument("--num_seeds", type=int, default=3)
+    parser.add_argument("--seeds", type=str, default="")
     parser.add_argument(
         "--benchmark_methods",
         type=str,
         default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction",
-        help="Comma-separated fusion methods to benchmark.",
     )
-    parser.add_argument(
-        "--do-ensemble-logits",
-        type=bool,
-        default=True,
-    )
-    
+    parser.add_argument("--do-ensemble-logits", type=bool, default=True)
+
     parser.add_argument(
         "--loss_type",
         type=str,
@@ -84,24 +87,34 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional comma-separated class weights, example: 1.0,2.5,1.0",
     )
+    parser.add_argument("--focal_gamma", type=float, default=2.0)
+
     parser.add_argument(
-        "--focal_gamma",
-        type=float,
-        default=2.0,
-        help="Gamma for focal loss (only used when --loss_type focal).",
+        "--head_type",
+        type=str,
+        default="linear",
+        choices=["linear", "mlp", "mof"],
     )
-    parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp", "mof"])
+
+    # MoF knobs
     parser.add_argument(
         "--mof_experts",
         type=str,
         default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction",
-        help="Comma-separated MoF experts. Empty means use default list in mof.py. "
-             "To include sent or term, add them explicitly, example: sent,term,concat,add",
+        help="Comma-separated MoF experts. Empty means use default list in mof.py.",
     )
+
+    parser.add_argument("--mof_mix_level", type=str, default="repr", choices=["repr", "logit"])
+    parser.add_argument("--mof_lb_coef", type=float, default=0.001)
+    parser.add_argument("--mof_router_temperature", type=float, default=1.0)
+
+    parser.add_argument("--mof_disable_expert_scaling", action="store_true")
+    parser.add_argument("--mof_expert_norm_clamp", type=float, default=0.0)
+    parser.add_argument("--mof_logit_clamp", type=float, default=0.0)
 
     parser.add_argument("--mof_debug", action="store_true")
     parser.add_argument("--mof_debug_every", type=int, default=200)
     parser.add_argument("--mof_debug_max_batch", type=int, default=1)
-    parser.add_argument("--mof_debug_max_experts", type=int, default=0, help="0 means all experts")
+    parser.add_argument("--mof_debug_max_experts", type=int, default=0)
 
     return parser.parse_args()
