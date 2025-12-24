@@ -116,7 +116,7 @@ def main(args) -> None:
             train_full_multi_seed_then_test_fn=train_full_multi_seed_then_test_generic,
             maybe_freeze_encoder_fn=maybe_freeze_encoder,
             trainloop_kwargs_factory=lambda cfg_, extra: {},
-            extra={},  # baseline has no extra context
+            extra={},  
         )
 
         print(f"Benchmark complete. Results written to {out_path}")
