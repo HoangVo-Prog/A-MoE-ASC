@@ -60,7 +60,6 @@ class _MoFBase:
         self,
         *,
         dropout: float,
-        include_sent_term: bool,
         experts: Optional[List[str]] = None,
     ) -> None:
         encoder = getattr(self, "encoder", None)
@@ -71,7 +70,7 @@ class _MoFBase:
         if experts is not None:
             self.mof_experts = list(experts)
         else:
-            base = [
+            self.mof_experts = [
                 "concat",
                 "add",
                 "mul",
@@ -81,9 +80,7 @@ class _MoFBase:
                 "coattn",
                 "late_interaction",
             ]
-            if bool(include_sent_term):
-                base = ["sent", "term"] + base
-            self.mof_experts = base
+            
 
         self.mof_router = MoFRouter(
             in_dim=4 * h,
@@ -321,7 +318,6 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
         loss_type: str = "ce",
         class_weights=None,
         focal_gamma: float = 2.0,
-        mof_include_sent_term: bool = False,
         mof_experts: Optional[List[str]] = None,
         mof_debug: bool = False,
         mof_debug_every: int = 200,
@@ -344,7 +340,6 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
         self._use_mof = True
         self._init_mof(
             dropout=float(dropout),
-            include_sent_term=bool(mof_include_sent_term),
             experts=mof_experts,
         )
 

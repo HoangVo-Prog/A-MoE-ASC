@@ -91,7 +91,14 @@ def parse_args() -> argparse.Namespace:
         help="Gamma for focal loss (only used when --loss_type focal).",
     )
     parser.add_argument("--head_type", type=str, default="linear", choices=["linear", "mlp", "mof"])
-    parser.add_argument("--mof_include_sent_term", action="store_true")
+    parser.add_argument(
+        "--mof_experts",
+        type=str,
+        default="sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction",
+        help="Comma-separated MoF experts. Empty means use default list in mof.py. "
+             "To include sent or term, add them explicitly, example: sent,term,concat,add",
+    )
+
     parser.add_argument("--mof_debug", action="store_true")
     parser.add_argument("--mof_debug_every", type=int, default=200)
     parser.add_argument("--mof_debug_max_batch", type=int, default=1)

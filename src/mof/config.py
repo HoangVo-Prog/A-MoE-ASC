@@ -7,7 +7,7 @@ from shared import BaseTrainConfig, _filter_config_kwargs
 
 @dataclass
 class TrainConfig(BaseTrainConfig):
-    mof_include_sent_term: bool = False
+    mof_experts: str = ""
     mof_debug: bool = False
     mof_debug_every: int = 200
     mof_debug_max_batch: int = 1
@@ -49,7 +49,7 @@ def locked_baseline_config(cfg_dict) -> TrainConfig:
     config.max_len_sent=24
     config.max_len_term=4
     
-    print("CONFIG")
-    print(config)
+    if config.head_type == "mof":
+        config.fusion_method = "mof"
 
     return config
