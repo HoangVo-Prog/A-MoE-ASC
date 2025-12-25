@@ -48,7 +48,6 @@ def locked_baseline_config(cfg_dict) -> TrainConfig:
 
     config.train_batch_size = 16
     config.eval_batch_size = 32
-    config.freeze_epochs = 3
     config.lr = 2e-5
     config.warmup_ratio = 0.1
     config.dropout = 0.1
