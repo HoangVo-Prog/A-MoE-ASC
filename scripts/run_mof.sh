@@ -92,5 +92,7 @@ python -m mof.runner \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --head_type mof \
   --mof_experts "$EXPERTS"\
+  --mof_lb_coef 0.001 \
+  --mof_expert_norm_clamp 5.0 \
   --mof_debug \
   ${LOSS_FLAGS} \
