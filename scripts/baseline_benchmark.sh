@@ -33,7 +33,7 @@ FOCAL_GAMMA=""
 
 case "${DATASET_TYPE}" in
   laptop14)
-    CLASS_WEIGHTS="1.0,1.6,1.2"
+    CLASS_WEIGHTS="1.0,2.5,1.0"
     FOCAL_GAMMA="2.0"
     ;;
   rest14)
