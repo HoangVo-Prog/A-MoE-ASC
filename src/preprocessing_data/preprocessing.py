@@ -34,37 +34,44 @@ def get_polarity(row: dict) -> str:
     return norm(row.get("sentiment"))
 
 
-def conflict_sentence_set(rows):
-    s = set()
-    for r in rows:
-        sent = r.get("sentence")
-        if isinstance(sent, str) and sent.strip():
-            if get_polarity(r) == "conflict":
-                s.add(sent)
-    return s
+def get_sentence(row: dict) -> str:
+    s = row.get("sentence")
+    return s.strip() if isinstance(s, str) else ""
 
 
-def drop_sentences(rows, drop_set):
-    return [r for r in rows if r.get("sentence") not in drop_set]
+def key_stats(rows, name):
+    pols = Counter(get_polarity(r) for r in rows)
+    sent_cnt = len({get_sentence(r) for r in rows if get_sentence(r)})
+    print(f"[{name}] rows={len(rows)} uniq_sentences={sent_cnt} polarity_counts(top)={pols.most_common(6)}")
 
 
-def sentence_majority_label(rows):
-    sent2pols = defaultdict(list)
-    for r in rows:
-        sent = r.get("sentence")
-        if not isinstance(sent, str) or not sent.strip():
-            continue
-        pol = get_polarity(r)
-        if pol:
-            sent2pols[sent].append(pol)
+def sentence_strata_key(pols_for_sentence):
+    """
+    pols_for_sentence: list[str] polarity của các aspect trong cùng một sentence.
+    strata = "<major>|neu0/neu1"
+    """
+    c = Counter(pols_for_sentence)
+    has_neu = 1 if c.get("neutral", 0) > 0 else 0
 
-    sent2label = {}
-    for sent, pols in sent2pols.items():
-        c = Counter(pols)
-        best_cnt = c.most_common(1)[0][1]
-        best = [k for k, v in c.items() if v == best_cnt]
-        sent2label[sent] = best[0] if len(best) == 1 else "tie"
-    return sent2label
+    if not c:
+        return f"unknown|neu{has_neu}"
+
+    most = c.most_common()
+    top_cnt = most[0][1]
+    tops = [k for k, v in c.items() if v == top_cnt]
+
+    if len(tops) == 1:
+        major = tops[0]
+    else:
+        # tie rule ổn định, tránh tạo class giả
+        if "neutral" in tops:
+            major = "neutral"
+        else:
+            order = ["positive", "negative", "neutral"]
+            tops_sorted = sorted(tops, key=lambda x: order.index(x) if x in order else 999)
+            major = tops_sorted[0]
+
+    return f"{major}|neu{has_neu}"
 
 
 def main():
@@ -73,6 +80,10 @@ def main():
     ap.add_argument("--val_ratio", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out_dir", type=str, default=None)
+
+    # tuỳ chọn thêm: nếu bạn muốn chặn leakage do trùng sentence giữa train và test
+    ap.add_argument("--dedup_train_vs_test", action="store_true")
+
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -81,66 +92,72 @@ def main():
     train_rows = read_json(data_dir / "train.json")
     test_rows = read_json(data_dir / "test.json")
 
-    # Debug quick counts
-    def key_stats(rows, name):
-        pols = Counter(get_polarity(r) for r in rows)
-        sent_cnt = len({r.get("sentence") for r in rows if isinstance(r.get("sentence"), str)})
-        print(f"[{name}] rows={len(rows)} uniq_sentences={sent_cnt} polarity_counts(top)={pols.most_common(6)}")
-
     key_stats(train_rows, "train_raw")
     key_stats(test_rows, "test_raw")
 
-    # 1) Drop conflict sentence across train + test
-    drop_set = conflict_sentence_set(train_rows) | conflict_sentence_set(test_rows)
-    train_clean = drop_sentences(train_rows, drop_set)
-    test_clean = drop_sentences(test_rows, drop_set)
+    # 0) Optional: loại train sentences trùng hệt test sentences để tránh leakage (nếu dataset có duplicate)
+    if args.dedup_train_vs_test:
+        test_sents = {get_sentence(r) for r in test_rows if get_sentence(r)}
+        before = len(train_rows)
+        train_rows = [r for r in train_rows if get_sentence(r) not in test_sents]
+        print("Dedup train vs test by sentence:", before, "->", len(train_rows))
+
+    # 1) Drop conflict instances (benchmark SemEval14 không dùng conflict)
+    train_clean = [r for r in train_rows if get_polarity(r) != "conflict"]
+    test_clean = [r for r in test_rows if get_polarity(r) != "conflict"]
 
     key_stats(train_clean, "train_clean")
     key_stats(test_clean, "test_clean")
-    print("Dropped conflict sentences:", len(drop_set))
 
-    # 2) Build sentence labels (for stratify)
-    sent2label = sentence_majority_label(train_clean)
-    sentences = list(sent2label.keys())
-    labels = [sent2label[s] for s in sentences]
+    # 2) Build sentence -> polarity list để group split theo sentence
+    sent2pols = defaultdict(list)
+    for r in train_clean:
+        sent = get_sentence(r)
+        if not sent:
+            continue
+        pol = get_polarity(r)
+        if pol:
+            sent2pols[sent].append(pol)
+
+    sentences = list(sent2pols.keys())
+    strata = [sentence_strata_key(sent2pols[s]) for s in sentences]
 
     print("Sentences usable for split:", len(sentences))
     if len(sentences) == 0:
-        # Không có sentence để split
         write_json(out_dir / "train.json", [])
         write_json(out_dir / "val.json", [])
         write_json(out_dir / "test.json", test_clean)
-        print("No sentences found after cleaning. Wrote empty train/val.")
+        print("No sentences found after cleaning. Wrote empty train/val. Test kept cleaned.")
         return
 
-    # 3) Stratify nếu 가능: mỗi lớp phải có >=2 samples khi split
-    label_counts = Counter(labels)
-    min_class = min(label_counts.values())
-    can_stratify = (min_class >= 2) and (0.0 < args.val_ratio < 1.0) and (len(sentences) >= 2)
+    strata_counts = Counter(strata)
+    print("Strata counts (top):", strata_counts.most_common(12))
 
-    if can_stratify:
-        try:
-            train_sents, val_sents = train_test_split(
-                sentences,
-                test_size=args.val_ratio,
-                random_state=args.seed,
-                stratify=labels,
-            )
-        except ValueError as e:
-            # fallback nếu sklearn vẫn không chia được
-            print("Stratified split failed, fallback to random split. Reason:", str(e))
-            train_sents, val_sents = train_test_split(
-                sentences,
-                test_size=args.val_ratio,
-                random_state=args.seed,
-                shuffle=True,
-                stratify=None,
-            )
+    # 3) Stratify nếu đủ điều kiện
+    can_stratify = (0.0 < args.val_ratio < 1.0) and (len(sentences) >= 2) and (min(strata_counts.values()) >= 2)
+
+    if len(sentences) == 1:
+        train_sents, val_sents = sentences, []
     else:
-        print("Not enough samples per class for stratify, fallback to random split.")
-        if len(sentences) == 1:
-            train_sents, val_sents = sentences, []
+        if can_stratify:
+            try:
+                train_sents, val_sents = train_test_split(
+                    sentences,
+                    test_size=args.val_ratio,
+                    random_state=args.seed,
+                    stratify=strata,
+                )
+            except ValueError as e:
+                print("Stratified split failed, fallback to random split. Reason:", str(e))
+                train_sents, val_sents = train_test_split(
+                    sentences,
+                    test_size=args.val_ratio,
+                    random_state=args.seed,
+                    shuffle=True,
+                    stratify=None,
+                )
         else:
+            print("Not enough samples per stratum for stratify, fallback to random split.")
             train_sents, val_sents = train_test_split(
                 sentences,
                 test_size=args.val_ratio,
@@ -152,8 +169,8 @@ def main():
     train_sents = set(train_sents)
     val_sents = set(val_sents)
 
-    train_out = [r for r in train_clean if r.get("sentence") in train_sents]
-    val_out = [r for r in train_clean if r.get("sentence") in val_sents]
+    train_out = [r for r in train_clean if get_sentence(r) in train_sents]
+    val_out = [r for r in train_clean if get_sentence(r) in val_sents]
 
     write_json(out_dir / "train.json", train_out)
     write_json(out_dir / "val.json", val_out)
@@ -161,6 +178,9 @@ def main():
 
     print("Done")
     print("Train sentences:", len(train_sents), "Val sentences:", len(val_sents))
+    key_stats(train_out, "train_out")
+    key_stats(val_out, "val_out")
+    key_stats(test_clean, "test_out")
 
 
 if __name__ == "__main__":
