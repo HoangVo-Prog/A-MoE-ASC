@@ -75,6 +75,7 @@ echo
 # Run
 # =========================
 python -m baseline.runner \
+  --model_name microsoft/deberta-v3-large \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
