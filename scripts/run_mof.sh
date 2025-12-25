@@ -77,5 +77,4 @@ python -m mof.runner \
   --mof_expert_norm_clamp 5.0 \
   --mof_router_temperature 1.5 \
   --mof_debug \
-  --encoder_lr_scale 0.1 \
   ${LOSS_FLAGS}
