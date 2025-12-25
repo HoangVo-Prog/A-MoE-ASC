@@ -311,6 +311,9 @@ def run_training_loop(
         # Rebuild optimizer exactly when encoder becomes trainable
         if (not prev_trainable) and now_trainable:
             print("Rebuilding optimizer for unfrozen encoder params")
+            for i, g in enumerate(optimizer.param_groups):
+                print(f"[OPT] group={i} lr={g.get('lr')} n_params={len(g['params'])}")
+
             try:
                 del optimizer
                 del scheduler
