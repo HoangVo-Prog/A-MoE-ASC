@@ -84,5 +84,5 @@ python -m baseline.runner \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
-  --benchmark_methods concat \
+  --benchmark_methods gated_concat,coattn,late_interaction \
   ${LOSS_FLAGS}
