@@ -5,12 +5,222 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 
 from torch.amp import autocast, GradScaler
 
 
-from shared import cleanup_cuda
+from shared import DEVICE, cleanup_cuda,_print_confusion_matrix
 from .optim import build_optimizer_and_scheduler
+
+def set_encoder_trainable(
+    model: nn.Module,
+    trainable: bool,
+    *,
+    keep_moe_trainable: bool = False,
+) -> None:
+    """
+    Unified behavior:
+
+    - If keep_moe_trainable=False:
+        Set all encoder params requires_grad = trainable (baseline behavior).
+    - If keep_moe_trainable=True:
+        Encoder base params follow `trainable`, but any param name containing "moe_ffn"
+        stays trainable (MoE behavior).
+    """
+    if not hasattr(model, "encoder"):
+        return
+
+    for name, p in model.encoder.named_parameters():
+        if keep_moe_trainable and ("moe_ffn" in name):
+            p.requires_grad = True
+        else:
+            p.requires_grad = trainable
+
+
+def maybe_freeze_encoder(
+    model: nn.Module,
+    epoch_idx_0based: int,
+    freeze_epochs: int,
+    freeze_moe: bool = False,
+) -> None:
+    """
+    Freeze encoder for first `freeze_epochs` epochs.
+
+    - Baseline path:
+        freeze_moe=False and model has no MoE, same as baseline behavior.
+    - MoE path:
+        If freeze_moe=False: freeze base encoder but keep moe_ffn trainable.
+        If freeze_moe=True: freeze everything in encoder (including moe_ffn).
+    """
+    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
+        set_encoder_trainable(
+            model,
+            trainable=False,
+            keep_moe_trainable=not freeze_moe,
+        )
+    else:
+        set_encoder_trainable(
+            model,
+            trainable=True,
+            keep_moe_trainable=False,
+        )
+
+
+def train_one_epoch(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler=None,
+    fusion_method: str = "concat",
+    f1_average: str = "macro",
+    step_print_moe: float = 100,
+    use_amp: bool = False,
+    amp_dtype: str = "fp16",
+    scaler: Optional[GradScaler] = None,
+    max_grad_norm: Optional[float] = 1.0,
+) -> Dict[str, float]:
+    model.train()
+    total_loss = 0.0
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+
+    # AMP dtype mapping
+    amp_dtype_torch = torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
+    step_print_i = int(step_print_moe) if step_print_moe is not None else 0
+
+    for step, batch in enumerate(dataloader):
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+
+        optimizer.zero_grad(set_to_none=True)
+
+        if use_amp:
+            with autocast("cuda", enabled=True, dtype=amp_dtype_torch):
+                outputs = model(
+                    input_ids_sent=batch["input_ids_sent"],
+                    attention_mask_sent=batch["attention_mask_sent"],
+                    input_ids_term=batch["input_ids_term"],
+                    attention_mask_term=batch["attention_mask_term"],
+                    labels=batch["label"],
+                    fusion_method=fusion_method,
+                )
+                loss = outputs["loss"]
+                logits = outputs["logits"]
+
+            if scaler is None:
+                raise RuntimeError("use_amp=True but scaler is None")
+
+            scaler.scale(loss).backward()
+
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(
+                input_ids_sent=batch["input_ids_sent"],
+                attention_mask_sent=batch["attention_mask_sent"],
+                input_ids_term=batch["input_ids_term"],
+                attention_mask_term=batch["attention_mask_term"],
+                labels=batch["label"],
+                fusion_method=fusion_method,
+            )
+            loss = outputs["loss"]
+            logits = outputs["logits"]
+
+            loss.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+            optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step()
+
+        total_loss += float(loss.item())
+
+        preds = torch.argmax(logits, dim=-1)
+        all_preds.extend(preds.detach().cpu().tolist())
+        all_labels.extend(batch["label"].detach().cpu().tolist())
+
+        if step_print_i and (step > 0) and (step % step_print_i == 0):
+            if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
+                try:
+                    model.print_moe_debug(topn=3)
+                except Exception:
+                    pass
+
+    avg_loss = total_loss / max(1, len(dataloader))
+    acc = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average=f1_average)
+    return {"loss": avg_loss, "acc": acc, "f1": f1}
+
+
+def eval_model(
+    *,
+    model: nn.Module,
+    dataloader: DataLoader,
+    id2label: Optional[Dict[int, str]] = None,
+    verbose_report: bool = False,
+    print_confusion_matrix: bool = True,
+    fusion_method: str = "concat",
+    f1_average: str = "macro",
+    return_confusion: bool = False,
+) -> Dict[str, Any]:
+    model.eval()
+    total_loss = 0.0
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = {k: v.to(DEVICE) for k, v in batch.items()}
+
+            outputs = model(
+                input_ids_sent=batch["input_ids_sent"],
+                attention_mask_sent=batch["attention_mask_sent"],
+                input_ids_term=batch["input_ids_term"],
+                attention_mask_term=batch["attention_mask_term"],
+                labels=batch["label"],
+                fusion_method=fusion_method,
+            )
+
+            loss = outputs.get("loss", None)
+            logits = outputs["logits"]
+
+            if loss is not None:
+                total_loss += float(loss.item())
+
+            preds = torch.argmax(logits, dim=-1)
+            all_preds.extend(preds.cpu().tolist())
+            all_labels.extend(batch["label"].cpu().tolist())
+
+    avg_loss = total_loss / max(1, len(dataloader))
+    acc = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average=f1_average)
+
+    if verbose_report and id2label is not None:
+        target_names = [id2label[i] for i in range(len(id2label))]
+        print("Classification report:")
+        print(classification_report(all_labels, all_preds, target_names=target_names, digits=4))
+
+    num_labels = len(id2label) if id2label is not None else None
+    cm = confusion_matrix(
+        all_labels,
+        all_preds,
+        labels=list(range(num_labels)) if num_labels is not None else None,
+    )
+
+    if print_confusion_matrix:
+        _print_confusion_matrix(all_labels, all_preds, id2label=id2label, normalize=True)
+
+    f1_per_class = f1_score(all_labels, all_preds, average=None)
+    out: Dict[str, Any] = {"loss": avg_loss, "acc": acc, "f1": f1, "f1_per_class": f1_per_class}
+    if return_confusion:
+        out["confusion"] = cm  # raw counts [C, C]
+    return out
 
 
 def run_training_loop(
