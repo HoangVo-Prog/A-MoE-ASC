@@ -106,6 +106,22 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mof_mix_level", type=str, default="repr", choices=["repr", "logit"])
     parser.add_argument("--mof_lb_coef", type=float, default=0.001)
+    parser.add_argument("--mof_lb_mode", type=str, default="switch", choices=["l2", "switch"])
+    parser.add_argument("--mof_entropy_coef", type=float, default=0.001)
+    parser.add_argument(
+        "--mof_mixed_repr_norm",
+        type=str,
+        default="layernorm",
+        choices=["none", "layernorm", "clamp"],
+    )
+    parser.add_argument("--mof_mixed_repr_norm_clamp", type=float, default=0.0)
+    parser.add_argument("--mof_residual_alpha_init", type=float, default=0.1)
+    parser.add_argument(
+        "--mof_residual_alpha_learnable",
+        type=int,
+        default=1,
+        help="1 = learnable residual alpha, 0 = fixed.",
+    )
     parser.add_argument("--mof_router_temperature", type=float, default=1.0)
 
     parser.add_argument("--mof_disable_expert_scaling", action="store_true")

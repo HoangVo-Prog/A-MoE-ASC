@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -73,9 +75,15 @@ class _MoFBase:
         router_temperature: float = 1.0,
         mix_level: str = "repr",  # repr or logit
         lb_coef: float = 0.0,
+        lb_mode: str = "l2",
+        entropy_coef: float = 0.0,
         disable_expert_scaling: bool = False,
         expert_norm_clamp: float = 0.0,
+        mixed_repr_norm: str = "none",
+        mixed_repr_norm_clamp: float = 0.0,
         logit_clamp: float = 0.0,
+        residual_alpha_init: float = 0.0,
+        residual_alpha_learnable: bool = True,
     ) -> None:
         encoder = getattr(self, "encoder", None)
         if encoder is None or getattr(encoder, "config", None) is None:
@@ -118,6 +126,32 @@ class _MoFBase:
         self._mof_lb_coef = float(lb_coef)
         self._mof_expert_norm_clamp = float(expert_norm_clamp)
         self._mof_logit_clamp = float(logit_clamp)
+        self._mof_lb_mode = str(lb_mode).lower() if str(lb_mode).lower() else "l2"
+        if self._mof_lb_mode not in ("l2", "switch"):
+            self._mof_lb_mode = "l2"
+
+        self._mof_entropy_coef = float(entropy_coef)
+
+        self._mof_mixed_repr_norm = str(mixed_repr_norm).lower() if str(mixed_repr_norm).lower() else "none"
+        if self._mof_mixed_repr_norm not in ("none", "layernorm", "clamp"):
+            self._mof_mixed_repr_norm = "none"
+        self._mof_mixed_repr_norm_clamp = float(mixed_repr_norm_clamp)
+        if self._mof_mixed_repr_norm == "layernorm":
+            self.mof_mixed_repr_ln = nn.LayerNorm(h)
+        else:
+            self.mof_mixed_repr_ln = None
+
+        # Residual interpolation between baseline and MoF logits.
+        a0 = float(residual_alpha_init)
+        a0 = 0.0 if a0 < 0 else (1.0 if a0 > 1.0 else a0)
+        # store as logit so sigmoid gives alpha in (0,1)
+        init_logit = 0.0
+        if a0 > 0.0 and a0 < 1.0:
+            init_logit = float(math.log(a0 / (1.0 - a0)))
+        elif a0 >= 1.0:
+            init_logit = 20.0
+        self._mof_residual_alpha_learnable = bool(residual_alpha_learnable)
+        self.mof_residual_alpha_logit = nn.Parameter(torch.tensor(init_logit))
 
     def _mof_debug_print(
         self,
@@ -343,43 +377,87 @@ class _MoFBase:
         mix_level = str(getattr(self, "_mof_mix_level", "repr")).lower()
         expert_logits_for_debug: Optional[List[torch.Tensor]] = None
 
+        # Baseline path for residual interpolation: use projected concat representation.
+        baseline_repr = self.mof_proj_concat(torch.cat([cls_sent, cls_term], dim=-1))
+        baseline_logits = head_single(dropout(baseline_repr))
+
         if mix_level == "logit":
             # Logit-level mixing (ablation or backward comparison).
             expert_logits = [head_single(r) for r in repr_stack.unbind(dim=1)]
             logits_stack = torch.stack(expert_logits, dim=1)  # [B, E, C]
-            logits = torch.sum(logits_stack * weights.unsqueeze(-1), dim=1)
-
-            clamp_v = float(getattr(self, "_mof_logit_clamp", 0.0))
-            if clamp_v > 0:
-                logits = logits.clamp(min=-clamp_v, max=clamp_v)
+            logits_mof = torch.sum(logits_stack * weights.unsqueeze(-1), dim=1)
 
             if bool(getattr(self, "_mof_debug", False)):
                 expert_logits_for_debug = expert_logits
         else:
             # Representation-level mixing then shared head.
             mixed_repr = torch.sum(repr_stack * weights.unsqueeze(-1), dim=1)  # [B, H]
-            logits = head_single(dropout(mixed_repr))
 
-            clamp_v = float(getattr(self, "_mof_logit_clamp", 0.0))
-            if clamp_v > 0:
-                logits = logits.clamp(min=-clamp_v, max=clamp_v)
+            norm_mode = str(getattr(self, "_mof_mixed_repr_norm", "none")).lower()
+            if norm_mode == "layernorm" and getattr(self, "mof_mixed_repr_ln", None) is not None:
+                mixed_repr = self.mof_mixed_repr_ln(mixed_repr)
+            elif norm_mode == "clamp":
+                max_norm = float(getattr(self, "_mof_mixed_repr_norm_clamp", 0.0))
+                if max_norm > 0:
+                    norms = torch.linalg.vector_norm(mixed_repr.float(), ord=2, dim=-1, keepdim=True).clamp_min(1e-6)
+                    ratio = (max_norm / norms).clamp_max(1.0).to(dtype=mixed_repr.dtype)
+                    mixed_repr = mixed_repr * ratio
+
+            logits_mof = head_single(dropout(mixed_repr))
 
             if bool(getattr(self, "_mof_debug", False)):
                 expert_logits_for_debug = [head_single(r) for r in repr_stack.unbind(dim=1)]
+
+        # Residual interpolation between baseline and MoF logits.
+        alpha = torch.sigmoid(self.mof_residual_alpha_logit)
+        if not bool(getattr(self, "_mof_residual_alpha_learnable", True)):
+            alpha = alpha.detach()
+        logits = baseline_logits + alpha * (logits_mof - baseline_logits)
+
+        clamp_v = float(getattr(self, "_mof_logit_clamp", 0.0))
+        if clamp_v > 0:
+            logits = logits.clamp(min=-clamp_v, max=clamp_v)
 
         self._mof_debug_print(weights=weights, expert_logits=expert_logits_for_debug, final_logits=logits)
 
         out = self._compute_loss(logits, labels)
 
-        # Load balancing regularizer on router weights.
-        lb_coef = float(getattr(self, "_mof_lb_coef", 0.0))
-        if lb_coef > 0 and labels is not None:
-            p = weights.float().mean(dim=0)  # [E]
-            # Encourage uniform usage: E * sum(p^2) has minimum 1 when p is uniform.
-            lb_loss = p.pow(2).sum() * float(p.numel())
-            base_loss = _safe_get_loss(out)
-            if base_loss is not None:
-                out["loss"] = base_loss + (lb_coef * lb_loss.to(dtype=base_loss.dtype))
+        base_loss = _safe_get_loss(out)
+
+        if labels is not None and base_loss is not None:
+            reg = None
+
+            # Routing entropy regularizer. Minimize -entropy to encourage higher entropy.
+            ent_coef = float(getattr(self, "_mof_entropy_coef", 0.0))
+            if ent_coef > 0:
+                eps = 1e-9
+                w = weights.float().clamp_min(eps)
+                entropy = -(w * torch.log(w)).sum(dim=-1).mean()
+                ent_loss = (-entropy).to(dtype=base_loss.dtype)
+                reg = ent_coef * ent_loss if reg is None else (reg + ent_coef * ent_loss)
+
+            # Load balancing regularizer on router weights.
+            lb_coef = float(getattr(self, "_mof_lb_coef", 0.0))
+            if lb_coef > 0:
+                mode = str(getattr(self, "_mof_lb_mode", "l2")).lower()
+                E = int(weights.size(-1))
+
+                if mode == "switch":
+                    # Switch-style: combine importance and load (top1 usage).
+                    importance = weights.float().mean(dim=0)  # [E]
+                    top1 = torch.argmax(weights.float(), dim=-1)
+                    load = F.one_hot(top1, num_classes=E).float().mean(dim=0)  # [E]
+                    lb_loss = (importance * load).sum() * float(E)
+                else:
+                    # L2: encourage uniform usage: E * sum(p^2) has minimum 1 when p is uniform.
+                    p = weights.float().mean(dim=0)  # [E]
+                    lb_loss = p.pow(2).sum() * float(p.numel())
+
+                lb_loss = lb_loss.to(dtype=base_loss.dtype)
+                reg = lb_coef * lb_loss if reg is None else (reg + lb_coef * lb_loss)
+
+            if reg is not None:
+                out["loss"] = base_loss + reg
 
         return out
 
@@ -403,10 +481,16 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
         # new knobs
         mof_mix_level: str = "repr",
         mof_lb_coef: float = 0.0,
+        mof_lb_mode: str = "l2",
+        mof_entropy_coef: float = 0.0,
         mof_disable_expert_scaling: bool = False,
         mof_expert_norm_clamp: float = 0.0,
+        mof_mixed_repr_norm: str = "none",
+        mof_mixed_repr_norm_clamp: float = 0.0,
         mof_logit_clamp: float = 0.0,
         mof_router_temperature: float = 1.0,
+        mof_residual_alpha_init: float = 0.0,
+        mof_residual_alpha_learnable: bool = True,
     ) -> None:
         head_type_in = str(head_type).lower()
         base_head_type = "linear" if head_type_in == "mof" else str(head_type)
@@ -428,9 +512,15 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
             router_temperature=float(mof_router_temperature),
             mix_level=str(mof_mix_level),
             lb_coef=float(mof_lb_coef),
+            lb_mode=str(mof_lb_mode),
+            entropy_coef=float(mof_entropy_coef),
             disable_expert_scaling=bool(mof_disable_expert_scaling),
             expert_norm_clamp=float(mof_expert_norm_clamp),
+            mixed_repr_norm=str(mof_mixed_repr_norm),
+            mixed_repr_norm_clamp=float(mof_mixed_repr_norm_clamp),
             logit_clamp=float(mof_logit_clamp),
+            residual_alpha_init=float(mof_residual_alpha_init),
+            residual_alpha_learnable=bool(mof_residual_alpha_learnable),
         )
 
         self._mof_debug = bool(mof_debug)

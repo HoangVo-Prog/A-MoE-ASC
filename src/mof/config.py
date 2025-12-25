@@ -13,7 +13,13 @@ class TrainConfig(BaseTrainConfig):
     mof_experts: str = ""
     mof_mix_level: str = "repr"
     mof_lb_coef: float = 0.001
+    mof_lb_mode: str = "switch"
+    mof_entropy_coef: float = 0.001
     mof_router_temperature: float = 1.0
+    mof_mixed_repr_norm: str = "layernorm"
+    mof_mixed_repr_norm_clamp: float = 0.0
+    mof_residual_alpha_init: float = 0.1
+    mof_residual_alpha_learnable: int = 1
     mof_disable_expert_scaling: bool = False
     mof_expert_norm_clamp: float = 0.0
     mof_logit_clamp: float = 0.0
