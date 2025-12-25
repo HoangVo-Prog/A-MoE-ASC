@@ -95,9 +95,6 @@ def main(args) -> None:
         methods = _parse_str_list(getattr(args, "benchmark_methods", ""))
         if not methods:
             methods = FUSION_METHOD_CHOICES
-            
-        if cfg.head_type=="mof":
-            methods = ["mof"]
 
         seeds = _resolve_seeds_from_args(cfg, args)
 
@@ -116,7 +113,7 @@ def main(args) -> None:
             eval_model_fn=eval_model,
             train_full_multi_seed_then_test_fn=train_full_multi_seed_then_test_generic,
             maybe_freeze_encoder_fn=maybe_freeze_encoder,
-            trainloop_kwargs_factory=lambda cfg_, extra: {},
+            trainloop_kwargs_factory=lambda cfg_, extra: {'encoder_lr_scale': float(getattr(cfg_, 'encoder_lr_scale', 1.0))},
             extra={},  
         )
 

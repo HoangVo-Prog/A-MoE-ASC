@@ -11,6 +11,7 @@ from shared import BaseTrainConfig, _filter_config_kwargs
 class TrainConfig(BaseTrainConfig):
     # MoF
     mof_experts: str = ""
+    mof_baseline_fusion_method: str = "concat"
     mof_mix_level: str = "repr"
     mof_lb_coef: float = 0.001
     mof_lb_mode: str = "switch"
@@ -23,6 +24,9 @@ class TrainConfig(BaseTrainConfig):
     mof_disable_expert_scaling: bool = False
     mof_expert_norm_clamp: float = 0.0
     mof_logit_clamp: float = 0.0
+
+    # LR scaling for encoder after unfreeze
+    encoder_lr_scale: float = 0.1
 
     # MoF debug
     mof_debug: bool = False

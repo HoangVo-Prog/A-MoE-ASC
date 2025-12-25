@@ -10,8 +10,10 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report, con
 from torch.amp import autocast, GradScaler
 
 
-from shared import DEVICE, cleanup_cuda,_print_confusion_matrix
+from .utils import DEVICE, cleanup_cuda
 from .optim import build_optimizer_and_scheduler
+from .plotting import _print_confusion_matrix
+
 
 def set_encoder_trainable(
     model: nn.Module,
@@ -284,6 +286,7 @@ def run_training_loop(
         warmup_ratio=warmup_ratio,
         total_steps=steps_per_epoch * max(1, epochs),
         params=trainable_params(),
+        encoder_lr_scale=float(encoder_lr_scale),
         adamw_foreach=adamw_foreach,
         adamw_fused=adamw_fused,
     )
@@ -311,9 +314,6 @@ def run_training_loop(
         # Rebuild optimizer exactly when encoder becomes trainable
         if (not prev_trainable) and now_trainable:
             print("Rebuilding optimizer for unfrozen encoder params")
-            for i, g in enumerate(optimizer.param_groups):
-                print(f"[OPT] group={i} lr={g.get('lr')} n_params={len(g['params'])}")
-
             try:
                 del optimizer
                 del scheduler
@@ -328,7 +328,8 @@ def run_training_loop(
                 lr=lr,
                 warmup_ratio=warmup_ratio,
                 total_steps=remaining_steps,
-                params=trainable_params(),
+                params=None,
+                encoder_lr_scale=float(encoder_lr_scale),
                 adamw_foreach=adamw_foreach,
                 adamw_fused=adamw_fused,
             )

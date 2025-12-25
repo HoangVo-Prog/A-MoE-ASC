@@ -151,7 +151,10 @@ class _MoFBase:
         elif a0 >= 1.0:
             init_logit = 20.0
         self._mof_residual_alpha_learnable = bool(residual_alpha_learnable)
-        self.mof_residual_alpha_logit = nn.Parameter(torch.tensor(init_logit))
+        if self._mof_residual_alpha_learnable:
+            self.mof_residual_alpha_logit = nn.Parameter(torch.tensor(init_logit))
+        else:
+            self.register_buffer('mof_residual_alpha_logit', torch.tensor(init_logit))
 
     def _mof_debug_print(
         self,
@@ -377,9 +380,58 @@ class _MoFBase:
         mix_level = str(getattr(self, "_mof_mix_level", "repr")).lower()
         expert_logits_for_debug: Optional[List[torch.Tensor]] = None
 
-        # Baseline path for residual interpolation: use projected concat representation.
-        baseline_repr = self.mof_proj_concat(torch.cat([cls_sent, cls_term], dim=-1))
-        baseline_logits = head_single(dropout(baseline_repr))
+        # Baseline path for residual interpolation: compute logits using the same fusion logic as the baseline.
+        baseline_fusion = str(getattr(self, '_mof_baseline_fusion_method', 'concat')).lower().strip() or 'concat'
+
+        if baseline_fusion == 'sent':
+            baseline_logits = self.head_single(dropout(cls_sent))
+        elif baseline_fusion == 'term':
+            baseline_logits = self.head_single(dropout(cls_term))
+        elif baseline_fusion == 'concat':
+            baseline_logits = self.head_concat(dropout(torch.cat([cls_sent, cls_term], dim=-1)))
+        elif baseline_fusion == 'add':
+            baseline_logits = self.head_single(dropout(cls_sent + cls_term))
+        elif baseline_fusion == 'mul':
+            baseline_logits = self.head_single(dropout(cls_sent * cls_term))
+        elif baseline_fusion == 'cross':
+            q = out_term.last_hidden_state[:, 0:1, :]
+            kpm = attention_mask_sent.eq(0)
+            attn_out, _ = self.cross_attn(q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm)
+            baseline_logits = self.head_single(dropout(attn_out.squeeze(1)))
+        elif baseline_fusion == 'gated_concat':
+            g = torch.sigmoid(self.gate(torch.cat([cls_sent, cls_term], dim=-1)))
+            fused = g * cls_sent + (1.0 - g) * cls_term
+            baseline_logits = self.head_single(dropout(fused))
+        elif baseline_fusion == 'bilinear':
+            fused = self.bilinear_out(self.bilinear_proj_sent(cls_sent) * self.bilinear_proj_term(cls_term))
+            baseline_logits = self.head_single(dropout(fused))
+        elif baseline_fusion == 'coattn':
+            q_term = out_term.last_hidden_state[:, 0:1, :]
+            q_sent = out_sent.last_hidden_state[:, 0:1, :]
+            kpm_sent = attention_mask_sent.eq(0)
+            kpm_term = attention_mask_term.eq(0)
+            term_ctx, _ = self.coattn_term_to_sent(q_term, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_sent)
+            sent_ctx, _ = self.coattn_sent_to_term(q_sent, out_term.last_hidden_state, out_term.last_hidden_state, key_padding_mask=kpm_term)
+            baseline_logits = self.head_single(dropout(term_ctx.squeeze(1) + sent_ctx.squeeze(1)))
+        elif baseline_fusion == 'late_interaction':
+            sent_tok = F.normalize(out_sent.last_hidden_state, p=2, dim=-1)
+            term_tok = F.normalize(out_term.last_hidden_state, p=2, dim=-1)
+            sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))
+            if attention_mask_sent is not None:
+                mask = attention_mask_sent.unsqueeze(1).eq(0)
+                sim = sim.masked_fill(mask, -1e9)
+            max_sim = sim.max(dim=-1).values
+            if attention_mask_term is not None:
+                term_valid = attention_mask_term.float()
+                denom = term_valid.sum(dim=1).clamp_min(1.0)
+                pooled = (max_sim * term_valid).sum(dim=1) / denom
+            else:
+                pooled = max_sim.mean(dim=1)
+            cond = self.gate(torch.cat([cls_sent, cls_term], dim=-1))
+            fused = cond * pooled.unsqueeze(-1)
+            baseline_logits = self.head_single(dropout(fused))
+        else:
+            raise ValueError(f'Unsupported mof_baseline_fusion_method: {baseline_fusion}')
 
         if mix_level == "logit":
             # Logit-level mixing (ablation or backward comparison).
@@ -410,8 +462,6 @@ class _MoFBase:
 
         # Residual interpolation between baseline and MoF logits.
         alpha = torch.sigmoid(self.mof_residual_alpha_logit)
-        if not bool(getattr(self, "_mof_residual_alpha_learnable", True)):
-            alpha = alpha.detach()
         logits = baseline_logits + alpha * (logits_mof - baseline_logits)
 
         clamp_v = float(getattr(self, "_mof_logit_clamp", 0.0))
@@ -474,6 +524,7 @@ class MoFBertConcatClassifier(_MoFBase, BaseBertConcatClassifier):
         class_weights=None,
         focal_gamma: float = 2.0,
         mof_experts: Optional[List[str]] = None,
+        mof_baseline_fusion_method: str = "concat",
         mof_debug: bool = False,
         mof_debug_every: int = 200,
         mof_debug_max_batch: int = 1,
