@@ -69,12 +69,12 @@ python -m mof.runner \
   --mof_experts "$EXPERTS" \
   --mof_lb_mode switch \
   --mof_lb_coef 0.001 \
-  --mof_entropy_coef 0.001 \
+  --mof_entropy_coef 0.003 \
   --mof_residual_alpha_init 0.1 \
   --mof_residual_alpha_learnable 1 \
   --mof_mixed_repr_norm layernorm \
   --mof_mixed_repr_norm_clamp 5.0 \
-  --mof_expert_norm_clamp 5.0 \
+  --mof_expert_norm_clamp 3.0 \
   --mof_router_temperature 1.5 \
   --mof_debug \
   --encoder_lr_scale 0.1 \
