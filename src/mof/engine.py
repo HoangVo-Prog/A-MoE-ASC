@@ -10,9 +10,8 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report, con
 from torch.amp import autocast, GradScaler
 
 
-from .utils import DEVICE, cleanup_cuda
+from shared import DEVICE, cleanup_cuda, _print_confusion_matrix
 from .optim import build_optimizer_and_scheduler
-from .plotting import _print_confusion_matrix
 
 
 def set_encoder_trainable(
@@ -248,6 +247,7 @@ def run_training_loop(
     adamw_foreach: bool = False,
     adamw_fused: bool = False,
     max_grad_norm: Optional[float] = 1.0,
+    encoder_lr_scale=None,
     train_one_epoch_fn=train_one_epoch,
     eval_model_fn=eval_model,
     maybe_freeze_encoder_fn=maybe_freeze_encoder,
