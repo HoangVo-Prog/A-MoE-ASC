@@ -17,11 +17,12 @@ from shared import (
     _parse_str_list,
     _parse_int_list,
     eval_model,
-    run_training_loop,
     maybe_freeze_encoder,
     run_benchmark_kfold_plus_full,
     train_full_multi_seed_then_test_generic
 )
+
+from .engine import run_training_loop
 
 
 def _sha256_file(path: str) -> str:

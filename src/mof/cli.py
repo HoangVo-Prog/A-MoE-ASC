@@ -132,5 +132,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mof_debug_every", type=int, default=100)
     parser.add_argument("--mof_debug_max_batch", type=int, default=1)
     parser.add_argument("--mof_debug_max_experts", type=int, default=0)
+    parser.add_argument("--encoder_lr_scale", type=str, default=0.1)
 
     return parser.parse_args()
