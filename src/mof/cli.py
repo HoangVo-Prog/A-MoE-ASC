@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mof_logit_clamp", type=float, default=0.0)
 
     parser.add_argument("--mof_debug", action="store_true")
-    parser.add_argument("--mof_debug_every", type=int, default=200)
+    parser.add_argument("--mof_debug_every", type=int, default=100)
     parser.add_argument("--mof_debug_max_batch", type=int, default=1)
     parser.add_argument("--mof_debug_max_experts", type=int, default=0)
 
