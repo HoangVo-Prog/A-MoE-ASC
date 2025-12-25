@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-# =========================
-# Inputs
-# =========================
 LOSS_TYPE="${1:-ce}"
 DATASET_TYPE="${2:-laptop14}"
 EXPERTS="${3:-sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction}"
 
-# Only support these dataset types
 case "${DATASET_TYPE}" in
   laptop14|rest14)
     ;;
@@ -19,16 +15,9 @@ case "${DATASET_TYPE}" in
     ;;
 esac
 
-# =========================
-# Project root
-# =========================
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export PYTHONPATH="$ROOT_DIR/src"
 
-# =========================
-# Dataset-specific weights/gamma (ABSA 3-class)
-# Order: (Positive, Negative, Neutral)
-# =========================
 CLASS_WEIGHTS=""
 FOCAL_GAMMA=""
 
@@ -43,21 +32,14 @@ case "${DATASET_TYPE}" in
     ;;
 esac
 
-# =========================
-# Loss-specific flags
-# =========================
 LOSS_FLAGS="--loss_type ${LOSS_TYPE}"
-
 case "${LOSS_TYPE}" in
   ce)
-    # Plain CE
     ;;
   weighted_ce)
-    # Weighted CE uses dataset-specific alpha
     LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS}"
     ;;
   focal)
-    # Focal uses dataset-specific alpha and gamma
     LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS} --focal_gamma ${FOCAL_GAMMA}"
     ;;
   *)
@@ -67,32 +49,33 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-# =========================
-# MoF include sent/term flag (store_true)
-# =========================
-
-echo "▶ Running benchmark baseline with:"
+echo "▶ Running MoF with:"
 echo "  dataset_type           = ${DATASET_TYPE}"
 echo "  loss_type              = ${LOSS_TYPE}"
 echo "  loss_flags             = ${LOSS_FLAGS}"
-echo "  moe_experts            = ${EXPERTS}"
+echo "  mof_experts            = ${EXPERTS}"
 echo
 
-# =========================
-# Run
-# =========================
 python -m mof.runner \
   --locked_baseline \
   --benchmark_fusions \
   --num_seeds 3 \
   --output_dir "$ROOT_DIR/saved_model" \
-  --output_name phase1_locked_baseline \
+  --output_name phase1_locked_baseline_mof_stable \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --val_path   "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/val.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --head_type mof \
-  --mof_experts "$EXPERTS"\
+  --mof_experts "$EXPERTS" \
+  --mof_lb_mode switch \
   --mof_lb_coef 0.001 \
+  --mof_entropy_coef 0.001 \
+  --mof_residual_alpha_init 0.1 \
+  --mof_residual_alpha_learnable 1 \
+  --mof_mixed_repr_norm layernorm \
+  --mof_mixed_repr_norm_clamp 5.0 \
   --mof_expert_norm_clamp 5.0 \
+  --mof_router_temperature 1.5 \
   --mof_debug \
-  ${LOSS_FLAGS} \
+  --encoder_lr_scale 0.1 \
+  ${LOSS_FLAGS}
