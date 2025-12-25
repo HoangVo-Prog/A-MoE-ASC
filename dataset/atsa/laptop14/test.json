@@ -1020,6 +1020,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the only task that this computer would not be good enough for would be gaming, otherwise the integrated intel 4000 graphics work well for other tasks.",
+    "aspect": "gaming",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "i use it mostly for content creation (audio, video, photo editing) and its reliable.",
     "aspect": "content creation",
     "sentiment": "positive"
@@ -2415,6 +2420,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the sound as mentioned earlier isn't the best, but it can be solved with headphones.",
+    "aspect": "headphones",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "however, the experience was great since the os does not become unstable and the application will simply shutdown and reopen.",
     "aspect": "os",
     "sentiment": "positive"
@@ -2658,6 +2668,16 @@
     "sentence": "put a ssd and use a 21\" led screen, this set up is silky smooth!",
     "aspect": "set up",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "the case is now slightly larger than the previous generation, but the lack of an external power supply justifies the small increase in size.",
+    "aspect": "case",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the case is now slightly larger than the previous generation, but the lack of an external power supply justifies the small increase in size.",
+    "aspect": "external power supply",
+    "sentiment": "neutral"
   },
   {
     "sentence": "i had to buy a wireless mouse to go with it, as i am old school and hate the pad, but knew that before i bought it, now it works great, need to get adjusted to the key board, as i am used to a bigger one and pounding.",
