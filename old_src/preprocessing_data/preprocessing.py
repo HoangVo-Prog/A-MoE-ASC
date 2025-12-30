@@ -83,6 +83,9 @@ def main():
 
     # tuỳ chọn thêm: nếu bạn muốn chặn leakage do trùng sentence giữa train và test
     ap.add_argument("--dedup_train_vs_test", action="store_true")
+    ap.add_argument("--no_split_train_val", action="store_true",
+                help="If set, do not split train into train/val. Write val.json as empty list.")
+
 
     args = ap.parse_args()
 
@@ -108,8 +111,20 @@ def main():
 
     key_stats(train_clean, "train_clean")
     key_stats(test_clean, "test_clean")
+    
+    # 2.x) Optional: do not split train/val
+    if args.no_split_train_val:
+        write_json(out_dir / "train.json", train_clean)
+        write_json(out_dir / "val.json", [])
+        write_json(out_dir / "test.json", test_clean)
 
-    # 2) Build sentence -> polarity list để group split theo sentence
+        print("Done (no train/val split)")
+        key_stats(train_clean, "train_out")
+        key_stats([], "val_out")
+        key_stats(test_clean, "test_out")
+        return
+
+    # 3) Build sentence -> polarity list để group split theo sentence
     sent2pols = defaultdict(list)
     for r in train_clean:
         sent = get_sentence(r)
@@ -133,7 +148,7 @@ def main():
     strata_counts = Counter(strata)
     print("Strata counts (top):", strata_counts.most_common(12))
 
-    # 3) Stratify nếu đủ điều kiện
+    # 4) Stratify nếu đủ điều kiện
     can_stratify = (0.0 < args.val_ratio < 1.0) and (len(sentences) >= 2) and (min(strata_counts.values()) >= 2)
 
     if len(sentences) == 1:

@@ -1,23 +1,7 @@
-import numpy as np
 import torch
 import gc
+import numpy as np
 from dataclasses import asdict, fields
-from typing import Any
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-FUSION_METHOD_CHOICES = [
-    "sent",
-    "term",
-    "concat",
-    "add",
-    "mul",
-    "cross",
-    "gated_concat",
-    "bilinear",
-    "coattn",
-    "late_interaction",
-]
 
 
 def cleanup_cuda(*objs):
@@ -76,7 +60,8 @@ def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
         "cm_std_normalized": std_norm.tolist(),
     }
 
-def _cfg_to_dict(cfg: Any) -> dict:
+
+def _cfg_to_dict(cfg) -> dict:
     if hasattr(cfg, "to_dict") and callable(getattr(cfg, "to_dict")):
         return cfg.to_dict()
     try:
@@ -84,9 +69,11 @@ def _cfg_to_dict(cfg: Any) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
+
 def _filter_config_kwargs(d: dict, config) -> dict:
     allowed = {f.name for f in fields(config)}
     return {k: v for k, v in d.items() if k in allowed}
+
 
 def _safe_float(x) -> float:
     if x is None:

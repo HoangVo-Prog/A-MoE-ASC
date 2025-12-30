@@ -20,6 +20,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "certainly not the best sushi in new york, however, it is always fresh, and the place is very clean, sterile.",
+    "aspect": "place",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i trust the people at go sushi, it never disappoints.",
     "aspect": "people",
     "sentiment": "positive"
@@ -567,6 +572,16 @@
   {
     "sentence": "i was pleasently surprised at the taste.",
     "aspect": "taste",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "a nice space, as long as it doesn't get too crowded and a singleminded devotion to its chosen cuisine make mare a great choice for seafood lovers.",
+    "aspect": "seafood",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "a nice space, as long as it doesn't get too crowded and a singleminded devotion to its chosen cuisine make mare a great choice for seafood lovers.",
+    "aspect": "cuisine",
     "sentiment": "positive"
   },
   {
@@ -4005,6 +4020,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the halibut cheek appetizer came with a generous portion of foie gras, but that's about the only positive thing i can say about the meal.",
+    "aspect": "halibut cheek appetizer",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the halibut cheek appetizer came with a generous portion of foie gras, but that's about the only positive thing i can say about the meal.",
+    "aspect": "portion of foie gras",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "food is excellent and they also have empenadas and plaintains which are good for an afternoon snack.",
     "aspect": "food",
     "sentiment": "positive"
@@ -4745,6 +4770,16 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "good cake but: it was not the best cake i've ever had, and definately not worth standing outside on the sidewalk being herded like cattle by indifferent and overworked employees.",
+    "aspect": "cake",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "good cake but: it was not the best cake i've ever had, and definately not worth standing outside on the sidewalk being herded like cattle by indifferent and overworked employees.",
+    "aspect": "employees",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the closest that i got was the cherry marscapone, but they were out of it that day.",
     "aspect": "cherry marscapone",
     "sentiment": "neutral"
@@ -5320,6 +5355,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the service is great (maybe even borderline nagging but at least you get attention), the desserts are excellent and the coffee is so very good...",
+    "aspect": "desserts",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the service is great (maybe even borderline nagging but at least you get attention), the desserts are excellent and the coffee is so very good...",
+    "aspect": "coffee",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "they are served on focacchia bread and are to die for.",
     "aspect": "served",
     "sentiment": "neutral"
@@ -5337,6 +5382,36 @@
   {
     "sentence": "while the smoothies are a little big for me, the fresh juices are the best i have ever had!",
     "aspect": "fresh juices",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the food is just okay, and it's almost not worth going unless you're getting the pialla, which is the only dish that's really good.",
+    "aspect": "pialla",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the food is just okay, and it's almost not worth going unless you're getting the pialla, which is the only dish that's really good.",
+    "aspect": "dish",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the guac is fresh, yet lacking flavor, we like to add our fresh salsa into it.",
+    "aspect": "fresh salsa",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the guac is fresh, yet lacking flavor, we like to add our fresh salsa into it.",
+    "aspect": "flavor",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the new menu has a few creative items,they were smart enough to keep some of the old favorites (but they raised the prices), the staff is friendly most of the time, but i must agree with the person that wrote about their favorite words: no, can't, sorry..., boy, they won't bend the rules for anyone.",
+    "aspect": "prices",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the new menu has a few creative items,they were smart enough to keep some of the old favorites (but they raised the prices), the staff is friendly most of the time, but i must agree with the person that wrote about their favorite words: no, can't, sorry..., boy, they won't bend the rules for anyone.",
+    "aspect": "new menu",
     "sentiment": "positive"
   },
   {
