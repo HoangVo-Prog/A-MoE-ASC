@@ -76,11 +76,11 @@ def _cfg_to_dict(cfg) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
-def _dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
+def dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
     return {f.name: getattr(obj, f.name) for f in fields(obj)}
 
 
-def _to_dict(d: Any) -> dict:
+def to_dict(d: Any) -> dict:
     if is_dataclass(d) and not isinstance(d, type):
         return _dataclass_to_dict_shallow(d)
     if isinstance(d, argparse.Namespace):
@@ -183,6 +183,7 @@ def filter_config_kwargs(
                     continue
 
     return out
+
 def _safe_float(x) -> float:
     if x is None:
         return float("nan")

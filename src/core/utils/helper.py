@@ -1,7 +1,7 @@
 import torch
 import os
 import numpy as np
-import importlib
+from typing import fields
 import random
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
@@ -9,10 +9,36 @@ from torch.utils.data import DataLoader
 from src.core.config import Config
 from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
-from src.core.utils.general import filter_config_kwargs
+from src.core.utils.general import to_dict, infer_store_true_dests
+
+
+
+
+
+def get_arg_parser_parameters(
+    args,
+    config_cls,
+    *,
+    arg_parser=None,
+    drop_false_store_true=True,
+):
+    raw = to_dict(args)
+
+    # xử lý store_true: False nghĩa là không truyền flag
+    if drop_false_store_true and arg_parser is not None:
+        store_true_dests = infer_store_true_dests(arg_parser)
+        for k in list(raw.keys()):
+            if k in store_true_dests and raw[k] is False:
+                raw.pop(k)
+
+    # chỉ giữ các field thuộc Config
+    allowed = {f.name for f in fields(config_cls)}
+    return {k: v for k, v in raw.items() if k in allowed}
+
+
 
 def get_config(args=parse_args()):
-    return Config(**filter_config_kwargs(args, Config))
+    return Config(**get_arg_parser_parameters(args, Config))
 
 
 def get_model(cfg):
