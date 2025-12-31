@@ -76,7 +76,6 @@ echo
 # =========================
 python -m main \
   --model_name bert-base-uncased \
-  --benchmark_fusions \
   --num_seeds 3 \
   --train_full_only \
   --output_dir "$ROOT_DIR/saved_model" \
