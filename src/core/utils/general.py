@@ -1,7 +1,8 @@
 import torch
 import gc
 import numpy as np
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, is_dataclass
+from typing import Mapping
 from sklearn.metrics import accuracy_score, f1_score
 
 from .const import DEVICE
@@ -73,9 +74,25 @@ def _cfg_to_dict(cfg) -> dict:
         return dict(getattr(cfg, "__dict__", {}))
 
 
-def filter_config_kwargs(d: dict, config) -> dict:
-    allowed = {f.name for f in fields(config)}
-    return {k: v for k, v in d.items() if k in allowed}
+def filter_config_kwargs(d, config_cls) -> dict:
+    cls = config_cls if isinstance(config_cls, type) else type(config_cls)
+    if not is_dataclass(cls):
+        raise TypeError(f"config_cls must be a dataclass type/instance, got {cls}")
+
+    out = {}
+    for f in fields(cls):
+        if f.name not in d:
+            continue
+        v = d[f.name]
+
+        # nested dataclass
+        ftype = f.type
+        if is_dataclass(ftype) and isinstance(v, Mapping):
+            out[f.name] = filter_config_kwargs(v, ftype)
+        else:
+            out[f.name] = v
+
+    return out
 
 
 def _safe_float(x) -> float:
