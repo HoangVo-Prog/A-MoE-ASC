@@ -44,3 +44,4 @@ class BaseTrainConfig:
     focal_gamma: float = 2.0
     
     mode: str = "BaseModel"  # "BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" 
+    num_labels: int = 3

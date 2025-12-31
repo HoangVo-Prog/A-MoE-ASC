@@ -22,7 +22,7 @@ from .engine import run_training_loop, eval_model
 from .train import train_multi_seed
 
 
-def run_benchmark_fusion(config, methods):
+def run_benchmark_fusion(config):
     os.makedirs(config.base.output_dir, exist_ok=True)
     
     tokenizer = get_tokenizer(config)
@@ -37,6 +37,8 @@ def run_benchmark_fusion(config, methods):
     
     kfold_train_set = get_kfold_dataset(config, tokenizer)
     full_train_dataloader = get_dataloader(config, train_set=full_train_set)
+    
+    methods = config.base.benchmark_methods
     
     all_results = {
         "methods": methods,

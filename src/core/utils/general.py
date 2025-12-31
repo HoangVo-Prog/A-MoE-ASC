@@ -4,7 +4,7 @@ import gc
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from dataclasses import asdict, fields, is_dataclass
-from typing import Any, Mapping, Dict
+from typing import Any, Dict, Iterable, Optional, Mapping
 import argparse
 import inspect
 
@@ -77,27 +77,35 @@ def _cfg_to_dict(cfg) -> dict:
         return dict(getattr(cfg, "__dict__", {}))
 
 def _dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
-    # giữ nguyên nested dataclass objects (không asdict)
     return {f.name: getattr(obj, f.name) for f in fields(obj)}
 
 
 def _to_dict(d: Any) -> dict:
-    # dataclass instance (shallow)
     if is_dataclass(d) and not isinstance(d, type):
         return _dataclass_to_dict_shallow(d)
-
-    # argparse.Namespace
     if isinstance(d, argparse.Namespace):
         return vars(d)
-
-    # Mapping
     if isinstance(d, Mapping):
         return dict(d)
-
     raise TypeError(f"Unsupported input type: {type(d)}")
 
 
-def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
+def _get_attr_or_key(obj: Any, key: str) -> Any:
+    if obj is None:
+        raise KeyError(key)
+    if isinstance(obj, Mapping) and key in obj:
+        return obj[key]
+    if hasattr(obj, key):
+        return getattr(obj, key)
+    raise KeyError(key)
+
+
+def filter_config_kwargs(
+    d: Any,
+    config_or_model: Any,
+    *,
+    fallback_sources: Optional[Iterable[Any]] = None,
+) -> dict:
     raw = _to_dict(d)
 
     # Case A: dataclass schema
@@ -115,8 +123,26 @@ def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
         return raw
 
     allowed = {k for k in sig.parameters.keys() if k != "self"}
-    return {k: v for k, v in raw.items() if k in allowed}
 
+    out = {}
+    # 1) ưu tiên lấy trực tiếp từ raw
+    for k in allowed:
+        if k in raw:
+            out[k] = raw[k]
+
+    # 2) nếu thiếu, thử lấy từ fallback_sources (ví dụ cfg.base/cfg.moe/cfg.kfold)
+    if fallback_sources:
+        for k in allowed:
+            if k in out:
+                continue
+            for src in fallback_sources:
+                try:
+                    out[k] = _get_attr_or_key(src, k)
+                    break
+                except KeyError:
+                    continue
+
+    return out
 def _safe_float(x) -> float:
     if x is None:
         return float("nan")

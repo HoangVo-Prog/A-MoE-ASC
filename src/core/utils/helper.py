@@ -18,7 +18,14 @@ def get_config(args=parse_args()):
 def get_model(cfg):
     mode = cfg.base.mode
     ModelCls = getattr(__import__("src.models", fromlist=[mode]), mode)
-    return ModelCls(**filter_config_kwargs(cfg, ModelCls))
+
+    kwargs = filter_config_kwargs(
+        cfg,
+        ModelCls,
+        fallback_sources=[cfg.base, cfg.moe, cfg.kfold],
+    )
+    return ModelCls(**kwargs)
+
 
 
 def get_kfold_dataset(cfg, tokenizer):

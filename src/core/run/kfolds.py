@@ -35,7 +35,6 @@ def train_kfold(config, methods):
     num_classes = len(label2id)
     
     kfold_train_set = get_kfold_dataset(config, tokenizer)
-    full_train_dataloader = get_dataloader(config, train_set=full_train_set)
     
     all_results = {
         "methods": methods,
