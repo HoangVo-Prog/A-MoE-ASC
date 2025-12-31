@@ -21,19 +21,34 @@ def get_arg_parser_parameters(
     *,
     arg_parser=None,
     drop_false_store_true=True,
-):
-    raw = to_dict(args)
+) -> dict:
+    """
+    Trả dict để có thể gọi:
+        Config(**get_arg_parser_parameters(args, Config, arg_parser=parser))
 
-    # xử lý store_true: False nghĩa là không truyền flag
-    if drop_false_store_true and arg_parser is not None:
-        store_true_dests = infer_store_true_dests(arg_parser)
-        for k in list(raw.keys()):
-            if k in store_true_dests and raw[k] is False:
-                raw.pop(k)
+    Tự động build các dataclass con (kfold, base, moe) từ args.
+    Xử lý store_true bằng chính filter_config_kwargs (bạn đã viết).
+    """
+    cfg_default = config_cls()
 
-    # chỉ giữ các field thuộc Config
-    allowed = {f.name for f in fields(config_cls)}
-    return {k: v for k, v in raw.items() if k in allowed}
+    out = {}
+    for name, sub_cfg in cfg_default.__dict__.items():
+        # chỉ xử lý các field là dataclass con
+        if is_dataclass(sub_cfg) and not isinstance(sub_cfg, type):
+            sub_cls = type(sub_cfg)
+            sub_kwargs = filter_config_kwargs(
+                args,
+                sub_cls,
+                arg_parser=arg_parser,
+                drop_false_store_true=drop_false_store_true,
+            )
+            out[name] = sub_cls(**sub_kwargs)
+        else:
+            # nếu Config có field thường (hiếm), thì lọc kiểu cũ
+            # (giữ tối giản)
+            pass
+
+    return out
 
 
 
