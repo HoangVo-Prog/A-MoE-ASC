@@ -3,7 +3,7 @@ import json
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
-from src.utils.helper import (
+from src.core.utils.helper import (
     get_tokenizer,
     get_dataset,
     get_dataloader,
@@ -11,7 +11,7 @@ from src.utils.helper import (
     get_model,
     set_seed,
 )
-from src.utils.general import (
+from src.core.utils.general import (
     cleanup_cuda,
     collect_test_logits,
     mean_std,
