@@ -9,9 +9,7 @@ from torch.utils.data import DataLoader
 from src.core.config import Config
 from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
-from src.core.utils.general import to_dict, infer_store_true_dests, filter_config_kwargs
-
-
+from src.core.utils.general import filter_config_kwargs
 
 
 
@@ -63,7 +61,6 @@ def get_model_parameter(
     - fallback_sources dùng để lấy param bị thiếu từ cfg.base/cfg.moe/cfg.kfold.
     """
     if fallback_sources is None:
-        # default theo style bạn đang dùng
         fallback_sources = [getattr(cfg, "base", None), getattr(cfg, "moe", None), getattr(cfg, "kfold", None)]
         fallback_sources = [x for x in fallback_sources if x is not None]
 
