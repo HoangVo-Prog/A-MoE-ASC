@@ -31,7 +31,7 @@ def _parse_int_list(csv: str) -> list[int]:
     return [int(p.strip()) for p in s.split(",") if p.strip()]
 
 
-def _parse_str_list(csv: str) -> list[str]:
+def parse_str_list(csv: str) -> list[str]:
     s = (csv or "").strip()
     if not s:
         return []
