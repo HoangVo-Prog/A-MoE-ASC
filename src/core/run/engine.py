@@ -361,17 +361,6 @@ def run_training_loop(
         )
         
         if moe:
-            history["train_loss"].append(float(train_metrics["loss"]))
-            history["train_f1"].append(float(train_metrics["f1"]))
-            
-            log = (
-                f"Train loss {train_metrics['loss']:.4f} "
-                f"F1 {train_metrics['f1']:.4f} "
-                f"acc {train_metrics['acc']:.4f}"
-            )
-            log += ("\n")
-
-        else:
             history["train_total_loss"].append(train_metrics["loss_total"])
             history["train_main_loss"].append(train_metrics["loss_main"])
             history["train_lambda_loss"].append(train_metrics["loss_lambda"])
@@ -387,6 +376,17 @@ def run_training_loop(
             )
             log += ("\n")
 
+        else: 
+            history["train_loss"].append(float(train_metrics["loss"]))
+            history["train_f1"].append(float(train_metrics["f1"]))
+            
+            log = (
+                f"Train loss {train_metrics['loss']:.4f} "
+                f"F1 {train_metrics['f1']:.4f} "
+                f"acc {train_metrics['acc']:.4f}"
+            )
+            log += ("\n")
+            
         if val_loader is not None:
             print("Validation Confusion Matrix")
             val_metrics = eval_model(
