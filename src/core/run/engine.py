@@ -44,6 +44,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
     Returns: True if encoder is in frozen phase, else False.
     """
     fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
+    print("freeze_epochs =", fe)
     if fe <= 0:
         _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=False)
@@ -65,9 +66,11 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
         return True
 
     # unfreeze
+    
     _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
     _set_encoder_train_eval(model, frozen=False)
     return False
+
 
 def train_one_epoch(
     *,
@@ -260,8 +263,6 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    in_freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
-
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
         lr=cfg.base.lr,
@@ -278,13 +279,11 @@ def run_training_loop(
         print(f"{tag}Epoch {epoch + 1}/{cfg.base.epochs}")
 
         # --- Apply freeze policy for this epoch ---
-        maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
+        freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
+        print("Encoder frozen:", freeze)
 
         if cfg.base.freeze_epochs > 0 and epoch < cfg.base.freeze_epochs:
-            if str(cfg.base.mode).strip() == "MoEFFN" and (not bool(cfg.base.freeze_moe)):
-                print(f"Encoder base frozen, moe_ffn trainable (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
-            else:
-                print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
+            print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
 
         # --- Rebuild optimizer exactly at unfreeze boundary ---
         if cfg.base.freeze_epochs > 0 and epoch == cfg.base.freeze_epochs:
