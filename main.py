@@ -1,6 +1,9 @@
 import os
 from src.core.utils.helper import (
     get_config,  
+    get_tokenizer,
+    get_dataset,
+    get_dataloader,
     set_seed,
 )
 from src.core.utils.const import FUSION_METHOD_CHOICES
@@ -21,15 +24,41 @@ def main():
         print("Benchmarking fusion methods completed.")
         return
     
+    os.makedirs(config.base.output_dir, exist_ok=True)
+    
+    tokenizer = get_tokenizer(config)
+    full_train_set, test_set = get_dataset(config, tokenizer)
+    seeds = [config.kfold.seed + i for i in range(config.base.num_seeds)]
+    
+    label2id = full_train_set.label2id
+    id2label = {v: k for k, v in label2id.items()}
+    
+    full_train_dataloader, _, test_loader = get_dataloader(
+        config,
+        train_set=full_train_set,
+        test_set=test_set,
+    )
+    
     # Train full only with multi-seed
     if config.base.train_full_only:
-        train_multi_seed(config)
+        train_multi_seed(
+            config,
+            methods=config.base.fusion_method,
+            full_train_dataloader=full_train_dataloader,
+            test_loader=test_loader,
+            label2id=label2id,
+            id2label=id2label,
+            seeds=seeds,
+            print_cf_matrix=False,
+            do_ensemble_logits=config.base.do_ensemble_logits,
+            verbose_ensemble_report=False,
+        )
         print("Training with multiple seeds completed.")
         return
         
     
     # Train with k-fold cross validation 
-    train_kfold(config, methods=config.base.fusion_methods)
+    train_kfold(config, methods=config.base.fusion_method)
     print("Training with k-fold cross validation")
 
 
