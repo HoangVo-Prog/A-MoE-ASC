@@ -213,8 +213,9 @@ class MoEHead(BaseModel):
             loss_type=loss_type,
             class_weights=class_weights,
             focal_gamma=focal_gamma,
-            aux_loss_weight=aux_loss_weight,
         )
+        
+        self.aux_loss_weight=aux_loss_weight,
 
         cfg = getattr(self.encoder, "config", None)
         hidden_size = int(getattr(cfg, "hidden_size"))

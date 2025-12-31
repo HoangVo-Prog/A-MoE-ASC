@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
 
     # MoE options
     parser.add_argument("--moe_num_experts", type=int, default=8)
-    parser.add_argument("--moe_top_k", type=int, default=1)
+    parser.add_argument("--moe_top_k", type=int, default=2)
     parser.add_argument("--aux_loss_weight", type=float, default=0.01)
 
     parser.add_argument("--freeze_moe", action="store_true")
@@ -107,9 +107,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step_print_moe", type=float, default=100)
     parser.add_argument("--capacity_factor", type=float, default=None)
     
-    parser.add_argument("--no_amp", action="store_true") # TODO: Check logic
-    parser.add_argument("--adamw_foreach", action="store_true") # TODO: Check logic
-    parser.add_argument("--adamw_fused", action="store_true") # TODO: Check logic
+    parser.add_argument("--no_amp", action="store_true")
+    parser.add_argument("--adamw_foreach", action="store_true") 
+    parser.add_argument("--adamw_fused", action="store_true") 
 
     
     # MoE FFN
