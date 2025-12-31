@@ -261,7 +261,7 @@ def run_training_loop(
         return [p for p in model.parameters() if p.requires_grad]
 
     # Ensure correct freeze state before building phase-1 optimizer
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=cfg.freeze_epochs, freeze_moe=cfg.base.freeze_moe)
+    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=cfg.base.freeze_epochs, freeze_moe=cfg.base.freeze_moe)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
