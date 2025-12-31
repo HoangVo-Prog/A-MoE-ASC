@@ -22,18 +22,10 @@ def get_arg_parser_parameters(
     arg_parser=None,
     drop_false_store_true=True,
 ) -> dict:
-    """
-    Trả dict để có thể gọi:
-        Config(**get_arg_parser_parameters(args, Config, arg_parser=parser))
-
-    Tự động build các dataclass con (kfold, base, moe) từ args.
-    Xử lý store_true bằng chính filter_config_kwargs (bạn đã viết).
-    """
     cfg_default = config_cls()
 
     out = {}
     for name, sub_cfg in cfg_default.__dict__.items():
-        # chỉ xử lý các field là dataclass con
         if is_dataclass(sub_cfg) and not isinstance(sub_cfg, type):
             sub_cls = type(sub_cfg)
             sub_kwargs = filter_config_kwargs(
@@ -44,8 +36,6 @@ def get_arg_parser_parameters(
             )
             out[name] = sub_cls(**sub_kwargs)
         else:
-            # nếu Config có field thường (hiếm), thì lọc kiểu cũ
-            # (giữ tối giản)
             pass
 
     return out
@@ -53,15 +43,43 @@ def get_arg_parser_parameters(
 
 
 def get_config(args=parse_args()):
-    print("Parsed arguments:", args)
     return Config(**get_arg_parser_parameters(args, Config))
+
+
+def get_model_parameter(
+    cfg,
+    model_cls_or_callable,
+    *,
+    fallback_sourcessources,
+) -> dict:
+    """
+    Trả kwargs để khởi tạo model từ cfg theo signature của model.
+
+    Usage:
+        kwargs = get_model_parameter(cfg, ModelCls, fallback_sources=[cfg.base, cfg.moe, cfg.kfold])
+        model = ModelCls(**kwargs)
+
+    Ghi chú:
+    - cfg có thể là dataclass (Config) hoặc mapping/namespace tùy _to_dict hỗ trợ.
+    - fallback_sources dùng để lấy param bị thiếu từ cfg.base/cfg.moe/cfg.kfold.
+    """
+    if fallback_sources is None:
+        # default theo style bạn đang dùng
+        fallback_sources = [getattr(cfg, "base", None), getattr(cfg, "moe", None), getattr(cfg, "kfold", None)]
+        fallback_sources = [x for x in fallback_sources if x is not None]
+
+    return filter_config_kwargs(
+        cfg,
+        model_cls_or_callable,
+        fallback_sources=fallback_sources,
+    )
 
 
 def get_model(cfg):
     mode = cfg.base.mode
     ModelCls = getattr(__import__("src.models", fromlist=[mode]), mode)
 
-    kwargs = filter_config_kwargs(
+    kwargs = get_model_parameter(
         cfg,
         ModelCls,
         fallback_sources=[cfg.base, cfg.moe, cfg.kfold],
