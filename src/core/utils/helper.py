@@ -10,7 +10,7 @@ from src.core.config import Config
 from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
 from src.core.utils.general import filter_config_kwargs
-
+from src.core.utils.const import DEVICE
 
 
 def get_arg_parser_parameters(
@@ -80,7 +80,7 @@ def get_model(cfg):
         ModelCls,
         fallback_sources=[cfg.base, cfg.moe, cfg.kfold],
     )
-    return ModelCls(**kwargs)
+    return ModelCls(**kwargs).to(DEVICE)
 
 
 
