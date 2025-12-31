@@ -1,9 +1,11 @@
+from __future__ import annotations
 import torch
 import gc
 import numpy as np
-from dataclasses import asdict, fields, is_dataclass
-from typing import Mapping
 from sklearn.metrics import accuracy_score, f1_score
+from dataclasses import asdict, fields, is_dataclass
+from typing import Any, Mapping
+import argparse
 
 from .const import DEVICE
 
@@ -73,26 +75,68 @@ def _cfg_to_dict(cfg) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
+def _to_dict(d: Any) -> dict:
+    # dataclass instance
+    if is_dataclass(d) and not isinstance(d, type):
+        return asdict(d)
+    # argparse Namespace
+    if isinstance(d, argparse.Namespace):
+        return vars(d)
+    # plain dict or mapping
+    if isinstance(d, Mapping):
+        return dict(d)
+    raise TypeError(f"Unsupported input type for config kwargs: {type(d)}")
 
-def filter_config_kwargs(d, config_cls) -> dict:
+def _unflatten(d: Mapping[str, Any], sep: str = ".") -> dict:
+    """
+    Convert {'base.lr':1e-5, 'kfold.k':5} -> {'base':{'lr':...}, 'kfold':{'k':...}}
+    If no sep in keys, returns shallow copy.
+    """
+    out: dict = {}
+    for k, v in d.items():
+        if not isinstance(k, str) or sep not in k:
+            out[k] = v
+            continue
+        cur = out
+        parts = k.split(sep)
+        for p in parts[:-1]:
+            nxt = cur.get(p)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cur[p] = nxt
+            cur = nxt
+        cur[parts[-1]] = v
+    return out
+
+def filter_config_kwargs(d: Any, config_cls: Any, *, allow_dot_keys: bool = True, sep: str = ".") -> dict:
+    """
+    Filter input (cfg dataclass / dict / argparse Namespace) by dataclass schema (config_cls).
+    Keeps only fields defined in config_cls, and recursively filters nested dataclasses.
+    Supports dot-keys like 'base.lr' if allow_dot_keys=True.
+    """
     cls = config_cls if isinstance(config_cls, type) else type(config_cls)
     if not is_dataclass(cls):
         raise TypeError(f"config_cls must be a dataclass type/instance, got {cls}")
 
-    out = {}
-    for f in fields(cls):
-        if f.name not in d:
-            continue
-        v = d[f.name]
+    raw = _to_dict(d)
+    if allow_dot_keys:
+        raw = _unflatten(raw, sep=sep)
 
-        # nested dataclass
+    out: dict = {}
+    for f in fields(cls):
+        if f.name not in raw:
+            continue
+        v = raw[f.name]
+
+        # nested dataclass field + input value is dict
         ftype = f.type
         if is_dataclass(ftype) and isinstance(v, Mapping):
-            out[f.name] = filter_config_kwargs(v, ftype)
+            out[f.name] = filter_config_kwargs(v, ftype, allow_dot_keys=allow_dot_keys, sep=sep)
         else:
             out[f.name] = v
 
     return out
+
 
 
 def _safe_float(x) -> float:

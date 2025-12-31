@@ -1,6 +1,7 @@
 import torch
 import os
 import numpy as np
+import importlib
 import random
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
@@ -77,7 +78,8 @@ def get_tokenizer(cfg):
     return tokenizer
 
 def get_model(cfg):
-    return getattr(__import__("src.models", fromlist=[cfg.base.mode]), cfg.base.mode)(**filter_config_kwargs(cfg))
+    model = getattr(__import__("src.models", fromlist=[cfg.base.mode]), cfg.base.mode)
+    return model(**filter_config_kwargs(cfg, model))
 
 
 def set_seed(seed: int = 13):
