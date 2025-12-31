@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from src.core.config import BaseTrainConfig
+from src.core.config.base import BaseTrainConfig
 
 
 @dataclass
