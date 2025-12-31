@@ -49,6 +49,7 @@ def get_config(args=parse_args()):
 def get_model_parameter(
     cfg,
     model_cls_or_callable,
+    fallback_sources,
 ) -> dict:
     """
     Trả kwargs để khởi tạo model từ cfg theo signature của model.
@@ -80,6 +81,7 @@ def get_model(cfg):
     kwargs = get_model_parameter(
         cfg,
         ModelCls,
+        fallback_sources=[cfg.base, cfg.moe, cfg.kfold],
     )
     return ModelCls(**kwargs)
 
