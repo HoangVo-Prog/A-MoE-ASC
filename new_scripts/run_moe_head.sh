@@ -66,7 +66,7 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running moe ffn with:"
+echo "▶ Running moe head with:"
 echo "  dataset_type = ${DATASET_TYPE}"
 echo "  loss_type    = ${LOSS_TYPE}"
 echo "  loss_flags   = ${LOSS_FLAGS}"
@@ -75,7 +75,7 @@ echo
 # Run
 # =========================
 python -m main \
-  --mode MoEFFN \
+  --mode MoEHead \
   --model_name bert-base-uncased \
   --benchmark_fusions \
   --num_seeds 3 \

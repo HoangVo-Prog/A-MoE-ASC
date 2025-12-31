@@ -44,7 +44,7 @@ class BaseTrainConfig:
     class_weights: Optional[Sequence[float]] = None
     focal_gamma: float = 2.0
     
-    mode: str = "BaseModel"  # "BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" 
+    mode: str = "BaseModel"  # "BaseModel","MoEFFN", "MoEHead", "MoESkconnection", "MoF" 
     num_labels: int = 3
     
     max_grad_norm: float = 1.0

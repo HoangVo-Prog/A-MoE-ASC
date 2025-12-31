@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     # MoE FFN
     parser.add_argument(
         "--mode", 
-        choices=["BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" ],
+        choices=["BaseModel","MoEFFN", "MoEHead", "MoESkconnection", "MoF" ],
         default="BaseModel"
     )
     

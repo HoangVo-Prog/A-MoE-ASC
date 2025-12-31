@@ -26,10 +26,10 @@ class MoeBaseTrainConfig(BaseTrainConfig):
 class MoEConfig:
     mode: str = "moe_head"  # "moe_ffn", "moe_head", "multi_moe_head", "moe_skconnection", "mof"    
     num_experts: int = 8
-    moe_top_k: int = 1
-    router_bias: bool = True # TODO: Check logic
-    router_jitter: float = 0.05 # TODO: Check logic
-    capacity_factor = None # TODO: Check logic
+    moe_top_k: int = 2
+    router_bias: bool = True
+    router_jitter: float = 0.05 
+    capacity_factor = None 
     route_mask_pad_tokens: bool = False 
     
     # Multi Moe Head 
