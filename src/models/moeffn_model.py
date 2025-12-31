@@ -447,4 +447,8 @@ class MoEFFN(BaseModel):
                 f"(imb={imbalance:.1f}) | "
                 f"top: {top_pairs}"
             )
+            
+        moe = getattr(self.encoder, "moe_ffn", None)
+        cur_k = getattr(moe, "moe_top_k", None)
+        print(f"[MoE] Current moe_top_k={cur_k}")
         print()
