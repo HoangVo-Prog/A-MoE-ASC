@@ -36,7 +36,7 @@ def plot_history(history: Dict[str, list], save_dir: Optional[str] = None, prefi
         plt.savefig(os.path.join(save_dir, _name("f1_curve.png")), dpi=150, bbox_inches="tight")
 
         
-def _print_confusion_matrix(
+def print_confusion_matrix(
     y_true,
     y_pred,
     *,

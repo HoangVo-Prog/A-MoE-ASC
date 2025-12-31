@@ -34,3 +34,5 @@ class BaseTrainConfig:
     loss_type: str = "ce"  # "ce" | "weighted_ce" | "focal"
     class_weights: Optional[Sequence[float]] = None
     focal_gamma: float = 2.0
+    
+    mode: str = "BaseModel"  # "BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" 

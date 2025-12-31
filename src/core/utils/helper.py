@@ -2,18 +2,16 @@ import torch
 import os
 import numpy as np
 import random
+from transformers import AutoTokenizer
+from torch.utils.data import DataLoader
 
 from src.core.config import Config
 from src.core.utils import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
-from transformers import AutoTokenizer
-from torch.utils.data import DataLoader
-
-
-from src.utils.helper import _filter_config_kwargs
+from src.utils.helper import filter_config_kwargs
 
 def get_config(args=parse_args()):
-    return Config(**_filter_config_kwargs(args))
+    return Config(**filter_config_kwargs(args))
 
 def get_kfold_dataset(cfg, tokenizer):
     return AspectSentimentDatasetKFold(
@@ -79,7 +77,7 @@ def get_tokenizer(cfg):
     return tokenizer
 
 def get_model(cfg):
-    return
+    return getattr(__import__("src.models", fromlist=[cfg.base.mode]), cfg.base.mode)(**filter_config_kwargs(cfg))
 
 
 def set_seed(seed: int = 13):
@@ -92,3 +90,4 @@ def set_seed(seed: int = 13):
     os.environ["PL_GLOBAL_SEED"] = str(seed)
     np.random.seed(seed)
     random.seed(seed)
+    

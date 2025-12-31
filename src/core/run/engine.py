@@ -12,7 +12,7 @@ from torch.amp import autocast, GradScaler
 from src.core.utils.const import DEVICE
 from src.core.utils.general import cleanup_cuda
 from src.core.utils.optim import build_optimizer_and_scheduler
-from src.core.utils.plotting import _print_confusion_matrix
+from src.core.utils.plotting import print_confusion_matrix
 
 
 def set_encoder_trainable(
@@ -166,7 +166,7 @@ def eval_model(
     dataloader: DataLoader,
     id2label: Optional[Dict[int, str]] = None,
     verbose_report: bool = False,
-    print_confusion_matrix: bool = True,
+    print_cf_matrix: bool = True,
     fusion_method: str = "concat",
     f1_average: str = "macro",
     return_confusion: bool = False,
@@ -215,8 +215,8 @@ def eval_model(
         labels=list(range(num_labels)) if num_labels is not None else None,
     )
 
-    if print_confusion_matrix:
-        _print_confusion_matrix(all_labels, all_preds, id2label=id2label, normalize=True)
+    if print_cf_matrix:
+        print_confusion_matrix(all_labels, all_preds, id2label=id2label, normalize=True)
 
     f1_per_class = f1_score(all_labels, all_preds, average=None)
     out: Dict[str, Any] = {"loss": avg_loss, "acc": acc, "f1": f1, "f1_per_class": f1_per_class}
@@ -343,7 +343,7 @@ def run_training_loop(
                 model=model,
                 dataloader=val_loader,
                 id2label=id2label,
-                print_confusion_matrix=True,
+                print_cf_matrix=True,
                 verbose_report=False,
                 fusion_method=method,
                 f1_average="macro",
@@ -385,7 +385,7 @@ def run_training_loop(
                 model=model,
                 dataloader=test_loader,
                 id2label=id2label,
-                print_confusion_matrix=True,
+                print_cf_matrix=True,
                 verbose_report=False,
                 fusion_method=method,
                 f1_average="macro",

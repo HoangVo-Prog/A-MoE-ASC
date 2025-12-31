@@ -2,6 +2,9 @@ import torch
 import gc
 import numpy as np
 from dataclasses import asdict, fields
+from sklearn.metrics import accuracy_score, f1_score
+
+from .const import DEVICE
 
 
 def cleanup_cuda(*objs):
@@ -31,7 +34,7 @@ def _parse_str_list(csv: str) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
-def _mean_std(xs: list[float]) -> tuple[float, float]:
+def mean_std(xs: list[float]) -> tuple[float, float]:
     arr = np.asarray(xs, dtype=np.float64)
     if arr.size == 0:
         return float("nan"), float("nan")
@@ -40,7 +43,7 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
     return float(arr.mean()), float(arr.std(ddof=1))
 
 
-def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
+def aggregate_confusions(cms: list[np.ndarray]) -> dict:
     if len(cms) == 0:
         return {}
 
@@ -70,7 +73,7 @@ def _cfg_to_dict(cfg) -> dict:
         return dict(getattr(cfg, "__dict__", {}))
 
 
-def _filter_config_kwargs(d: dict, config) -> dict:
+def filter_config_kwargs(d: dict, config) -> dict:
     allowed = {f.name for f in fields(config)}
     return {k: v for k, v in d.items() if k in allowed}
 
@@ -83,3 +86,43 @@ def _safe_float(x) -> float:
     if torch.is_tensor(x):
         return float(x.detach().item())
     return float("nan")
+
+
+def logits_to_metrics(logits: np.ndarray, labels: np.ndarray):
+    preds = logits.argmax(axis=-1)
+    acc = accuracy_score(labels, preds)
+    f1 = f1_score(labels, preds, average="macro")
+    return {"acc": float(acc), "f1": float(f1)}
+
+
+@torch.no_grad()
+def collect_test_logits(
+    *,
+    model: torch.nn.Module,
+    test_loader,
+    fusion_method: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    logits_chunks = []
+    labels_chunks = []
+
+    for batch in test_loader:
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        outputs = model(
+            input_ids_sent=batch["input_ids_sent"],
+            attention_mask_sent=batch["attention_mask_sent"],
+            input_ids_term=batch["input_ids_term"],
+            attention_mask_term=batch["attention_mask_term"],
+            labels=None,
+            fusion_method=fusion_method,
+        )
+        logits = outputs["logits"].detach().cpu().numpy()
+        labels = batch["label"].detach().cpu().numpy()
+
+        logits_chunks.append(logits)
+        labels_chunks.append(labels)
+
+    logits_all = np.concatenate(logits_chunks, axis=0)
+    labels_all = np.concatenate(labels_chunks, axis=0)
+    return logits_all, labels_all
+    

@@ -1,5 +1,16 @@
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
 from src.core.utils.helper import set_seed, get_model
 from .engine import run_training_loop
+from src.core.utils.general import (
+    cleanup_cuda,
+    collect_test_logits,
+    logits_to_metrics,
+    mean_std,
+    aggregate_confusions,
+)
+from src.core.utils.plotting import print_confusion_matrix
 
 def train_multi_seed(
     config,
@@ -9,7 +20,7 @@ def train_multi_seed(
     label2id,
     id2label,
     seeds,
-    print_confusion_matrix=False,
+    print_cf_matrix=False,
     do_ensemble_logits=True,
     verbose_ensemble_report=False,
 ):
@@ -48,7 +59,7 @@ def train_multi_seed(
         logits, labels = collect_test_logits(
             model=model,
             test_loader=test_loader,
-            fusion_method=cfg.fusion_method,
+            fusion_method=method,
         )
         labels_last = labels
 
@@ -65,10 +76,10 @@ def train_multi_seed(
 
     accs = [float(r["acc"]) for r in per_seed_metrics]
     f1s = [float(r["f1"]) for r in per_seed_metrics]
-    acc_mean, acc_std = _mean_std(accs)
-    f1_mean, f1_std = _mean_std(f1s)
+    acc_mean, acc_std = mean_std(accs)
+    f1_mean, f1_std = mean_std(f1s)
 
-    full_confusion_block = _aggregate_confusions(all_seed_cms)
+    full_confusion_block = aggregate_confusions(all_seed_cms)
 
     ensemble_block = None
     if do_ensemble_logits and len(all_seed_logits) >= 2:
@@ -94,8 +105,8 @@ def train_multi_seed(
         if verbose_ensemble_report:
             print("verbose_ensemble_report is enabled but generic full train does not print report by default")
 
-        if print_confusion_matrix:
-            _print_confusion_matrix(
+        if print_cf_matrix:
+            print_confusion_matrix(
                 labels_last.tolist(),
                 ens_preds.tolist(),
                 id2label=id2label,

@@ -3,7 +3,6 @@ import json
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
-
 from src.utils.helper import (
     get_tokenizer,
     get_dataset,
@@ -11,18 +10,16 @@ from src.utils.helper import (
     get_kfold_dataset,
     get_model,
     set_seed,
-    collect_test_logits,
 )
-
 from src.utils.general import (
     cleanup_cuda,
     collect_test_logits,
-    _mean_std,
+    mean_std,
     logits_to_metrics,
-    _aggregate_confusions,
+    aggregate_confusions,
 )
-
 from .engine import run_training_loop, eval_model
+from .train import train_multi_seed
 
 
 def run_benchmark_fusion(config, methods):
@@ -155,8 +152,8 @@ def run_benchmark_fusion(config, methods):
                 del model
                 cleanup_cuda()
 
-                cv_val_mean, cv_val_std = _mean_std(fold_val_f1)
-                cv_test_mean, cv_test_std = _mean_std(fold_test_f1)
+                cv_val_mean, cv_val_std = mean_std(fold_val_f1)
+                cv_test_mean, cv_test_std = mean_std(fold_test_f1)
 
                 # Per-seed ensembles
                 if not bool(oof_filled.all()):
@@ -188,13 +185,13 @@ def run_benchmark_fusion(config, methods):
                     "cv_val_f1_std": float(cv_val_std),
                     "cv_test_f1_mean": float(cv_test_mean),
                     "cv_test_f1_std": float(cv_test_std),
-                    "cv_val_confusion": _aggregate_confusions(fold_val_cms),
+                    "cv_val_confusion": aggregate_confusions(fold_val_cms),
                                         "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
                     "cv_val_oof_ens_f1": float(oof_metrics["f1"]),
-                    "cv_val_oof_ens_confusion": _aggregate_confusions([oof_cm]),
+                    "cv_val_oof_ens_confusion": aggregate_confusions([oof_cm]),
                     "cv_test_ens_acc": float(seed_test_metrics["acc"]),
                     "cv_test_ens_f1": float(seed_test_metrics["f1"]),
-                    "cv_test_ens_confusion": _aggregate_confusions([seed_test_cm]),
+                    "cv_test_ens_confusion": aggregate_confusions([seed_test_cm]),
                 }
                 per_method_seed_records[method].append(record)
 
@@ -216,13 +213,13 @@ def run_benchmark_fusion(config, methods):
             all_results["ensemble"][method].update({
                 "cv_val_seed_ens_acc": float(m_oof["acc"]),
                 "cv_val_seed_ens_f1": float(m_oof["f1"]),
-                "cv_val_seed_ens_confusion": _aggregate_confusions([cm_oof]),
+                "cv_val_seed_ens_confusion": aggregate_confusions([cm_oof]),
                 "cv_test_seed_ens_acc": float(m_test["acc"]),
                 "cv_test_seed_ens_f1": float(m_test["f1"]),
-                "cv_test_seed_ens_confusion": _aggregate_confusions([cm_test]),
+                "cv_test_seed_ens_confusion": aggregate_confusions([cm_test]),
             })
 
-        full_out = train_full_multi_seed_then_test_fn(
+        full_out = train_multi_seed(
             config=config,
             method=method,
             full_train_dataloader=full_train_dataloader,
@@ -230,7 +227,7 @@ def run_benchmark_fusion(config, methods):
             label2id=label2id,
             id2label=id2label,
             seeds=seeds,
-            print_confusion_matrix=False,
+            print_cf_matrix=False,
             do_ensemble_logits=config.base.do_ensemble_logits,
             verbose_ensemble_report=False,
         )
@@ -262,10 +259,10 @@ def run_benchmark_fusion(config, methods):
         full_f1s = [float(r.get("full_test_f1", 0.0)) for r in recs]
         full_accs = [float(r.get("full_test_acc", 0.0)) for r in recs]
 
-        m1, s1 = _mean_std(cv_val_means)
-        m2, s2 = _mean_std(cv_test_means)
-        m3, s3 = _mean_std(full_f1s)
-        m4, s4 = _mean_std(full_accs)
+        m1, s1 = mean_std(cv_val_means)
+        m2, s2 = mean_std(cv_test_means)
+        m3, s3 = mean_std(full_f1s)
+        m4, s4 = mean_std(full_accs)
 
         method_sum = {
             "cv_val_f1_mean_over_seeds": float(m1),
@@ -281,8 +278,8 @@ def run_benchmark_fusion(config, methods):
         if len(recs) > 0 and "cv_test_confusion" in recs[0]:
             cv_val_seed_means = [np.asarray(r["cv_val_confusion"]["cm_mean"], dtype=np.float64) for r in recs]
             cv_test_seed_means = [np.asarray(r["cv_test_confusion"]["cm_mean"], dtype=np.float64) for r in recs]
-            method_sum["cv_val_confusion_over_seeds"] = _aggregate_confusions(cv_val_seed_means)
-            method_sum["cv_test_confusion_over_seeds"] = _aggregate_confusions(cv_test_seed_means)
+            method_sum["cv_val_confusion_over_seeds"] = aggregate_confusions(cv_val_seed_means)
+            method_sum["cv_test_confusion_over_seeds"] = aggregate_confusions(cv_test_seed_means)
 
         if method in all_results.get("full_confusion", {}):
             method_sum["full_confusion_over_seeds"] = all_results["full_confusion"][method]

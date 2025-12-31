@@ -92,7 +92,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     # MoE options
-    parser.add_argument("--use_moe", action="store_true")
     parser.add_argument("--moe_num_experts", type=int, default=8)
     parser.add_argument("--moe_top_k", type=int, default=1)
     parser.add_argument("--aux_loss_weight", type=float, default=0.01)
@@ -110,8 +109,8 @@ def parse_args() -> argparse.Namespace:
     # MoE FFN
     parser.add_argument(
         "--mode", 
-        choices=["moe_ffn", "moe_head", "multi_moe_head", "moe_skconnection", "mof"],
-        default="moe_head"
+        choices=["BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" ],
+        default="BaseModel"
     )
     
     # Multi Moe Head
