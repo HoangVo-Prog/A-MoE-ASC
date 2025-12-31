@@ -13,8 +13,7 @@ class KFoldConfig:
 @dataclass
 class Config:
     kfold: "KFoldConfig" = field(default_factory=KFoldConfig)
-    base: MoEBase = MoEBase()
-    moe: MoEConfig = MoEConfig()
-    
+    base: "MoEBase" = field(default_factory=MoEBase)
+    moe: "MoEConfig" = field(default_factory=MoEConfig)
 
 
