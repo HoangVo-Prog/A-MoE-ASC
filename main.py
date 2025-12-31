@@ -42,8 +42,8 @@ def main():
     # Train full only with multi-seed
     if config.base.train_full_only:
         train_multi_seed(
-            config,
-            methods=config.base.fusion_method,
+            config=config,
+            method=config.base.fusion_method,
             full_train_dataloader=full_train_dataloader,
             test_loader=test_loader,
             label2id=label2id,
