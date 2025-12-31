@@ -77,7 +77,7 @@ echo
 python -m main \
   --model_name bert-base-uncased \
   --num_seeds 3 \
-  --train_full_only \
+  --benchmark_fusions \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
