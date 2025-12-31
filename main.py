@@ -16,7 +16,7 @@ def main():
     set_seed()
     
     # Benchmarking fusion methods
-    if config.base.benchmark_fusion:
+    if config.base.benchmark_fusions:
         if not config.base.benchmark_methods:
            config.base.benchmark_methods = FUSION_METHOD_CHOICES 
                    

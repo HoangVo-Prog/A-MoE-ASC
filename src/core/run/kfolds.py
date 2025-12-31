@@ -264,8 +264,9 @@ def train_kfold(config, methods):
                 )
 
     all_results["summary"] = summary
-
-    with open(config.base.output_path, "w", encoding="utf-8") as f:
+    
+    output_path = os.path.join(config.base.output_dir, config.base.output_name)
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
 
     return all_results

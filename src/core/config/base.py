@@ -8,7 +8,7 @@ class BaseTrainConfig:
     model_name: str = "bert-base-uncased"
     fusion_method: str = "concat"
     benchmark_methods: str = "concat"
-    benchmark_fusion: bool = False
+    benchmark_fusions: bool = False
     
     train_path: str = "dataset/atsa/laptop14/train.json"
     test_path: str = "dataset/atsa/laptop14/test.json"
@@ -32,7 +32,7 @@ class BaseTrainConfig:
     max_len_term: int = 4
 
     output_dir: str = "results"
-    output_name: str =  ""
+    output_name: str =  "results.json"
     verbose_report: bool = False
 
     train_full_only: bool = False
