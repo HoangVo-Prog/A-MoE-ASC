@@ -46,3 +46,5 @@ class BaseTrainConfig:
     
     mode: str = "BaseModel"  # "BaseModel","MoEFFN", "MoEHead", "MultiMoEHead", "MoESkconnection", "MoF" 
     num_labels: int = 3
+    
+    max_grad_norm: float = 1.0
