@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 class BaseTrainConfig:
     model_name: str = "bert-base-uncased"
     fusion_method: str = "concat"
+    benchmark_methods: str = "concat"
     benchmark_fusion: bool = False
     
     train_path: str = "dataset/atsa/laptop14/train.json"
