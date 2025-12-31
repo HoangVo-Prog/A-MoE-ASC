@@ -447,5 +447,6 @@ class MoEFFN(BaseModel):
                 f"(imb={imbalance:.1f}) | "
                 f"top: {top_pairs}"
             )
+        print()
 
     

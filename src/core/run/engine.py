@@ -54,10 +54,12 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
     if in_freeze:
         if mode == "MoEFFN":
+            print("MoEFFN mode: freezing base encoder, keeping MoE FFN trainable")
             # freeze base encoder, optionally keep moe_ffn trainable
             keep_moe = not bool(getattr(cfg.base, "freeze_moe", False))
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
         else:
+            print(f"{mode} mode: freezing entire encoder")
             # BaseModel (và mọi mode khác nếu bạn muốn) freeze toàn bộ encoder
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
 
