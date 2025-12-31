@@ -6,6 +6,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from dataclasses import asdict, fields, is_dataclass
 from typing import Any, Mapping
 import argparse
+import inspect
 
 from .const import DEVICE
 
@@ -76,66 +77,33 @@ def _cfg_to_dict(cfg) -> dict:
         return dict(getattr(cfg, "__dict__", {}))
 
 def _to_dict(d: Any) -> dict:
-    # dataclass instance
     if is_dataclass(d) and not isinstance(d, type):
         return asdict(d)
-    # argparse Namespace
     if isinstance(d, argparse.Namespace):
         return vars(d)
-    # plain dict or mapping
     if isinstance(d, Mapping):
         return dict(d)
-    raise TypeError(f"Unsupported input type for config kwargs: {type(d)}")
+    raise TypeError(f"Unsupported input type: {type(d)}")
 
-def _unflatten(d: Mapping[str, Any], sep: str = ".") -> dict:
-    """
-    Convert {'base.lr':1e-5, 'kfold.k':5} -> {'base':{'lr':...}, 'kfold':{'k':...}}
-    If no sep in keys, returns shallow copy.
-    """
-    out: dict = {}
-    for k, v in d.items():
-        if not isinstance(k, str) or sep not in k:
-            out[k] = v
-            continue
-        cur = out
-        parts = k.split(sep)
-        for p in parts[:-1]:
-            nxt = cur.get(p)
-            if not isinstance(nxt, dict):
-                nxt = {}
-                cur[p] = nxt
-            cur = nxt
-        cur[parts[-1]] = v
-    return out
-
-def filter_config_kwargs(d: Any, config_cls: Any, *, allow_dot_keys: bool = True, sep: str = ".") -> dict:
-    """
-    Filter input (cfg dataclass / dict / argparse Namespace) by dataclass schema (config_cls).
-    Keeps only fields defined in config_cls, and recursively filters nested dataclasses.
-    Supports dot-keys like 'base.lr' if allow_dot_keys=True.
-    """
-    cls = config_cls if isinstance(config_cls, type) else type(config_cls)
-    if not is_dataclass(cls):
-        raise TypeError(f"config_cls must be a dataclass type/instance, got {cls}")
-
+def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
     raw = _to_dict(d)
-    if allow_dot_keys:
-        raw = _unflatten(raw, sep=sep)
 
-    out: dict = {}
-    for f in fields(cls):
-        if f.name not in raw:
-            continue
-        v = raw[f.name]
+    # Case A: dataclass schema
+    cls = config_or_model if isinstance(config_or_model, type) else type(config_or_model)
+    if is_dataclass(cls):
+        allowed = {f.name for f in fields(cls)}
+        return {k: v for k, v in raw.items() if k in allowed}
 
-        # nested dataclass field + input value is dict
-        ftype = f.type
-        if is_dataclass(ftype) and isinstance(v, Mapping):
-            out[f.name] = filter_config_kwargs(v, ftype, allow_dot_keys=allow_dot_keys, sep=sep)
-        else:
-            out[f.name] = v
+    # Case B: model class or callable, filter by __init__ / callable signature
+    target = config_or_model.__init__ if inspect.isclass(config_or_model) else config_or_model
+    sig = inspect.signature(target)
 
-    return out
+    # nếu có **kwargs thì không cần lọc
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return raw
+
+    allowed = {k for k in sig.parameters.keys() if k != "self"}
+    return {k: v for k, v in raw.items() if k in allowed}
 
 
 
