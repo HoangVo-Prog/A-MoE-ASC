@@ -64,7 +64,7 @@ def get_dataloader(cfg, train_set=None, val_set=None, test_set=None):
     if test_set:
         test_loader = DataLoader(
             test_set,
-            batch_size=cfg.base.batch_size,
+            batch_size=cfg.base.test_batch_size,
             shuffle=False,
             num_workers=cfg.base.num_workers,
             pin_memory=True,

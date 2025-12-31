@@ -15,6 +15,7 @@ class BaseTrainConfig:
     epochs: int = 10
     train_batch_size: int = 16
     eval_batch_size: int = 32
+    test_batch_size: int = 32
     lr: float = 2e-5
     warmup_ratio: float = 0.1
     dropout: float = 0.1
