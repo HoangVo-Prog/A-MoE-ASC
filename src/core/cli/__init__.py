@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freeze_moe", action="store_true")
     parser.add_argument("--route_mask_pad_tokens", action="store_true") 
     parser.add_argument("--step_print_moe", type=float, default=100)
-
+    parser.add_argument("--capacity_factor", type=float, default=None)
     
     parser.add_argument("--no_amp", action="store_true") # TODO: Check logic
     parser.add_argument("--adamw_foreach", action="store_true") # TODO: Check logic

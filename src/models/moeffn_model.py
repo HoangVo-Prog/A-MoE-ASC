@@ -27,7 +27,8 @@ class MoE(nn.Module):
         moe_top_k: int,
         num_experts:int,
         router_bias: bool,
-        route_mask_pad_tokens: bool
+        route_mask_pad_tokens: bool,
+        capacity_factor: float,
     ):
         super().__init__()
         assert 1 <= moe_top_k <= num_experts
@@ -36,6 +37,8 @@ class MoE(nn.Module):
         self.num_experts = num_experts
         self.route_bias = router_bias
         self.route_mask_pad_tokens = route_mask_pad_tokens
+        self.capacity_factor = capacity_factor
+        
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.dropout = nn.Dropout(dropout_p)
@@ -165,6 +168,7 @@ def replace_encoder_ffn_with_moe(
     num_experts:int,
     router_bias: bool,
     route_mask_pad_tokens: bool,
+    capacity_factor: float,
 ) -> None:
     if not hasattr(encoder, "encoder") or not hasattr(encoder.encoder, "layer"):
         raise ValueError("Encoder does not look like BERT/RoBERTa model with encoder.layer")
@@ -192,6 +196,7 @@ def replace_encoder_ffn_with_moe(
             num_experts=num_experts,
             router_bias=router_bias,
             route_mask_pad_tokens=route_mask_pad_tokens,
+            capacity_factor=capacity_factor,
         )
 
         layer.intermediate = nn.Identity()
@@ -289,6 +294,7 @@ class MoEFFN(BaseModel):
         num_experts:int,
         router_bias: bool,
         route_mask_pad_tokens :bool,
+        capacity_factor: float,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -308,6 +314,7 @@ class MoEFFN(BaseModel):
             num_experts=num_experts,
             router_bias=router_bias,
             route_mask_pad_tokens=route_mask_pad_tokens,
+            capacity_factor=capacity_factor
         )
 
 
