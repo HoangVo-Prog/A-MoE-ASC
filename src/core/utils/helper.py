@@ -15,11 +15,11 @@ def get_config(args=parse_args()):
 
 def get_kfold_dataset(cfg, tokenizer):
     return AspectSentimentDatasetKFold(
+            config=cfg,
             json_path=cfg.base.train_path,
             tokenizer=tokenizer,
             max_len_sent=cfg.base.max_len_sent,
             max_len_term=cfg.base.max_len_term,
-            kfold=cfg.kfold,
         )
 
 def get_dataset(cfg, tokenizer):
