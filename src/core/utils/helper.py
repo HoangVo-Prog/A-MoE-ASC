@@ -38,6 +38,7 @@ def get_arg_parser_parameters(
 
 
 def get_config(args=parse_args()):
+    print("Parsed arguments:", args)
     return Config(**get_arg_parser_parameters(args, Config))
 
 

@@ -140,7 +140,7 @@ def filter_config_kwargs(
 
     # Nếu d là argparse.Namespace hoặc đến từ argparse, xử lý store_true
     if drop_false_store_true and arg_parser is not None:
-        store_true_dests = _infer_store_true_dests(arg_parser)
+        store_true_dests = infer_store_true_dests(arg_parser)
 
         # Với store_true: False có nghĩa là "không truyền flag", nên drop để không override fallback/config
         for k in list(raw.keys()):
