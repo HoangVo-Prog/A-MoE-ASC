@@ -281,6 +281,7 @@ class MoEFFN(BaseModel):
         moe_top_k: int,
         num_experts:int,
         router_bias: bool,
+        route_mask_pad_tokens :bool,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -293,6 +294,7 @@ class MoEFFN(BaseModel):
         )
 
         self.aux_loss_weight = aux_loss_weight
+        self.route_mask_pad_tokens = route_mask_pad_tokens
 
         replace_encoder_ffn_with_moe(
             self.encoder,

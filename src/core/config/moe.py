@@ -30,7 +30,7 @@ class MoEConfig:
     router_bias: bool = True # TODO: Check logic
     router_jitter: float = 0.05 # TODO: Check logic
     capacity_factor = None # TODO: Check logic
-    route_mask_pad_tokens: bool = False # TODO: Check logic
+    route_mask_pad_tokens: bool = False 
     
     # Multi Moe Head 
     moe_topk_schedule: bool = False

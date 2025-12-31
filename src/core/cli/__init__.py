@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--aux_loss_weight", type=float, default=0.01)
 
     parser.add_argument("--freeze_moe", action="store_true")
-    parser.add_argument("--route_mask_pad_tokens", action="store_true") #TODO: check this logic
+    parser.add_argument("--route_mask_pad_tokens", action="store_true") 
     parser.add_argument("--step_print_moe", type=float, default=100)
 
     
