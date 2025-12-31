@@ -8,6 +8,9 @@ class BaseTrainConfig:
     model_name: str = "bert-base-uncased"
     fusion_method: str = "concat"
     benchmark_fusion: bool = False
+    
+    train_path: str = "dataset/atsa/laptop14/train.json"
+    test_path: str = "dataset/atsa/laptop14/test.json"
 
     epochs: int = 10
     train_batch_size: int = 16
