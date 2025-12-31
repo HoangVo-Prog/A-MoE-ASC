@@ -32,6 +32,9 @@ class MoE(nn.Module):
         super().__init__()
         assert 1 <= moe_top_k <= num_experts
 
+        self.moe_top_k = moe_top_k
+        self.num_experts = num_experts
+        self.route_bias = router_bias
         self.route_mask_pad_tokens = route_mask_pad_tokens
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
