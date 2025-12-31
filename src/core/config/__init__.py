@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.core.config.base import BaseTrainConfig as Base
 from src.core.config.moe import MoeBaseTrainConfig as MoEBase, MoEConfig
@@ -12,7 +12,7 @@ class KFoldConfig:
 
 @dataclass
 class Config:
-    kfold: KFoldConfig = KFoldConfig()
+    kfold: "KFoldConfig" = field(default_factory=KFoldConfig)
     base: MoEBase = MoEBase()
     moe: MoEConfig = MoEConfig()
     
