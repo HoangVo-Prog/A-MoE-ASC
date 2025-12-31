@@ -19,7 +19,7 @@ def get_kfold_dataset(cfg, tokenizer):
             tokenizer=tokenizer,
             max_len_sent=cfg.base.max_len_sent,
             max_len_term=cfg.base.max_len_term,
-            kfold=cfg.k_folds,
+            kfold=cfg.kfold,
         )
 
 def get_dataset(cfg, tokenizer):
