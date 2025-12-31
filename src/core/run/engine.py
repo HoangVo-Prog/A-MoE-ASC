@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report, con
 from torch.amp import autocast, GradScaler
 
 from src.core.utils.const import DEVICE
-from src.core.utils.general import cleanup_cuda
+from src.core.utils.general import cleanup_cuda, safe_float
 from src.core.utils.optim import build_optimizer_and_scheduler
 from src.core.utils.plotting import print_confusion_matrix
 
@@ -60,7 +60,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
         else:
             print(f"{mode} mode: freezing entire encoder")
-            # BaseModel (và mọi mode khác nếu bạn muốn) freeze toàn bộ encoder
+            # BaseModel and MoE Head (và mọi mode khác nếu bạn muốn) freeze toàn bộ encoder
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
 
         _set_encoder_train_eval(model, frozen=True)
@@ -75,25 +75,34 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
 def train_one_epoch(
     *,
-    model,
-    dataloader,
-    optimizer,
-    scheduler,
-    fusion_method,
-    f1_average,
-    step_print_moe,
-    use_amp,
-    amp_dtype,
-    scaler,
-    max_grad_norm,
-):
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler=None,
+    fusion_method: str = "concat",
+    f1_average: str = "macro",
+    step_print_moe: Optional[float] = 100,
+    use_amp: bool = True,
+    amp_dtype: str = "fp16",
+    scaler: Optional[GradScaler] = None,
+    max_grad_norm: Optional[float] = None,
+) -> Dict[str, float]:
     model.train()
-    total_loss = 0.0
+
+    moe = bool(getattr(model, "_collect_aux_loss", False))
+
+    total_loss_sum = 0.0
+    main_loss_sum = 0.0
+    aux_loss_sum = 0.0
+    lambda_loss_sum = 0.0
+    n_steps = 0
+
     all_preds: list[int] = []
     all_labels: list[int] = []
 
-    # AMP dtype mapping
-    amp_dtype_torch = torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
+    amp_dtype_torch = (
+        torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
+    )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
     for step, batch in enumerate(dataloader):
@@ -101,31 +110,11 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        if use_amp:
-            with autocast("cuda", enabled=True, dtype=amp_dtype_torch):
-                outputs = model(
-                    input_ids_sent=batch["input_ids_sent"],
-                    attention_mask_sent=batch["attention_mask_sent"],
-                    input_ids_term=batch["input_ids_term"],
-                    attention_mask_term=batch["attention_mask_term"],
-                    labels=batch["label"],
-                    fusion_method=fusion_method,
-                )
-                loss = outputs["loss"]
-                logits = outputs["logits"]
-
-            if scaler is None:
-                raise RuntimeError("use_amp=True but scaler is None")
-
-            scaler.scale(loss).backward()
-
-            if max_grad_norm is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
-
-            scaler.step(optimizer)
-            scaler.update()
-        else:
+        with autocast(
+            "cuda",
+            enabled=bool(use_amp),
+            dtype=amp_dtype_torch,
+        ):
             outputs = model(
                 input_ids_sent=batch["input_ids_sent"],
                 attention_mask_sent=batch["attention_mask_sent"],
@@ -134,10 +123,29 @@ def train_one_epoch(
                 labels=batch["label"],
                 fusion_method=fusion_method,
             )
-            loss = outputs["loss"]
+
+            loss_total = outputs["loss"]
             logits = outputs["logits"]
 
-            loss.backward()
+            # only meaningful for ver2-return path; safe even if missing
+            loss_main = outputs.get("loss_main", None)
+            loss_lambda = outputs.get("loss_lambda", None)
+            loss_aux = outputs.get("aux_loss", None)
+
+        # backward + step
+        if use_amp:
+            if scaler is None:
+                raise RuntimeError("use_amp=True but scaler is None")
+            scaler.scale(loss_total).backward()
+
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_total.backward()
             if max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
             optimizer.step()
@@ -145,7 +153,13 @@ def train_one_epoch(
         if scheduler is not None:
             scheduler.step()
 
-        total_loss += float(loss.item())
+        # stats
+        total_loss_sum += safe_float(loss_total)
+        if moe:
+            main_loss_sum += safe_float(loss_main)
+            lambda_loss_sum += safe_float(loss_lambda)
+            aux_loss_sum += safe_float(loss_aux)
+        n_steps += 1
 
         preds = torch.argmax(logits, dim=-1)
         all_preds.extend(preds.detach().cpu().tolist())
@@ -158,12 +172,26 @@ def train_one_epoch(
                 except Exception:
                     pass
 
-    avg_loss = total_loss / max(1, len(dataloader))
-    acc = accuracy_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds, average=f1_average)
-    return {"loss": avg_loss, "acc": acc, "f1": f1}
+    denom = max(1, n_steps)
+    acc = float(accuracy_score(all_labels, all_preds))
+    f1 = float(f1_score(all_labels, all_preds, average=f1_average))
 
+    if moe:
+        return {
+            "loss_total": total_loss_sum / denom,
+            "loss_main": main_loss_sum / denom,
+            "loss_lambda": lambda_loss_sum / denom,
+            "aux_loss": aux_loss_sum / denom,
+            "acc": acc,
+            "f1": f1,
+        }
 
+    # ver1 compatible output
+    return {
+        "loss": total_loss_sum / denom,
+        "acc": acc,
+        "f1": f1,
+    }
 def eval_model(
     *,
     model: nn.Module,
@@ -238,9 +266,19 @@ def run_training_loop(
     test_loader,
     id2label,
     tag,
-): 
-    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
-
+):     
+    moe = bool(getattr(model, "_collect_aux_loss", False))
+    
+    history = {
+        "train_total_loss": [],
+        "train_main_loss": [],
+        "train_lambda_loss": [],
+        "train_f1": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_f1": [],
+    }
+        
     best_macro_f1 = -1.0
     best_f1_neutral = -1.0
     best_state_dict = None
@@ -321,14 +359,33 @@ def run_training_loop(
             scaler=scaler,
             max_grad_norm=cfg.base.max_grad_norm,
         )
-        history["train_loss"].append(float(train_metrics["loss"]))
-        history["train_f1"].append(float(train_metrics["f1"]))
+        
+        if moe:
+            history["train_loss"].append(float(train_metrics["loss"]))
+            history["train_f1"].append(float(train_metrics["f1"]))
+            
+            log = (
+                f"Train loss {train_metrics['loss']:.4f} "
+                f"F1 {train_metrics['f1']:.4f} "
+                f"acc {train_metrics['acc']:.4f}"
+            )
+            log += ("\n")
 
-        log = (
-            f"Train loss {train_metrics['loss']:.4f} "
-            f"F1 {train_metrics['f1']:.4f} "
-            f"acc {train_metrics['acc']:.4f}"
-        )
+        else:
+            history["train_total_loss"].append(train_metrics["loss_total"])
+            history["train_main_loss"].append(train_metrics["loss_main"])
+            history["train_lambda_loss"].append(train_metrics["loss_lambda"])
+            history["train_f1"].append(train_metrics["f1"])
+            history["train_acc"].append(train_metrics["acc"])
+
+            log = (
+                f"Train main_loss {train_metrics['loss_main']:.6f} "
+                f"aux_loss {train_metrics['aux_loss']:.6f} "
+                f"lambda_loss {train_metrics['loss_lambda']:.6f} "
+                f"total_loss {train_metrics['loss_total']:.6f} "
+                f"\nF1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
+            )
+            log += ("\n")
 
         if val_loader is not None:
             print("Validation Confusion Matrix")

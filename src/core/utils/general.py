@@ -184,7 +184,7 @@ def filter_config_kwargs(
 
     return out
 
-def _safe_float(x) -> float:
+def safe_float(x) -> float:
     if x is None:
         return float("nan")
     if isinstance(x, (float, int)):

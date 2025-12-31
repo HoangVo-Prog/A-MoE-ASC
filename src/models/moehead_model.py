@@ -10,16 +10,6 @@ from .moeffn_model import moe_load_balance_loss
 
 
 class MoE(nn.Module):
-    """Head level MoE block.
-
-    Input: hidden_states [B, T, H]
-    Output: hidden_states [B, T, H]
-
-    Caches for aux loss and debug:
-      - last_router_logits: [N_active, E]
-      - last_topk_idx: [N_active, K]
-    """
-
     def __init__(
         self,
         *,
@@ -147,12 +137,6 @@ class MoE(nn.Module):
         self.moe_top_k = k
 
 class EncoderWithMoEHead(nn.Module):
-    """Wrap a base encoder and apply MoEHead on last_hidden_state.
-
-    The MoE module is exposed as attribute name `moe_ffn` so that utilities
-    that look for "moe_ffn" in parameter names continue to work.
-    """
-
     def __init__(self, *, base_encoder: nn.Module, moe_ffn: MoE) -> None:
         super().__init__()
         self.base_encoder = base_encoder
@@ -247,17 +231,14 @@ class MoEHead(BaseModel):
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
 
     def _collect_aux_loss(self):
-        total, count = 0.0, 0
-        for layer in self.encoder.encoder.layer:
-            moe = getattr(layer, "moe_ffn", None)
-            if moe is None or moe.last_router_logits is None:
-                continue
-            total += moe_load_balance_loss(
-                moe.last_router_logits, moe.last_topk_idx, moe.num_experts
-            )
-            count += 1
-        return total / count if count > 0 else torch.tensor(0.0, device=self.device)
-
+        moe = getattr(self.encoder, "moe_ffn", None)
+        if moe is None or moe.last_router_logits is None or moe.last_topk_idx is None:
+            return torch.tensor(0.0, device=self.device)
+        return moe_load_balance_loss(
+            moe.last_router_logits,
+            moe.last_topk_idx,
+            moe.num_experts,
+        )
 
     def _compute_loss(self, logits, labels):
         if labels is None:
@@ -286,6 +267,8 @@ class MoEHead(BaseModel):
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
         
         aux = self._collect_aux_loss()
+        print(self.aux_loss_weight, type(self.aux_loss_weight))
+        print(aux, type(aux))
         loss_lambda = self.aux_loss_weight * aux
 
         loss_total = loss_main + loss_lambda
@@ -406,5 +389,3 @@ class MoEHead(BaseModel):
             k = self._topk_end
 
         self.encoder.moe_ffn.set_top_k(k)
-
-
