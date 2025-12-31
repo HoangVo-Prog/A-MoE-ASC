@@ -100,7 +100,7 @@ def _get_attr_or_key(obj: Any, key: str) -> Any:
     raise KeyError(key)
 
 
-def _infer_store_true_dests(parser: argparse.ArgumentParser) -> set[str]:
+def infer_store_true_dests(parser: argparse.ArgumentParser) -> set[str]:
     """
     Tìm các dest thuộc nhóm store_true (flag không có giá trị, default thường là False).
     """
