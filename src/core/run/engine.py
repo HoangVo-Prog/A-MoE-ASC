@@ -405,7 +405,7 @@ def run_training_loop(
             neutral_f1 = float(val_metrics["f1_per_class"][neutral_idx])
 
             log += (
-                f" | Val loss {val_metrics['loss']:.4f} "
+                f"Val loss {val_metrics['loss']:.4f} "
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
                 f"| Val neutral f1 {neutral_f1:.4f}"

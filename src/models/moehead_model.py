@@ -199,7 +199,7 @@ class MoEHead(BaseModel):
             focal_gamma=focal_gamma,
         )
         
-        self.aux_loss_weight=aux_loss_weight,
+        self.aux_loss_weight=aux_loss_weight
 
         cfg = getattr(self.encoder, "config", None)
         hidden_size = int(getattr(cfg, "hidden_size"))
@@ -334,7 +334,6 @@ class MoEHead(BaseModel):
             )
 
         return stats
-
 
     def print_moe_debug(self, topn: int = 3):
         stats = self._moe_debug_stats_per_layer()
