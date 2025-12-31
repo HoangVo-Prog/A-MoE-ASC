@@ -9,7 +9,7 @@ from src.models.base_model import BaseModel
 from .moeffn_model import moe_load_balance_loss
 
 
-class MoEHead(nn.Module):
+class MoE(nn.Module):
     """Head level MoE block.
 
     Input: hidden_states [B, T, H]
@@ -153,7 +153,7 @@ class EncoderWithMoEHead(nn.Module):
     that look for "moe_ffn" in parameter names continue to work.
     """
 
-    def __init__(self, *, base_encoder: nn.Module, moe_ffn: MoEHead) -> None:
+    def __init__(self, *, base_encoder: nn.Module, moe_ffn: MoE) -> None:
         super().__init__()
         self.base_encoder = base_encoder
         self.moe_ffn = moe_ffn
@@ -229,7 +229,7 @@ class MoEHead(BaseModel):
         self._topk_end = moe_topk_end
         self._topk_switch_epoch = moe_topk_switch_epoch
 
-        moe_head = MoEHead(
+        moe_head = MoE(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             num_experts=num_experts,
