@@ -6,7 +6,7 @@ from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
 
 from src.core.config import Config
-from src.core.utils import parse_args
+from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
 from src.utils.helper import filter_config_kwargs
 
