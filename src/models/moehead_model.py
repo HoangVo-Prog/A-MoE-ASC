@@ -267,8 +267,6 @@ class MoEHead(BaseModel):
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
         
         aux = self._collect_aux_loss()
-        print(self.aux_loss_weight, type(self.aux_loss_weight))
-        print(aux, type(aux))
         loss_lambda = self.aux_loss_weight * aux
 
         loss_total = loss_main + loss_lambda
