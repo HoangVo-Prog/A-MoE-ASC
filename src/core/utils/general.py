@@ -4,7 +4,7 @@ import gc
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from dataclasses import asdict, fields, is_dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Dict
 import argparse
 import inspect
 
@@ -76,14 +76,26 @@ def _cfg_to_dict(cfg) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
+def _dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
+    # giữ nguyên nested dataclass objects (không asdict)
+    return {f.name: getattr(obj, f.name) for f in fields(obj)}
+
+
 def _to_dict(d: Any) -> dict:
+    # dataclass instance (shallow)
     if is_dataclass(d) and not isinstance(d, type):
-        return asdict(d)
+        return _dataclass_to_dict_shallow(d)
+
+    # argparse.Namespace
     if isinstance(d, argparse.Namespace):
         return vars(d)
+
+    # Mapping
     if isinstance(d, Mapping):
         return dict(d)
+
     raise TypeError(f"Unsupported input type: {type(d)}")
+
 
 def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
     raw = _to_dict(d)
@@ -94,7 +106,7 @@ def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
         allowed = {f.name for f in fields(cls)}
         return {k: v for k, v in raw.items() if k in allowed}
 
-    # Case B: model class or callable, filter by __init__ / callable signature
+    # Case B: class/callable signature
     target = config_or_model.__init__ if inspect.isclass(config_or_model) else config_or_model
     sig = inspect.signature(target)
 
@@ -104,8 +116,6 @@ def filter_config_kwargs(d: Any, config_or_model: Any) -> dict:
 
     allowed = {k for k in sig.parameters.keys() if k != "self"}
     return {k: v for k, v in raw.items() if k in allowed}
-
-
 
 def _safe_float(x) -> float:
     if x is None:

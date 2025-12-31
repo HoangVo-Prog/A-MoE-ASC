@@ -14,6 +14,13 @@ from src.core.utils.general import filter_config_kwargs
 def get_config(args=parse_args()):
     return Config(**filter_config_kwargs(args, Config))
 
+
+def get_model(cfg):
+    mode = cfg.base.mode
+    ModelCls = getattr(__import__("src.models", fromlist=[mode]), mode)
+    return ModelCls(**filter_config_kwargs(cfg, ModelCls))
+
+
 def get_kfold_dataset(cfg, tokenizer):
     return AspectSentimentDatasetKFold(
             config=cfg,
@@ -77,9 +84,6 @@ def get_tokenizer(cfg):
     tokenizer = AutoTokenizer.from_pretrained(cfg.base.model_name)    
     return tokenizer
 
-def get_model(cfg):
-    model = getattr(__import__("src.models", fromlist=[cfg.base.mode]), cfg.base.mode)
-    return model(**filter_config_kwargs(cfg, model))
 
 
 def set_seed(seed: int = 13):
