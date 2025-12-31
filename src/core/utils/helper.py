@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from src.core.config import Config
 from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
-from src.core.utils.helper import filter_config_kwargs
+from src.core.utils.general import filter_config_kwargs
 
 def get_config(args=parse_args()):
     return Config(**filter_config_kwargs(args))
