@@ -41,7 +41,7 @@ def train_multi_seed(
         
         model = get_model(config)
         out = run_training_loop(
-            config=config,
+            cfg=config,
             model=model,
             method=method,
             train_loader=full_train_dataloader,
