@@ -6,7 +6,8 @@ from typing import Optional, Sequence
 @dataclass
 class BaseTrainConfig:
     model_name: str = "bert-base-uncased"
-    fusion_method: str = "gated_concat"
+    fusion_method: str = "concat"
+    benchmark_fusion: bool = False
 
     epochs: int = 10
     train_batch_size: int = 16
