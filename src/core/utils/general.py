@@ -136,7 +136,7 @@ def filter_config_kwargs(
     arg_parser: Optional[argparse.ArgumentParser] = None,
     drop_false_store_true: bool = True,
 ) -> dict:
-    raw = _to_dict(d)
+    raw = to_dict(d)
 
     # Nếu d là argparse.Namespace hoặc đến từ argparse, xử lý store_true
     if drop_false_store_true and arg_parser is not None:

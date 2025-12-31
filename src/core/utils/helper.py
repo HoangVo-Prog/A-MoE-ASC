@@ -1,7 +1,7 @@
 import torch
 import os
 import numpy as np
-from typing import fields
+from dataclasses import fields, is_dataclass
 import random
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from src.core.config import Config
 from src.core.cli import parse_args
 from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatasetKFold
-from src.core.utils.general import to_dict, infer_store_true_dests
+from src.core.utils.general import to_dict, infer_store_true_dests, filter_config_kwargs
 
 
 
