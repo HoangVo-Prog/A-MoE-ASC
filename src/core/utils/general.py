@@ -76,7 +76,7 @@ def _cfg_to_dict(cfg) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
-def dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
+def _dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
     return {f.name: getattr(obj, f.name) for f in fields(obj)}
 
 
