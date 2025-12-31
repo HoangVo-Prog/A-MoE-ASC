@@ -1,5 +1,5 @@
 import os
-from src.core.utils import (
+from src.core.utils.helper import (
     get_config,  
     set_seed,
 )
