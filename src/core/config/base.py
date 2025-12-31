@@ -20,6 +20,7 @@ class BaseTrainConfig:
     dropout: float = 0.1
     
     num_seeds: int = 3
+    num_workers: int = 4
 
     freeze_epochs: int = 3
     rolling_k: int = 3

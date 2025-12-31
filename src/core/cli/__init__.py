@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         help="Number of seeds per fusion method when --benchmark_fusions is enabled.",
     )
     parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=4,
+    )
+    parser.add_argument(
         "--seeds",
         type=str,
         default="",
