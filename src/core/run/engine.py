@@ -44,7 +44,6 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
     Returns: True if encoder is in frozen phase, else False.
     """
     fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
-    print("freeze_epochs =", fe)
     if fe <= 0:
         _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=False)
@@ -280,7 +279,6 @@ def run_training_loop(
 
         # --- Apply freeze policy for this epoch ---
         freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
-        print("Encoder frozen:", freeze)
 
         if cfg.base.freeze_epochs > 0 and epoch < cfg.base.freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
