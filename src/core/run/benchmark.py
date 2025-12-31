@@ -37,7 +37,6 @@ def run_benchmark_fusion(config):
     num_classes = len(label2id)
     
     kfold_train_set = get_kfold_dataset(config, tokenizer)
-    print(config.base.benchmark_methods, type(config.base.benchmark_methods))
     full_train_dataloader = get_dataloader(config, train_set=full_train_set)
     
     methods = parse_str_list(config.base.benchmark_methods)

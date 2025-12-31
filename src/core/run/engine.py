@@ -15,21 +15,13 @@ from src.core.utils.optim import build_optimizer_and_scheduler
 from src.core.utils.plotting import print_confusion_matrix
 
 
-def set_encoder_trainable(
+def _set_encoder_requires_grad(
+    cfg,
     model: nn.Module,
-    trainable: bool,
     *,
-    keep_moe_trainable: bool = False,
+    trainable: bool,
+    keep_moe_trainable: bool,
 ) -> None:
-    """
-    Unified behavior:
-
-    - If keep_moe_trainable=False:
-        Set all encoder params requires_grad = trainable (baseline behavior).
-    - If keep_moe_trainable=True:
-        Encoder base params follow `trainable`, but any param name containing "moe_ffn"
-        stays trainable (MoE behavior).
-    """
     if not hasattr(model, "encoder"):
         return
 
@@ -37,37 +29,45 @@ def set_encoder_trainable(
         if keep_moe_trainable and ("moe_ffn" in name):
             p.requires_grad = True
         else:
-            p.requires_grad = trainable
+            p.requires_grad = bool(trainable)
 
 
-def maybe_freeze_encoder(
-    model: nn.Module,
-    epoch_idx_0based: int,
-    freeze_epochs: int,
-    freeze_moe: bool = False,
-) -> None:
+def _set_encoder_train_eval(model: nn.Module, *, frozen: bool) -> None:
+    if not hasattr(model, "encoder"):
+        return
+    model.encoder.eval() if frozen else model.encoder.train()
+
+
+def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> bool:
     """
-    Freeze encoder for first `freeze_epochs` epochs.
-
-    - Baseline path:
-        freeze_moe=False and model has no MoE, same as baseline behavior.
-    - MoE path:
-        If freeze_moe=False: freeze base encoder but keep moe_ffn trainable.
-        If freeze_moe=True: freeze everything in encoder (including moe_ffn).
+    Apply freeze policy for current epoch.
+    Returns: True if encoder is in frozen phase, else False.
     """
-    if freeze_epochs > 0 and epoch_idx_0based < freeze_epochs:
-        set_encoder_trainable(
-            model,
-            trainable=False,
-            keep_moe_trainable=not freeze_moe,
-        )
-    else:
-        set_encoder_trainable(
-            model,
-            trainable=True,
-            keep_moe_trainable=False,
-        )
+    fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
+    if fe <= 0:
+        _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
+        _set_encoder_train_eval(model, frozen=False)
+        return False
 
+    in_freeze = epoch_idx_0based < fe
+    mode = str(getattr(cfg.base, "mode", "")).strip()
+
+    if in_freeze:
+        if mode == "MoEFFN":
+            # freeze base encoder, optionally keep moe_ffn trainable
+            keep_moe = not bool(getattr(cfg.base, "freeze_moe", False))
+            _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
+        else:
+            # BaseModel (và mọi mode khác nếu bạn muốn) freeze toàn bộ encoder
+            _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
+
+        _set_encoder_train_eval(model, frozen=True)
+        return True
+
+    # unfreeze
+    _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
+    _set_encoder_train_eval(model, frozen=False)
+    return False
 
 def train_one_epoch(
     *,
@@ -260,14 +260,13 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    # Ensure correct freeze state before building phase-1 optimizer
-    maybe_freeze_encoder(model, epoch_idx_0based=0, freeze_epochs=cfg.base.freeze_epochs, freeze_moe=cfg.base.freeze_moe)
+    in_freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
 
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
         lr=cfg.base.lr,
         warmup_ratio=cfg.base.warmup_ratio,
-        total_steps=steps_per_epoch * max(1, cfg.base.epochs),
+        total_steps=steps_per_epoch * max(1, int(cfg.base.epochs)),
         params=trainable_params(),
         adamw_foreach=cfg.base.adamw_foreach,
         adamw_fused=cfg.base.adamw_fused,
@@ -278,24 +277,18 @@ def run_training_loop(
     for epoch in range(int(cfg.base.epochs)):
         print(f"{tag}Epoch {epoch + 1}/{cfg.base.epochs}")
 
-        prev_trainable = True
-        if hasattr(model, "encoder"):
-            prev_trainable = any(p.requires_grad for p in model.encoder.parameters())
-
-        maybe_freeze_encoder(model, epoch_idx_0based=epoch, freeze_epochs=cfg.base.freeze_epochs, freeze_moe=cfg.base.freeze_moe)
-
-        now_trainable = True
-        if hasattr(model, "encoder"):
-            now_trainable = any(p.requires_grad for p in model.encoder.parameters())
+        # --- Apply freeze policy for this epoch ---
+        maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
 
         if cfg.base.freeze_epochs > 0 and epoch < cfg.base.freeze_epochs:
-            print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
-        elif cfg.base.freeze_epochs > 0 and epoch == cfg.base.freeze_epochs:
-            print("Encoder unfrozen")
+            if str(cfg.base.mode).strip() == "MoEFFN" and (not bool(cfg.base.freeze_moe)):
+                print(f"Encoder base frozen, moe_ffn trainable (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
+            else:
+                print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
 
-        # Rebuild optimizer exactly when encoder becomes trainable
-        if (not prev_trainable) and now_trainable:
-            print("Rebuilding optimizer for unfrozen encoder params")
+        # --- Rebuild optimizer exactly at unfreeze boundary ---
+        if cfg.base.freeze_epochs > 0 and epoch == cfg.base.freeze_epochs:
+            print("Encoder unfrozen, rebuilding optimizer to include newly-trainable params")
             try:
                 del optimizer
                 del scheduler
@@ -315,6 +308,7 @@ def run_training_loop(
                 adamw_fused=cfg.base.adamw_fused,
             )
 
+        # --- training ---
         train_metrics = train_one_epoch(
             model=model,
             dataloader=train_loader,

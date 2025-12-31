@@ -161,6 +161,9 @@ class _SubsetAspectSentimentDataset(Dataset):
             "label": torch.tensor(label, dtype=torch.long),
         }
 
+    @property
+    def base_indices(self):
+        return self._indices
 
 class AspectSentimentDatasetKFold(Dataset):
     """
