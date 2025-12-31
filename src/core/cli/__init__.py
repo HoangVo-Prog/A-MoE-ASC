@@ -62,7 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--benchmark_methods",
         type=str,
-        choices=FUSION_METHOD_CHOICES,
+        default=FUSION_METHOD_CHOICES,
+        nargs="+",
         help="Comma-separated fusion methods to benchmark.",
     )
     parser.add_argument(
