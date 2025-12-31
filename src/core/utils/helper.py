@@ -24,14 +24,14 @@ def get_kfold_dataset(cfg, tokenizer):
 
 def get_dataset(cfg, tokenizer):
     train_set = AspectSentimentDataset(
-        data_path=cfg.base.train_path,
+        json_path=cfg.base.train_path,
         tokenizer=tokenizer,
         max_len_sent=cfg.base.max_len_sent,
         max_len_term=cfg.base.max_len_term,
     )
     
     test_set = AspectSentimentDataset(
-        data_path=cfg.base.test_path,
+        json_path=cfg.base.test_path,
         tokenizer=tokenizer,
         max_len_sent=cfg.base.max_len_sent,
         max_len_term=cfg.base.max_len_term,
