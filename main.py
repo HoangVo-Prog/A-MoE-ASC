@@ -34,4 +34,6 @@ def main():
     train_kfold(config, methods=config.base.fusion_methods)
     print("Training with k-fold cross validation")
 
-    
+
+if __name__ == "__main__":
+    main()
