@@ -18,6 +18,8 @@ class BaseTrainConfig:
     lr: float = 2e-5
     warmup_ratio: float = 0.1
     dropout: float = 0.1
+    
+    num_seeds: int = 3
 
     freeze_epochs: int = 3
     rolling_k: int = 3
