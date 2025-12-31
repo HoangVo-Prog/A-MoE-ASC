@@ -71,9 +71,7 @@ def run_benchmark_fusion(config):
             fold_val_cms = []
             fold_test_cms = []      
             
-            for fold in range(config.kfold.k):
-                print(f"Training method={method}, seed={seed}, fold={fold}...")
-                
+            for fold in range(config.kfold.k):                
                 train_ds, val_ds = kfold_train_set.get_fold(fold)
                 train_loader, val_loader, test_loader = get_dataloader(config, train_ds, val_ds, test_set) 
                 

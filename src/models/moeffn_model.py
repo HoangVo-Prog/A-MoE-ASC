@@ -27,10 +27,12 @@ class MoE(nn.Module):
         moe_top_k: int,
         num_experts:int,
         router_bias: bool,
+        route_mask_pad_tokens: bool
     ):
         super().__init__()
         assert 1 <= moe_top_k <= num_experts
 
+        self.route_mask_pad_tokens = route_mask_pad_tokens
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.dropout = nn.Dropout(dropout_p)
@@ -159,6 +161,7 @@ def replace_encoder_ffn_with_moe(
     moe_top_k: int,
     num_experts:int,
     router_bias: bool,
+    route_mask_pad_tokens: bool,
 ) -> None:
     if not hasattr(encoder, "encoder") or not hasattr(encoder.encoder, "layer"):
         raise ValueError("Encoder does not look like BERT/RoBERTa model with encoder.layer")
@@ -185,6 +188,7 @@ def replace_encoder_ffn_with_moe(
             moe_top_k=moe_top_k,
             num_experts=num_experts,
             router_bias=router_bias,
+            route_mask_pad_tokens=route_mask_pad_tokens,
         )
 
         layer.intermediate = nn.Identity()
@@ -294,13 +298,13 @@ class MoEFFN(BaseModel):
         )
 
         self.aux_loss_weight = aux_loss_weight
-        self.route_mask_pad_tokens = route_mask_pad_tokens
 
         replace_encoder_ffn_with_moe(
             self.encoder,
             moe_top_k=moe_top_k,
             num_experts=num_experts,
-            router_bias=router_bias
+            router_bias=router_bias,
+            route_mask_pad_tokens=route_mask_pad_tokens,
         )
 
 
