@@ -247,14 +247,17 @@ class MoEHead(BaseModel):
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
 
     def _collect_aux_loss(self):
-        moe = getattr(self.encoder, "moe_ffn", None)
-        if moe is None or moe.last_router_logits is None or moe.last_topk_idx is None:
-            return torch.tensor(0.0, device=self.device)
-        return moe_load_balance_loss(
-            moe.last_router_logits,
-            moe.last_topk_idx,
-            moe.num_experts,
-        )
+        total, count = 0.0, 0
+        for layer in self.encoder.encoder.layer:
+            moe = getattr(layer, "moe_ffn", None)
+            if moe is None or moe.last_router_logits is None:
+                continue
+            total += moe_load_balance_loss(
+                moe.last_router_logits, moe.last_topk_idx, moe.num_experts
+            )
+            count += 1
+        return total / count if count > 0 else torch.tensor(0.0, device=self.device)
+
 
     def _compute_loss(self, logits, labels):
         if labels is None:
