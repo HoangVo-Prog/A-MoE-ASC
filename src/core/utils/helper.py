@@ -39,7 +39,7 @@ def get_dataset(cfg, tokenizer):
 
     return train_set, test_set 
 
-def get_data_loader(cfg, train_set=None, val_set=None, test_set=None):
+def get_dataloader(cfg, train_set=None, val_set=None, test_set=None):
     
     train_loader, val_loader, test_loader = None, None, None
     
