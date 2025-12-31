@@ -79,7 +79,7 @@ python -m main \
   --benchmark_fusions \
   --num_seeds 3 \
   --output_dir "$ROOT_DIR/saved_model" \
-  --output_name base_model \
+  --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --benchmark_methods gated_concat,coattn,late_interaction \

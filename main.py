@@ -58,7 +58,7 @@ def main():
         
     
     # Train with k-fold cross validation 
-    train_kfold(config, methods=config.base.fusion_method)
+    train_kfold(config, method=config.base.fusion_method)
     print("Training with k-fold cross validation")
 
 
