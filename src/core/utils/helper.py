@@ -11,7 +11,7 @@ from src.core.data.datasets import AspectSentimentDataset, AspectSentimentDatase
 from src.core.utils.general import filter_config_kwargs
 
 def get_config(args=parse_args()):
-    return Config(**filter_config_kwargs(args))
+    return Config(**filter_config_kwargs(args, Config))
 
 def get_kfold_dataset(cfg, tokenizer):
     return AspectSentimentDatasetKFold(
