@@ -105,10 +105,10 @@ def run_benchmark_fusion(config):
                     test_loader=test_loader,
                     fusion_method=method,
                 )
-                va_idx = np.asarray(getattr(val_ds, "base_indices"), dtype=np.int64)
+                va_idx = np.asarray(val_ds.base_indices, dtype=np.int64)
 
                 if oof_logits is None:
-                    num_train = len(full_train_set.samples)  
+                    num_train = len(full_train_set.samples)
                     num_classes = int(val_logits.shape[1])
                     oof_logits = np.zeros((num_train, num_classes), dtype=np.float32)
                     oof_filled = np.zeros((num_train,), dtype=bool)
@@ -152,51 +152,52 @@ def run_benchmark_fusion(config):
                 fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                 fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
+
                 del model
                 cleanup_cuda()
 
-                cv_val_mean, cv_val_std = mean_std(fold_val_f1)
-                cv_test_mean, cv_test_std = mean_std(fold_test_f1)
+            cv_val_mean, cv_val_std = mean_std(fold_val_f1)
+            cv_test_mean, cv_test_std = mean_std(fold_test_f1)
 
-                # Per-seed ensembles
-                if not bool(oof_filled.all()):
-                    missing = int((~oof_filled).sum())
-                    raise RuntimeError(f"OOF logits not fully filled (missing={missing})")
+            # Per-seed ensembles
+            if not bool(oof_filled.all()):
+                missing = int((~oof_filled).sum())
+                raise RuntimeError(f"OOF logits not fully filled (missing={missing})")
 
-                y_true = np.asarray(y, dtype=int)
-                oof_metrics = logits_to_metrics(oof_logits, y_true)
-                oof_preds = oof_logits.argmax(axis=-1)
-                oof_cm = confusion_matrix(y_true, oof_preds, labels=list(range(num_classes)))
+            y_true = np.asarray(y, dtype=int)
+            oof_metrics = logits_to_metrics(oof_logits, y_true)
+            oof_preds = oof_logits.argmax(axis=-1)
+            oof_cm = confusion_matrix(y_true, oof_preds, labels=list(range(num_classes)))
 
-                seed_test_ens_logits = np.mean(np.stack(fold_test_logits, axis=0), axis=0)
-                seed_test_metrics = logits_to_metrics(seed_test_ens_logits, test_labels)
-                seed_test_preds = seed_test_ens_logits.argmax(axis=-1)
-                seed_test_cm = confusion_matrix(test_labels, seed_test_preds, labels=list(range(num_classes)))
+            seed_test_ens_logits = np.mean(np.stack(fold_test_logits, axis=0), axis=0)
+            seed_test_metrics = logits_to_metrics(seed_test_ens_logits, test_labels)
+            seed_test_preds = seed_test_ens_logits.argmax(axis=-1)
+            seed_test_cm = confusion_matrix(test_labels, seed_test_preds, labels=list(range(num_classes)))
 
-                # keep logits for seed-level ensemble across seeds
-                seed_oof_logits_list.append(oof_logits.astype(np.float32))
-                seed_test_logits_list.append(seed_test_ens_logits.astype(np.float32))
+            # keep logits for seed-level ensemble across seeds
+            seed_oof_logits_list.append(oof_logits.astype(np.float32))
+            seed_test_logits_list.append(seed_test_ens_logits.astype(np.float32))
 
-                record = {
-                    "fusion_method": method,
-                    "seed": int(seed),
-                    "cv_val_acc_folds": fold_val_acc,
-                    "cv_val_f1_folds": fold_val_f1,
-                    "cv_test_acc_folds": fold_test_acc,
-                    "cv_test_f1_folds": fold_test_f1,
-                    "cv_val_f1_mean": float(cv_val_mean),
-                    "cv_val_f1_std": float(cv_val_std),
-                    "cv_test_f1_mean": float(cv_test_mean),
-                    "cv_test_f1_std": float(cv_test_std),
-                    "cv_val_confusion": aggregate_confusions(fold_val_cms),
-                                        "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
-                    "cv_val_oof_ens_f1": float(oof_metrics["f1"]),
-                    "cv_val_oof_ens_confusion": aggregate_confusions([oof_cm]),
-                    "cv_test_ens_acc": float(seed_test_metrics["acc"]),
-                    "cv_test_ens_f1": float(seed_test_metrics["f1"]),
-                    "cv_test_ens_confusion": aggregate_confusions([seed_test_cm]),
-                }
-                per_method_seed_records[method].append(record)
+            record = {
+                "fusion_method": method,
+                "seed": int(seed),
+                "cv_val_acc_folds": fold_val_acc,
+                "cv_val_f1_folds": fold_val_f1,
+                "cv_test_acc_folds": fold_test_acc,
+                "cv_test_f1_folds": fold_test_f1,
+                "cv_val_f1_mean": float(cv_val_mean),
+                "cv_val_f1_std": float(cv_val_std),
+                "cv_test_f1_mean": float(cv_test_mean),
+                "cv_test_f1_std": float(cv_test_std),
+                "cv_val_confusion": aggregate_confusions(fold_val_cms),
+                                    "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
+                "cv_val_oof_ens_f1": float(oof_metrics["f1"]),
+                "cv_val_oof_ens_confusion": aggregate_confusions([oof_cm]),
+                "cv_test_ens_acc": float(seed_test_metrics["acc"]),
+                "cv_test_ens_f1": float(seed_test_metrics["f1"]),
+                "cv_test_ens_confusion": aggregate_confusions([seed_test_cm]),
+            }
+            per_method_seed_records[method].append(record)
 
         # Benchmark-level ensemble across seeds (using OOF logits for CV-val, and seed-ensembled logits for test)
         if len(seed_oof_logits_list) >= 2:
