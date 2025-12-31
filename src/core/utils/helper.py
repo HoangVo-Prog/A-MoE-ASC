@@ -79,7 +79,7 @@ def get_tokenizer(cfg):
 
 def get_model(cfg):
     model = getattr(__import__("src.models", fromlist=[cfg.base.mode]), cfg.base.mode)
-    return model(**filter_config_kwargs(cfg, Config))
+    return model(**filter_config_kwargs(cfg, model))
 
 
 def set_seed(seed: int = 13):
