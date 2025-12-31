@@ -82,5 +82,5 @@ python -m main \
   --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
-  --benchmark_methods coattn \
+  --benchmark_methods concat \
   ${LOSS_FLAGS}
