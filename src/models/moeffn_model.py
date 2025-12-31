@@ -448,5 +448,3 @@ class MoEFFN(BaseModel):
                 f"top: {top_pairs}"
             )
         print()
-
-    

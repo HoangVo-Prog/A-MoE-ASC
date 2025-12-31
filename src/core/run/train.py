@@ -39,7 +39,7 @@ def train_multi_seed(
         print(f"\n===== FULL seed={seed} fusion={method} =====")
         set_seed(int(seed))
         
-        model = get_model()
+        model = get_model(config)
         out = run_training_loop(
             config=config,
             model=model,

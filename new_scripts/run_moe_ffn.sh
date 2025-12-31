@@ -81,6 +81,7 @@ python -m main \
   --num_seeds 3 \
   --output_dir "$ROOT_DIR/saved_model" \
   --output_name base_model.json \
+  --train_full_only \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --benchmark_methods concat \
