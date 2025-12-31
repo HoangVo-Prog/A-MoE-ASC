@@ -8,19 +8,17 @@ from src.core.run import run_benchmark_fusion, train_multi_seed, train_kfold
 
 
 def main():
-    config = get_config()    
+    config = get_config() 
+    print("Configuration:", config)   
     set_seed()
     
     # Benchmarking fusion methods
-    if config.benchmark_fusion:
-        if not config.benchmark_methods:
-           config.benchmark_methods = FUSION_METHOD_CHOICES 
-           
-        out_path = os.path.join(config.base.output_dir, "fusion_benchmark_results.json")
-        
+    if config.base.benchmark_fusion:
+        if not config.base.benchmark_methods:
+           config.base.benchmark_methods = FUSION_METHOD_CHOICES 
+                   
         run_benchmark_fusion(config=config)
-        
-        print(f"Fusion benchmark results saved to {out_path}")
+        print("Benchmarking fusion methods completed.")
         return
     
     # Train full only with multi-seed
