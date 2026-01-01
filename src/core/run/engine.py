@@ -137,6 +137,9 @@ def train_one_epoch(
         torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
     )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
+    
+    print("step_print_moe", step_print_i)
+    print(len(dataloader))
 
     for step, batch in enumerate(dataloader):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
