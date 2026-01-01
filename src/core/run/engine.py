@@ -68,7 +68,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
             return True
 
         # General case: freeze the entire encoder (head-only warmup).
-        print(f"{mode} mode: freezing entire encoder (Schedule A warmup)")
+        print(f"{mode} mode: freezing entire encoder")
         _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=True)
         return True
