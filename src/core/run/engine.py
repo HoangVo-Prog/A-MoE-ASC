@@ -405,6 +405,8 @@ def run_training_loop(
             history["train_f1"].append(train_metrics["f1"])
             history["train_acc"].append(train_metrics["acc"])
 
+            print(train_metrics)
+            
             log = (
                 f"Train main_loss {train_metrics['loss_main']:.6f} "
                 f"aux_loss {train_metrics['aux_loss']:.6f} "
