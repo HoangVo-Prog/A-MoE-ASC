@@ -282,33 +282,23 @@ class MoEHead(BaseModel):
 
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
-
-        stats = []
-        E = None
-
-        for li, layer in enumerate(self.encoder.encoder.layer):
-            moe = getattr(layer, "moe_ffn", None)
+        def _stats_from_moe(moe, layer_id):
             if moe is None:
-                continue
-            if moe.last_router_logits is None or moe.last_topk_idx is None:
-                continue
+                return None
+            if getattr(moe, "last_router_logits", None) is None or getattr(moe, "last_topk_idx", None) is None:
+                return None
 
             logits = moe.last_router_logits
             topk_idx = moe.last_topk_idx
-            E = moe.num_experts
+            E = int(getattr(moe, "num_experts", 0) or 0)
+            if E <= 0:
+                return None
 
-            if logits.dim() == 3:
-                logits2 = logits.reshape(-1, logits.size(-1))
-            else:
-                logits2 = logits
-
-            if topk_idx.dim() == 3:
-                topk2 = topk_idx.reshape(-1, topk_idx.size(-1))
-            else:
-                topk2 = topk_idx
+            # flatten
+            logits2 = logits.reshape(-1, logits.size(-1)) if logits.dim() == 3 else logits
+            topk2 = topk_idx.reshape(-1, topk_idx.size(-1)) if topk_idx.dim() == 3 else topk_idx
 
             probs = torch.softmax(logits2, dim=-1)
-
             eps = 1e-9
             ent = -(probs * (probs + eps).log()).sum(dim=-1).mean()
             ent_norm = ent / math.log(E)
@@ -321,15 +311,54 @@ class MoEHead(BaseModel):
             )
             usage = counts / counts.sum().clamp_min(1.0)
 
-            stats.append(
-                {
-                    "layer": li,
-                    "entropy_norm": float(ent_norm.item()),
-                    "max_load": float(usage.max().item()),
-                    "min_load": float(usage.min().item()),
-                    "usage": usage.detach().cpu(),
-                }
-            )
+            return {
+                "layer": int(layer_id),
+                "entropy_norm": float(ent_norm.item()),
+                "max_load": float(usage.max().item()),
+                "min_load": float(usage.min().item()),
+                "usage": usage.detach().cpu(),
+            }
+
+        stats = []
+
+        # Case 1: MoEHead style (wrapper holds moe_ffn directly)
+        enc = getattr(self, "encoder", None)
+        head_moe = getattr(enc, "moe_ffn", None) if enc is not None else None
+        s_head = _stats_from_moe(head_moe, layer_id=-1)
+        if s_head is not None:
+            stats.append(s_head)
+            return stats
+
+        # Case 2: MoEFFN style (moe_ffn attached per transformer layer)
+        # We try to find a layer list in common HF backbones
+        base = enc
+        if base is None:
+            return stats
+
+        # unwrap if it is a wrapper that stores base encoder under base_encoder
+        base = getattr(base, "base_encoder", base)
+
+        layers = None
+        # common patterns
+        if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
+            layers = base.encoder.layer
+        elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
+            layers = base.encoder.layers
+        elif hasattr(base, "transformer") and hasattr(base.transformer, "layer"):
+            layers = base.transformer.layer
+        elif hasattr(base, "transformer") and hasattr(base.transformer, "layers"):
+            layers = base.transformer.layers
+        elif hasattr(base, "layers"):
+            layers = base.layers
+
+        if layers is None:
+            return stats
+
+        for li, layer in enumerate(layers):
+            moe = getattr(layer, "moe_ffn", None)
+            s = _stats_from_moe(moe, layer_id=li)
+            if s is not None:
+                stats.append(s)
 
         return stats
 
@@ -343,20 +372,22 @@ class MoEHead(BaseModel):
         for s in stats:
             usage = s["usage"]
             topv, topi = torch.topk(usage, k=min(topn, usage.numel()))
-            top_pairs = " ".join(
-                [f"e{int(i)}={float(v):.2f}" for v, i in zip(topv, topi)]
-            )
+            top_pairs = " ".join([f"e{int(i)}={float(v):.2f}" for v, i in zip(topv, topi)])
 
             imbalance = s["max_load"] / (s["min_load"] + 1e-9)
 
+            layer_id = s["layer"]
+            layer_txt = "Head" if layer_id == -1 else f"{layer_id:02d}"
+
             print(
-                f"Layer {s['layer']:02d} | "
+                f"Layer {layer_txt} | "
                 f"H={s['entropy_norm']:.3f} | "
                 f"max={s['max_load']:.2f} min={s['min_load']:.2f} "
                 f"(imb={imbalance:.1f}) | "
                 f"top: {top_pairs}"
             )
         print()
+
         
     def configure_topk_schedule(
         self,
