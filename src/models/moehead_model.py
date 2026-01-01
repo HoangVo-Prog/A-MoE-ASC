@@ -49,7 +49,7 @@ class MoE(nn.Module):
 
         self.ln = layer_norm if layer_norm is not None else nn.LayerNorm(self.hidden_size)
 
-        self.last_router_logit = None
+        self.last_router_logits = None
         self.last_topk_idx = None
 
         # init router near uniform
@@ -73,19 +73,35 @@ class MoE(nn.Module):
             active_idx = torch.nonzero(m, as_tuple=False).squeeze(-1)
             x_active = x.index_select(0, active_idx)
 
-        if self.router_jitter > 0.0:
-            noise = (torch.rand_like(x_active) - 0.5) * 2.0 * self.router_jitter
-            x_route = x_active + noise
-        else:
-            x_route = x_active
+        # 1) Router logits in fp32 to reduce tie due to fp16 rounding
+        w = self.router.weight
+        b = self.router.bias
+        router_logits_clean = F.linear(
+            x_active.float(),  # fp32
+            w.float(),
+            b.float() if b is not None else None,
+        )  # [N_active, E] fp32
 
-        router_logits = self.router(x_route)  # [N_active, E]
-        topk_vals, topk_idx = torch.topk(router_logits, k=self.moe_top_k, dim=-1)  # [N_active, K]
+        # 2) Jitter on logits for TOPK selection only (break ties), keep clean logits for weights
+        if self.training and self.router_jitter > 0.0:
+            # router_jitter here is a LOGIT jitter, not input jitter
+            # If you used router_jitter as input noise before, consider smaller value like 1e-2
+            logit_noise = (torch.rand_like(router_logits_clean) - 0.5) * 2.0 * float(self.router_jitter)
+            router_logits_topk = router_logits_clean + logit_noise
+        else:
+            router_logits_topk = router_logits_clean
+
+        # 3) Top-k indices from jittered logits
+        _, topk_idx = torch.topk(router_logits_topk, k=self.moe_top_k, dim=-1)  # [N_active, K]
+
+        # 4) Values and weights from CLEAN logits (stable gradient)
+        topk_vals = router_logits_clean.gather(-1, topk_idx)  # [N_active, K]
         topk_w = torch.softmax(topk_vals, dim=-1)  # [N_active, K]
 
         # cache for aux loss and debug
-        self.last_router_logits = router_logits
-        self.last_topk_idx = topk_idx 
+        self.last_router_logits = router_logits_clean  # clean logits
+        self.last_topk_idx = topk_idx
+
 
         cap = None
         if self.capacity_factor is not None:
@@ -107,8 +123,11 @@ class MoE(nn.Module):
             k_pos = flat_kpos[sel]
 
             if cap is not None and tok_pos.numel() > cap:
-                tok_pos = tok_pos[:cap]
-                k_pos = k_pos[:cap]
+                perm = torch.randperm(tok_pos.numel(), device=tok_pos.device)
+                keep = perm[:cap]
+                tok_pos = tok_pos.index_select(0, keep)
+                k_pos = k_pos.index_select(0, keep)
+
 
             xe = x_active.index_select(0, tok_pos)
             y = self.experts_dense1[e](xe)
@@ -229,66 +248,6 @@ class MoEHead(BaseModel):
 
         base_encoder = self.encoder
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
-
-    def _switch_aux_loss_topk(
-        router_logits: torch.Tensor,
-        topk_idx: torch.Tensor,
-        *,
-        token_mask: torch.Tensor | None = None,
-        eps: float = 1e-9,
-    ) -> torch.Tensor:
-        """
-        Switch-style load balancing loss for top-k routing.
-
-        router_logits: [B,T,E] or [N,E]
-        topk_idx:      [B,T,K] or [N,K]
-        token_mask:    [B,T] or [N] (optional). True/1 = keep token.
-        Returns scalar aux loss.
-        """
-        if router_logits is None or topk_idx is None:
-            return torch.tensor(0.0, device=router_logits.device if router_logits is not None else "cpu")
-
-        # Flatten to [N, E] and [N, K]
-        if router_logits.dim() == 3:
-            B, T, E = router_logits.shape
-            logits2 = router_logits.reshape(B * T, E)
-            topk2 = topk_idx.reshape(B * T, -1)
-            mask2 = token_mask.reshape(B * T) if token_mask is not None else None
-        else:
-            E = router_logits.size(-1)
-            logits2 = router_logits
-            topk2 = topk_idx
-            mask2 = token_mask if token_mask is not None else None
-
-        # Optional token mask
-        if mask2 is not None:
-            if mask2.dtype != torch.bool:
-                mask2 = mask2 != 0
-            if mask2.any():
-                logits2 = logits2[mask2]
-                topk2 = topk2[mask2]
-            else:
-                # no valid tokens
-                return torch.tensor(0.0, device=router_logits.device)
-
-        N = logits2.size(0)
-        if N == 0:
-            return torch.tensor(0.0, device=router_logits.device)
-
-        # Soft importance
-        probs = F.softmax(logits2, dim=-1)  # [N, E]
-        importance = probs.sum(dim=0)  # [E]
-        importance = importance / importance.sum().clamp_min(eps)
-
-        # Hard load from top-k assignment
-        counts = torch.zeros(E, device=logits2.device, dtype=torch.float32)
-        ones = torch.ones_like(topk2.reshape(-1), dtype=torch.float32, device=logits2.device)
-        counts.scatter_add_(0, topk2.reshape(-1), ones)
-        load = counts / counts.sum().clamp_min(eps)
-
-        # Switch aux loss
-        aux = float(E) * torch.sum(importance * load)
-        return aux
 
     def _collect_aux_loss(self):
         moe = getattr(self.encoder, "moe_ffn", None)
