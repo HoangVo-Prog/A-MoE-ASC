@@ -13,7 +13,7 @@ class BaseTrainConfig:
     train_path: str = "dataset/atsa/laptop14/train.json"
     test_path: str = "dataset/atsa/laptop14/test.json"
 
-    epochs: int = 10
+    epochs: int = 15
     train_batch_size: int = 16
     eval_batch_size: int = 32
     test_batch_size: int = 32
@@ -26,9 +26,9 @@ class BaseTrainConfig:
     num_seeds: int = 3
     num_workers: int = 4
 
-    freeze_epochs: int = 3
+    freeze_epochs: int = 1
     rolling_k: int = 3
-    early_stop_patience: int = 5
+    early_stop_patience: int = 3
 
     max_len_sent: int = 24
     max_len_term: int = 4
