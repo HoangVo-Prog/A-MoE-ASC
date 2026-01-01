@@ -204,7 +204,7 @@ def train_one_epoch(
         if step_print_i and (step > 0) and (step % step_print_i == 0):
             print("Join in the if")
             print(hasattr(model, "print_moe_debug"))
-            print(allable(getattr(model, "print_moe_debug")))
+            print(callable(getattr(model, "print_moe_debug")))
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
