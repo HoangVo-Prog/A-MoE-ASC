@@ -137,9 +137,6 @@ def train_one_epoch(
         torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
     )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
-    
-    print("step_print_moe", step_print_i)
-    print(len(dataloader))
 
     for step, batch in enumerate(dataloader):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
@@ -202,15 +199,11 @@ def train_one_epoch(
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
         if step_print_i and (step > 0) and (step % step_print_i == 0):
-            print("Join in the if")
-            print(hasattr(model, "print_moe_debug"))
-            print(callable(getattr(model, "print_moe_debug")))
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
-                    print("Normal print")
-                except Exception as e:
-                    print("Exception", e)
+                except Exception:
+                    pass
 
     denom = max(1, n_steps)
     acc = float(accuracy_score(all_labels, all_preds))
