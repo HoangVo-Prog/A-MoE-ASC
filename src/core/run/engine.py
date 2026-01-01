@@ -41,7 +41,7 @@ def _set_encoder_train_eval(model: nn.Module, *, frozen: bool) -> None:
 def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> bool:
     """
     Apply freeze policy for current epoch.
-    Returns: True if encoder is in frozen phase, else False.
+    Returns: True if encoder is in frozen phase (including partial-freeze), else False.
     """
     fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
     if fe <= 0:
@@ -55,16 +55,49 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
     if in_freeze:
         if mode == "MoEFFN":
             print("MoEFFN mode: freezing base encoder, keeping MoE FFN trainable")
-            # freeze base encoder, optionally keep moe_ffn trainable
             keep_moe = not bool(getattr(cfg.base, "freeze_moe", False))
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
-        else:
-            print(f"{mode} mode: freezing entire encoder")
-            # BaseModel and MoE Head (và mọi mode khác nếu bạn muốn) freeze toàn bộ encoder
-            _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
+            _set_encoder_train_eval(model, frozen=True)
+            return True
 
+        if mode == "MoEHead":
+            print("MoEHead mode: freezing embeddings only, keeping MoE and classifier trainable")
+
+            # We only touch model.encoder params here.
+            # Classifier is outside encoder, so it remains trainable.
+            if not hasattr(model, "encoder"):
+                return False
+
+            # 1) Start from "everything trainable" inside encoder
+            for name, p in model.encoder.named_parameters():
+                p.requires_grad = True
+
+            # 2) Keep MoE trainable (in case some naming overlaps or future changes)
+            #    and freeze embeddings only
+            for name, p in model.encoder.named_parameters():
+                # Keep MoE params trainable
+                if "moe_ffn" in name:
+                    p.requires_grad = True
+                    continue
+
+                # Freeze embeddings only (HF style: "...embeddings...")
+                if "embeddings" in name:
+                    p.requires_grad = False
+
+            # Encoder should stay in train mode because most of it is still trainable
+            _set_encoder_train_eval(model, frozen=False)
+            return True
+
+        print(f"{mode} mode: freezing entire encoder")
+        _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=True)
         return True
+
+    # unfreeze
+    _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
+    _set_encoder_train_eval(model, frozen=False)
+    return False
+
 
     # unfreeze
     
