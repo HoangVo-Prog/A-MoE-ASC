@@ -282,46 +282,106 @@ class MoEHead(BaseModel):
 
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
+        def _entropy_from_dist(p: torch.Tensor) -> torch.Tensor:
+            # p: [E], sum=1
+            eps = 1e-12
+            return -(p * (p + eps).log()).sum()
+
+        def _cv(p: torch.Tensor) -> float:
+            mu = p.mean().clamp_min(1e-12)
+            return float((p.std(unbiased=False) / mu).item())
+
         def _stats_from_moe(moe, layer_id):
             if moe is None:
                 return None
-            if getattr(moe, "last_router_logits", None) is None or getattr(moe, "last_topk_idx", None) is None:
+            logits = getattr(moe, "last_router_logits", None)
+            topk_idx = getattr(moe, "last_topk_idx", None)
+            if logits is None or topk_idx is None:
                 return None
 
-            logits = moe.last_router_logits
-            topk_idx = moe.last_topk_idx
             E = int(getattr(moe, "num_experts", 0) or 0)
             if E <= 0:
                 return None
 
-            # flatten
+            # logits: [B, T, E] or [N, E]
             logits2 = logits.reshape(-1, logits.size(-1)) if logits.dim() == 3 else logits
+            # topk_idx: [B, T, K] or [N, K]
             topk2 = topk_idx.reshape(-1, topk_idx.size(-1)) if topk_idx.dim() == 3 else topk_idx
 
-            probs = torch.softmax(logits2, dim=-1)
-            eps = 1e-9
-            ent = -(probs * (probs + eps).log()).sum(dim=-1).mean()
-            ent_norm = ent / math.log(E)
+            # Soft distribution per token
+            probs = torch.softmax(logits2, dim=-1)  # [N, E]
 
+            # 1) Hard usage from topk
             counts = torch.zeros(E, device=logits2.device, dtype=torch.float32)
             counts.scatter_add_(
                 0,
                 topk2.reshape(-1),
                 torch.ones_like(topk2.reshape(-1), dtype=torch.float32),
             )
-            usage = counts / counts.sum().clamp_min(1.0)
+            usage_hard = counts / counts.sum().clamp_min(1.0)
+
+            # 2) Soft expected usage from probs
+            usage_soft = probs.mean(dim=0)  # [E]
+            usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
+
+            # Entropy
+            ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()  # scalar
+            ent_full_norm = ent_full / math.log(E)
+
+            ent_hard = _entropy_from_dist(usage_hard)
+            ent_hard_norm = ent_hard / math.log(E)
+
+            ent_soft = _entropy_from_dist(usage_soft)
+            ent_soft_norm = ent_soft / math.log(E)
+
+            # Logits stats
+            logits_std = float(logits2.std(unbiased=False).item())
+            logits_maxabs = float(logits2.abs().max().item())
+
+            # Margin top1-top2 (how sharp routing is)
+            top2 = torch.topk(logits2, k=min(2, E), dim=-1).values  # [N,2]
+            if top2.size(-1) >= 2:
+                gap = float((top2[:, 0] - top2[:, 1]).mean().item())
+            else:
+                gap = 0.0
+
+            # Loads
+            max_hard = float(usage_hard.max().item())
+            min_hard = float(usage_hard.min().item())
+            max_soft = float(usage_soft.max().item())
+            min_soft = float(usage_soft.min().item())
 
             return {
                 "layer": int(layer_id),
-                "entropy_norm": float(ent_norm.item()),
-                "max_load": float(usage.max().item()),
-                "min_load": float(usage.min().item()),
-                "usage": usage.detach().cpu(),
+
+                # entropy
+                "H_full_norm": float(ent_full_norm.item()),
+                "H_hard_norm": float(ent_hard_norm.item()),
+                "H_soft_norm": float(ent_soft_norm.item()),
+
+                # logits
+                "logits_std": logits_std,
+                "logits_maxabs": logits_maxabs,
+                "gap_top1_top2": gap,
+
+                # usage
+                "usage_hard": usage_hard.detach().cpu(),
+                "usage_soft": usage_soft.detach().cpu(),
+
+                # min max
+                "max_hard": max_hard,
+                "min_hard": min_hard,
+                "max_soft": max_soft,
+                "min_soft": min_soft,
+
+                # dispersion
+                "cv_hard": _cv(usage_hard),
+                "cv_soft": _cv(usage_soft),
             }
 
         stats = []
 
-        # Case 1: MoEHead style (wrapper holds moe_ffn directly)
+        # Case 1: MoEHead style
         enc = getattr(self, "encoder", None)
         head_moe = getattr(enc, "moe_ffn", None) if enc is not None else None
         s_head = _stats_from_moe(head_moe, layer_id=-1)
@@ -329,17 +389,14 @@ class MoEHead(BaseModel):
             stats.append(s_head)
             return stats
 
-        # Case 2: MoEFFN style (moe_ffn attached per transformer layer)
-        # We try to find a layer list in common HF backbones
+        # Case 2: per-layer MoE FFN style
         base = enc
         if base is None:
             return stats
 
-        # unwrap if it is a wrapper that stores base encoder under base_encoder
         base = getattr(base, "base_encoder", base)
 
         layers = None
-        # common patterns
         if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
             layers = base.encoder.layer
         elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
@@ -362,6 +419,7 @@ class MoEHead(BaseModel):
 
         return stats
 
+
     def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
         stats = self._moe_debug_stats_per_layer()
         if not stats:
@@ -370,51 +428,58 @@ class MoEHead(BaseModel):
 
         print("\n[MoE Debug]")
         for s in stats:
-            usage = s["usage"].float()  # on CPU already
-
-            # Layer label
             layer_id = int(s["layer"])
             layer_txt = "Head" if layer_id == -1 else f"{layer_id:02d}"
 
-            # Basic stats
-            u_min = float(usage.min().item())
-            u_max = float(usage.max().item())
-            u_mean = float(usage.mean().item())
-            u_std = float(usage.std(unbiased=False).item())
+            uh = s["usage_hard"].float()
+            us = s["usage_soft"].float()
 
-            # Dead / near-dead experts
-            num_zero = int((usage == 0).sum().item())
-            num_dead = int((usage < eps_dead).sum().item())
+            # dead counts
+            dead_h0 = int((uh == 0).sum().item())
+            dead_h = int((uh < eps_dead).sum().item())
+            dead_s0 = int((us == 0).sum().item())
+            dead_s = int((us < eps_dead).sum().item())
 
-            # Tail info
-            topk = min(topn, usage.numel())
-            botk = min(bottomn, usage.numel())
+            # top/bottom
+            topk = min(topn, uh.numel())
+            botk = min(bottomn, uh.numel())
 
-            topv, topi = torch.topk(usage, k=topk, largest=True)
-            botv, boti = torch.topk(usage, k=botk, largest=False)
+            topv_h, topi_h = torch.topk(uh, k=topk, largest=True)
+            botv_h, boti_h = torch.topk(uh, k=botk, largest=False)
 
-            top_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv, topi)])
-            bot_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv, boti)])
+            topv_s, topi_s = torch.topk(us, k=topk, largest=True)
+            botv_s, boti_s = torch.topk(us, k=botk, largest=False)
 
-            # Imbalance (avoid divide by zero)
-            imbalance = u_max / (u_min + 1e-12)
+            top_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_h, topi_h)])
+            bot_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_h, boti_h)])
 
-            # Print with higher precision for entropy_norm
-            # entropy_norm is already float in stats
-            H = float(s["entropy_norm"])
+            top_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_s, topi_s)])
+            bot_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_s, boti_s)])
+
+            # imbalance
+            imb_h = float(s["max_hard"] / (s["min_hard"] + 1e-12))
+            imb_s = float(s["max_soft"] / (s["min_soft"] + 1e-12))
 
             print(
                 f"Layer {layer_txt} | "
-                f"H={H:.6f} | "
-                f"min={u_min:.6f} max={u_max:.6f} mean={u_mean:.6f} std={u_std:.6f} | "
-                f"imb={imbalance:.2f} | "
-                f"dead(==0)={num_zero} dead(<{eps_dead:g})={num_dead}"
+                f"H_full={s['H_full_norm']:.6f} H_soft={s['H_soft_norm']:.6f} H_hard={s['H_hard_norm']:.6f} | "
+                f"logits_std={s['logits_std']:.6f} maxabs={s['logits_maxabs']:.6f} gap12={s['gap_top1_top2']:.6f}"
             )
-            print(f"  top: {top_pairs}")
-            print(f"  bot: {bot_pairs}")
+            print(
+                f"  HARD: min={s['min_hard']:.6f} max={s['max_hard']:.6f} cv={s['cv_hard']:.3f} imb={imb_h:.2f} "
+                f"dead(==0)={dead_h0} dead(<{eps_dead:g})={dead_h}"
+            )
+            print(f"    top: {top_pairs_h}")
+            print(f"    bot: {bot_pairs_h}")
+
+            print(
+                f"  SOFT: min={s['min_soft']:.6f} max={s['max_soft']:.6f} cv={s['cv_soft']:.3f} imb={imb_s:.2f} "
+                f"dead(==0)={dead_s0} dead(<{eps_dead:g})={dead_s}"
+            )
+            print(f"    top: {top_pairs_s}")
+            print(f"    bot: {bot_pairs_s}")
 
         print()
-
 
         
     def configure_topk_schedule(
