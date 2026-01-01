@@ -208,8 +208,9 @@ def train_one_epoch(
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
-                except Exception:
-                    pass
+                    print("Normal print")
+                except Exception as e:
+                    print("Exception", e)
 
     denom = max(1, n_steps)
     acc = float(accuracy_score(all_labels, all_preds))
