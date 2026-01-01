@@ -419,16 +419,15 @@ class MoEHead(BaseModel):
             mu = p.mean().clamp_min(1e-12)
             return float((p.std(unbiased=False) / mu).item())
 
-        def _stats_from_moe(moe_mod, *, layer_id: str):
-            if moe_mod is None:
+        def _stats_from_moe(moe, layer_id):
+            if moe is None:
                 return None
-
-            logits = getattr(moe_mod, "last_router_logits", None)
-            topk_idx = getattr(moe_mod, "last_topk_idx", None)
+            logits = getattr(moe, "last_router_logits", None)
+            topk_idx = getattr(moe, "last_topk_idx", None)
             if logits is None or topk_idx is None:
                 return None
 
-            E = int(getattr(moe_mod, "num_experts", 0) or 0)
+            E = int(getattr(moe, "num_experts", 0) or 0)
             if E <= 0:
                 return None
 
@@ -454,57 +453,52 @@ class MoEHead(BaseModel):
             usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
 
             # Entropy
-            H_full = float(math.log(E))
-            H_hard = float(_entropy_from_dist(usage_hard).item() / (H_full + 1e-12))
-            H_soft = float(_entropy_from_dist(usage_soft).item() / (H_full + 1e-12))
+            ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()  # scalar
+            ent_full_norm = ent_full / math.log(E)
 
-            # Imbalance ratio: max/min
+            ent_hard = _entropy_from_dist(usage_hard)
+            ent_hard_norm = ent_hard / math.log(E)
+
+            ent_soft = _entropy_from_dist(usage_soft)
+            ent_soft_norm = ent_soft / math.log(E)
+
+            # Logits stats
+            logits_std = float(logits2.std(unbiased=False).item())
+            logits_maxabs = float(logits2.abs().max().item())
+
+            # Margin top1-top2 (how sharp routing is)
+            top2 = torch.topk(logits2, k=min(2, E), dim=-1).values  # [N,2]
+            if top2.size(-1) >= 2:
+                gap = float((top2[:, 0] - top2[:, 1]).mean().item())
+            else:
+                gap = 0.0
+
+            # Loads
             max_hard = float(usage_hard.max().item())
             min_hard = float(usage_hard.min().item())
-            imb_hard = float((max_hard / max(min_hard, 1e-12)))
-
             max_soft = float(usage_soft.max().item())
             min_soft = float(usage_soft.min().item())
-            imb_soft = float((max_soft / max(min_soft, 1e-12)))
-
-            # Dead experts
-            dead_hard = int((usage_hard <= 0.0).sum().item())
-            dead_soft = int((usage_soft <= 1e-6).sum().item())
-
-            # Top/bottom experts by hard usage
-            top_vals, top_idx = torch.topk(usage_hard, k=min(3, E), largest=True)
-            bot_vals, bot_idx = torch.topk(usage_hard, k=min(3, E), largest=False)
-
-            top = [(f"e{int(i)}", float(v)) for v, i in zip(top_vals.tolist(), top_idx.tolist())]
-            bot = [(f"e{int(i)}", float(v)) for v, i in zip(bot_vals.tolist(), bot_idx.tolist())]
-
-            # Logits dispersion (helps detect flat router)
-            logits_std = float(logits2.float().std(unbiased=False).item())
-            maxabs = float(logits2.float().abs().max().item())
-            # gap between top1 and top2 (average)
-            sorted_logits = torch.topk(logits2.float(), k=min(2, E), dim=-1).values
-            gap12 = float((sorted_logits[:, 0] - sorted_logits[:, 1]).mean().item()) if sorted_logits.size(-1) >= 2 else 0.0
 
             return {
-                "layer": layer_id,
-                "E": E,
-                "H_full": H_full,
-                "H_hard": H_hard,
-                "H_soft": H_soft,
+                "layer": int(layer_id),
 
+                # entropy
+                "H_full_norm": float(ent_full_norm.item()),
+                "H_hard_norm": float(ent_hard_norm.item()),
+                "H_soft_norm": float(ent_soft_norm.item()),
+
+                # logits
                 "logits_std": logits_std,
-                "maxabs": maxabs,
-                "gap12": gap12,
+                "logits_maxabs": logits_maxabs,
+                "gap_top1_top2": gap,
 
+                # usage
+                "usage_hard": usage_hard.detach().cpu(),
+                "usage_soft": usage_soft.detach().cpu(),
+
+                # min max
                 "max_hard": max_hard,
                 "min_hard": min_hard,
-                "imb_hard": imb_hard,
-                "dead_hard": dead_hard,
-                "dead_soft": dead_soft,
-
-                "top_hard": top,
-                "bot_hard": bot,
-
                 "max_soft": max_soft,
                 "min_soft": min_soft,
 
@@ -518,12 +512,40 @@ class MoEHead(BaseModel):
         # Case 1: MoEHead style
         enc = getattr(self, "encoder", None)
         head_moe = getattr(enc, "moe_ffn", None) if enc is not None else None
-        s_head = _stats_from_moe(head_moe, layer_id="Head")
+        s_head = _stats_from_moe(head_moe, layer_id=-1)
         if s_head is not None:
             stats.append(s_head)
+            return stats
+
+        # Case 2: per-layer MoE FFN style
+        base = enc
+        if base is None:
+            return stats
+
+        base = getattr(base, "base_encoder", base)
+
+        layers = None
+        if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
+            layers = base.encoder.layer
+        elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
+            layers = base.encoder.layers
+        elif hasattr(base, "transformer") and hasattr(base.transformer, "layer"):
+            layers = base.transformer.layer
+        elif hasattr(base, "transformer") and hasattr(base.transformer, "layers"):
+            layers = base.transformer.layers
+        elif hasattr(base, "layers"):
+            layers = base.layers
+
+        if layers is None:
+            return stats
+
+        for li, layer in enumerate(layers):
+            moe = getattr(layer, "moe_ffn", None)
+            s = _stats_from_moe(moe, layer_id=li)
+            if s is not None:
+                stats.append(s)
 
         return stats
-
     
     def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
         stats = self._moe_debug_stats_per_layer()
@@ -585,7 +607,7 @@ class MoEHead(BaseModel):
             print(f"    bot: {bot_pairs_s}")
 
         print()
-        
+       
     def configure_topk_schedule(
         self,
         *,
