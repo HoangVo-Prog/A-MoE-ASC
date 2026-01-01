@@ -292,13 +292,34 @@ class MoEHead(BaseModel):
 
     def _collect_aux_loss(self):
         moe = getattr(self.encoder, "moe_ffn", None)
-        if moe is None or moe.last_router_logits is None or moe.last_topk_idx is None:
+        if moe is None or moe.last_topk_idx is None:
             return torch.tensor(0.0, device=self.device)
-        return moe_load_balance_loss(
-            moe.last_router_logits,
-            moe.last_topk_idx,
-            moe.num_experts,
-        )
+
+        topk_idx = moe.last_topk_idx  # [N_active, K]
+        E = int(getattr(moe, "num_experts", 0) or 0)
+        if E <= 0:
+            return torch.tensor(0.0, device=self.device)
+
+        device = topk_idx.device
+        eps = 1e-12
+
+        # hard counts over top-k selections
+        flat = topk_idx.reshape(-1)
+        counts = torch.zeros(E, device=device, dtype=torch.float32)
+        ones = torch.ones_like(flat, dtype=torch.float32, device=device)
+        counts.scatter_add_(0, flat, ones)
+
+        total = counts.sum().clamp_min(1.0)
+        load = counts / total  # sum = 1
+
+        # hard load penalty: uniform -> 1, imbalanced -> >1
+        aux = float(E) * torch.sum(load * load)
+
+        # safety
+        if not torch.isfinite(aux):
+            aux = torch.zeros((), device=device, dtype=torch.float32)
+
+        return aux
 
     def _compute_loss(self, logits, labels):
         if labels is None:
@@ -311,72 +332,34 @@ class MoEHead(BaseModel):
                 "loss_total": None,
             }
 
-        # -------------------------
-        # Main task loss
-        # -------------------------
         if self.loss_type == "ce":
             loss_main = F.cross_entropy(logits, labels)
 
         elif self.loss_type == "weighted_ce":
-            if self.class_weights is None:
-                raise RuntimeError("loss_type='weighted_ce' requires self.class_weights")
-            w = self.class_weights.to(device=logits.device, dtype=torch.float32)
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_main = F.cross_entropy(logits, labels, weight=w)
 
         elif self.loss_type == "focal":
-            if self.class_weights is None:
-                raise RuntimeError("loss_type='focal' requires self.class_weights")
-            w = self.class_weights.to(device=logits.device, dtype=torch.float32)
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
             loss_main = loss_fn(logits, labels)
 
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+        
+        aux = self._collect_aux_loss()
+        loss_lambda = self.aux_loss_weight * aux
 
-        # -------------------------
-        # Aux loss (MoE)
-        # -------------------------
-        aux = None
-        if hasattr(self, "_collect_aux_loss"):
-            try:
-                aux = self._collect_aux_loss()
-            except Exception:
-                aux = None
-
-        # Make aux a tensor on the right device
-        if aux is None:
-            aux_t = torch.zeros((), device=logits.device, dtype=torch.float32)
-            aux = aux_t
-        elif not torch.is_tensor(aux):
-            aux = torch.tensor(float(aux), device=logits.device, dtype=torch.float32)
-        else:
-            aux = aux.to(device=logits.device)
-            # stabilize in AMP: keep aux in fp32
-            if aux.dtype != torch.float32:
-                aux = aux.float()
-
-        # Guard against NaN/Inf from router edge cases
-        if not torch.isfinite(aux).all():
-            aux = torch.zeros((), device=logits.device, dtype=torch.float32)
-
-        # -------------------------
-        # Combine
-        # -------------------------
-        aux_w = float(getattr(self, "aux_loss_weight", 0.0) or 0.0)
-
-        # Keep loss_lambda on same dtype/device as loss_main for safe summation
-        loss_lambda = (aux * aux_w).to(dtype=loss_main.dtype, device=loss_main.device)
         loss_total = loss_main + loss_lambda
 
         return {
-            "loss": loss_total,
-            "logits": logits,
-            "aux_loss": aux,               # fp32 tensor
-            "loss_main": loss_main,
-            "loss_lambda": loss_lambda,
-            "loss_total": loss_total,
+            "loss": loss_total,          
+            "logits": logits,            
+            "aux_loss": aux,            
+            "loss_main": loss_main,      
+            "loss_lambda": loss_lambda,  
+            "loss_total": loss_total,    
         }
-
 
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
