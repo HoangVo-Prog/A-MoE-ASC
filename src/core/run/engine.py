@@ -40,8 +40,14 @@ def _set_encoder_train_eval(model: nn.Module, *, frozen: bool) -> None:
 
 def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> bool:
     """
-    Apply freeze policy for current epoch.
-    Returns: True if encoder is in frozen phase (including partial-freeze), else False.
+    Schedule A (stable warmup):
+    - For the first `cfg.base.freeze_epochs` epochs: freeze the entire encoder (BERT backbone),
+      so only modules outside `model.encoder` are trained.
+    - After that: unfreeze the encoder and train everything.
+
+    Exception:
+    - If `cfg.base.mode == "MoEFFN"`, we keep the existing specialized logic
+      (MoE FFN lives inside the encoder and is handled there).
     """
     fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
     if fe <= 0:
@@ -53,6 +59,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
     mode = str(getattr(cfg.base, "mode", "")).strip()
 
     if in_freeze:
+        # Keep the user's existing MoEFFN logic untouched.
         if mode == "MoEFFN":
             print("MoEFFN mode: freezing base encoder, keeping MoE FFN trainable")
             keep_moe = not bool(getattr(cfg.base, "freeze_moe", False))
@@ -60,47 +67,13 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
             _set_encoder_train_eval(model, frozen=True)
             return True
 
-        if mode == "MoEHead":
-            print("MoEHead mode: freezing embeddings only, keeping MoE and classifier trainable")
-
-            # We only touch model.encoder params here.
-            # Classifier is outside encoder, so it remains trainable.
-            if not hasattr(model, "encoder"):
-                return False
-
-            # 1) Start from "everything trainable" inside encoder
-            for name, p in model.encoder.named_parameters():
-                p.requires_grad = True
-
-            # 2) Keep MoE trainable (in case some naming overlaps or future changes)
-            #    and freeze embeddings only
-            for name, p in model.encoder.named_parameters():
-                # Keep MoE params trainable
-                if "moe_ffn" in name:
-                    p.requires_grad = True
-                    continue
-
-                # Freeze embeddings only (HF style: "...embeddings...")
-                if "embeddings" in name:
-                    p.requires_grad = False
-
-            # Encoder should stay in train mode because most of it is still trainable
-            _set_encoder_train_eval(model, frozen=False)
-            return True
-
-        print(f"{mode} mode: freezing entire encoder")
+        # General case: freeze the entire encoder (head-only warmup).
+        print(f"{mode} mode: freezing entire encoder (Schedule A warmup)")
         _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=True)
         return True
 
-    # unfreeze
-    _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
-    _set_encoder_train_eval(model, frozen=False)
-    return False
-
-
-    # unfreeze
-    
+    # Unfreeze
     _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
     _set_encoder_train_eval(model, frozen=False)
     return False
@@ -343,6 +316,7 @@ def run_training_loop(
     optimizer, scheduler = build_optimizer_and_scheduler(
         model=model,
         lr=cfg.base.lr,
+        lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
         warmup_ratio=cfg.base.warmup_ratio,
         total_steps=steps_per_epoch * max(1, int(cfg.base.epochs)),
         params=trainable_params(),
@@ -376,6 +350,7 @@ def run_training_loop(
             optimizer, scheduler = build_optimizer_and_scheduler(
                 model=model,
                 lr=cfg.base.lr,
+                lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
                 warmup_ratio=cfg.base.warmup_ratio,
                 total_steps=remaining_steps,
                 params=trainable_params(),
