@@ -425,7 +425,7 @@ def run_training_loop(
 
             )
 
-            should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral - 0.02)
+            should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral)
             if should_save:
                 best_macro_f1 = macro_f1
                 best_f1_neutral = neutral_f1
