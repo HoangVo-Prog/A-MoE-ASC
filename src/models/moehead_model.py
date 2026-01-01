@@ -362,7 +362,7 @@ class MoEHead(BaseModel):
 
         return stats
 
-    def print_moe_debug(self, topn: int = 3):
+    def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
         stats = self._moe_debug_stats_per_layer()
         if not stats:
             print("[MoE] No stats yet.")
@@ -370,23 +370,51 @@ class MoEHead(BaseModel):
 
         print("\n[MoE Debug]")
         for s in stats:
-            usage = s["usage"]
-            topv, topi = torch.topk(usage, k=min(topn, usage.numel()))
-            top_pairs = " ".join([f"e{int(i)}={float(v):.2f}" for v, i in zip(topv, topi)])
+            usage = s["usage"].float()  # on CPU already
 
-            imbalance = s["max_load"] / (s["min_load"] + 1e-9)
-
-            layer_id = s["layer"]
+            # Layer label
+            layer_id = int(s["layer"])
             layer_txt = "Head" if layer_id == -1 else f"{layer_id:02d}"
+
+            # Basic stats
+            u_min = float(usage.min().item())
+            u_max = float(usage.max().item())
+            u_mean = float(usage.mean().item())
+            u_std = float(usage.std(unbiased=False).item())
+
+            # Dead / near-dead experts
+            num_zero = int((usage == 0).sum().item())
+            num_dead = int((usage < eps_dead).sum().item())
+
+            # Tail info
+            topk = min(topn, usage.numel())
+            botk = min(bottomn, usage.numel())
+
+            topv, topi = torch.topk(usage, k=topk, largest=True)
+            botv, boti = torch.topk(usage, k=botk, largest=False)
+
+            top_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv, topi)])
+            bot_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv, boti)])
+
+            # Imbalance (avoid divide by zero)
+            imbalance = u_max / (u_min + 1e-12)
+
+            # Print with higher precision for entropy_norm
+            # entropy_norm is already float in stats
+            H = float(s["entropy_norm"])
 
             print(
                 f"Layer {layer_txt} | "
-                f"H={s['entropy_norm']:.3f} | "
-                f"max={s['max_load']:.2f} min={s['min_load']:.2f} "
-                f"(imb={imbalance:.1f}) | "
-                f"top: {top_pairs}"
+                f"H={H:.6f} | "
+                f"min={u_min:.6f} max={u_max:.6f} mean={u_mean:.6f} std={u_std:.6f} | "
+                f"imb={imbalance:.2f} | "
+                f"dead(==0)={num_zero} dead(<{eps_dead:g})={num_dead}"
             )
+            print(f"  top: {top_pairs}")
+            print(f"  bot: {bot_pairs}")
+
         print()
+
 
         
     def configure_topk_schedule(
