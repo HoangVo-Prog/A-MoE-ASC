@@ -305,20 +305,32 @@ class MoEHead(BaseModel):
 
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
-        
-        aux = self._collect_aux_loss()
-        loss_lambda = self.aux_loss_weight * aux
 
+        # aux loss: safe default
+        aux = self._collect_aux_loss()
+        if aux is None:
+            aux = torch.zeros((), device=logits.device, dtype=logits.dtype)
+        else:
+            # make sure scalar tensor on same device
+            aux = aux.to(device=logits.device)
+            if aux.dim() != 0:
+                aux = aux.mean()
+
+            # optional: clamp to avoid rare spikes killing training
+            aux = aux.clamp(min=0.0, max=10.0)
+
+        loss_lambda = self.aux_loss_weight * aux
         loss_total = loss_main + loss_lambda
 
         return {
-            "loss": loss_total,          
-            "logits": logits,            
-            "aux_loss": aux,            
-            "loss_main": loss_main,      
-            "loss_lambda": loss_lambda,  
-            "loss_total": loss_total,    
+            "loss": loss_total,
+            "logits": logits,
+            "aux_loss": aux.detach(),          # log scalar
+            "loss_main": loss_main.detach(),
+            "loss_lambda": loss_lambda.detach(),
+            "loss_total": loss_total.detach(),
         }
+
 
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
