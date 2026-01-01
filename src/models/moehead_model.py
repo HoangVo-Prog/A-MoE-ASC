@@ -50,7 +50,7 @@ class MoE(nn.Module):
         self.last_topk_idx = None
 
         # init router near-uniform, but break symmetry (important for top-k routing)
-        # If all router logits are exactly equal (e.g., all-zero weights), torch.topk will pick a fixed subset
+        # If all router logits are exactly equal (e.g. all-zero weights), torch.topk will pick a fixed subset
         # of experts, causing dead experts and huge imbalance metrics. Use tiny random init instead.
         nn.init.normal_(self.router.weight, mean=0.0, std=1e-3)
         if self.router.bias is not None:
@@ -150,8 +150,22 @@ class EncoderWithMoEHead(nn.Module):
         attn_mask = kwargs.get("attention_mask", None)
         token_mask = None
         if attn_mask is not None:
+            # token_mask is expected to be 0/1 with 1 = valid token positions.
+            # Support common HF mask formats:
+            # - 2D: {0,1} where 1=keep, 0=pad
+            # - 4D extended/additive: 0 for keep, negative large for mask
             if attn_mask.dim() == 4:
-                token_mask = (attn_mask[:, 0, 0, :] == 0).long()
+                m = attn_mask[:, 0, 0, :]
+                if m.dtype == torch.bool:
+                    token_mask = m.long()
+                else:
+                    m_f = m.float()
+                    if torch.min(m_f) < 0.0 and torch.max(m_f) <= 0.0:
+                        # additive mask: 0 keep, negative mask
+                        token_mask = (m_f == 0.0).long()
+                    else:
+                        # assume 1 keep, 0 mask (or any positive keep)
+                        token_mask = (m_f > 0.0).long()
             else:
                 token_mask = attn_mask
 
@@ -190,6 +204,11 @@ class MoEHead(BaseModel):
         router_jitter: float,
         capacity_factor,
         route_mask_pad_tokens: bool,
+        # New: regularization + schedules (all optional / backward compatible)
+        router_entropy_weight: float = 0.0,
+        aux_warmup_steps: int = 0,
+        jitter_warmup_steps: int = 0,
+        jitter_end: float = 0.0,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -202,6 +221,15 @@ class MoEHead(BaseModel):
         )
         
         self.aux_loss_weight=aux_loss_weight
+
+        self.router_entropy_weight = float(router_entropy_weight)
+        self.aux_warmup_steps = int(aux_warmup_steps)
+        self.jitter_warmup_steps = int(jitter_warmup_steps)
+        self.jitter_end = float(jitter_end)
+
+        # internal training step counter for schedules
+        self._global_step = 0
+
 
         cfg = getattr(self.encoder, "config", None)
         hidden_size = int(getattr(cfg, "hidden_size"))
@@ -229,8 +257,36 @@ class MoEHead(BaseModel):
             layer_norm=nn.LayerNorm(hidden_size),
         )
 
+        # jitter schedule
+        self._jitter_start = float(router_jitter)
+
         base_encoder = self.encoder
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
+
+    def forward(
+        self,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        labels = None,
+        fusion_method: str = "concat",
+    ):
+        # step-based schedules
+        if self.training:
+            self._global_step += 1
+            moe = getattr(self.encoder, "moe_ffn", None)
+            if moe is not None:
+                moe.router_jitter = float(self._jitter_now())
+
+        return super().forward(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            labels=labels,
+            fusion_method=fusion_method,
+        )
 
     def _collect_aux_loss(self):
         """Switch-style load-balancing loss adapted to top-k routing.
@@ -271,6 +327,40 @@ class MoEHead(BaseModel):
         aux = torch.clamp(aux, min=0.0, max=10.0)
         return aux
 
+    def _aux_weight_now(self) -> float:
+        w = float(self.aux_loss_weight)
+        if not self.training:
+            return w
+        if self.aux_warmup_steps and self.aux_warmup_steps > 0:
+            t = min(1.0, float(self._global_step) / float(self.aux_warmup_steps))
+            return w * t
+        return w
+
+    def _jitter_now(self) -> float:
+        if not self.training:
+            return float(self._jitter_start)
+        if self.jitter_warmup_steps and self.jitter_warmup_steps > 0:
+            t = min(1.0, float(self._global_step) / float(self.jitter_warmup_steps))
+            return float(self._jitter_start) * (1.0 - t) + float(self.jitter_end) * t
+        return float(self._jitter_start)
+
+    def _collect_router_entropy(self) -> torch.Tensor:
+        """Mean per-token routing entropy (normalized to [0,1]) over active tokens."""
+        moe = getattr(self.encoder, "moe_ffn", None)
+        if moe is None:
+            return torch.zeros((), device=next(self.parameters()).device)
+
+        logits = getattr(moe, "last_router_logits", None)
+        if logits is None or logits.ndim != 2 or logits.shape[0] == 0:
+            return torch.zeros((), device=next(self.parameters()).device)
+
+        n_experts = logits.shape[-1]
+        probs = torch.softmax(logits.float(), dim=-1)  # [N, E]
+        ent = -(probs * torch.log(probs.clamp_min(1e-9))).sum(dim=-1)  # [N]
+        ent = ent.mean()
+        ent = ent / float(math.log(n_experts + 1e-9))
+        return ent.to(dtype=logits.dtype, device=logits.device)
+
 
     def _compute_loss(self, logits, labels):
         if labels is None:
@@ -299,17 +389,23 @@ class MoEHead(BaseModel):
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
         
         aux = self._collect_aux_loss()
-        loss_lambda = self.aux_loss_weight * aux
+        aux_w = self._aux_weight_now()
+        loss_lambda = aux_w * aux
 
-        loss_total = loss_main + loss_lambda
+        entropy = self._collect_router_entropy()
+        loss_entropy = float(self.router_entropy_weight) * entropy
+
+        loss_total = loss_main + loss_lambda + loss_entropy
 
         return {
-            "loss": loss_total,          
-            "logits": logits,            
-            "aux_loss": aux,            
-            "loss_main": loss_main,      
-            "loss_lambda": loss_lambda,  
-            "loss_total": loss_total,    
+            "loss": loss_total,
+            "logits": logits,
+            "aux_loss": aux,
+            "router_entropy": entropy,
+            "loss_main": loss_main,
+            "loss_lambda": loss_lambda,
+            "loss_entropy": loss_entropy,
+            "loss_total": loss_total,
         }
 
     @torch.no_grad()
@@ -323,15 +419,16 @@ class MoEHead(BaseModel):
             mu = p.mean().clamp_min(1e-12)
             return float((p.std(unbiased=False) / mu).item())
 
-        def _stats_from_moe(moe, layer_id):
-            if moe is None:
+        def _stats_from_moe(moe_mod, *, layer_id: str):
+            if moe_mod is None:
                 return None
-            logits = getattr(moe, "last_router_logits", None)
-            topk_idx = getattr(moe, "last_topk_idx", None)
+
+            logits = getattr(moe_mod, "last_router_logits", None)
+            topk_idx = getattr(moe_mod, "last_topk_idx", None)
             if logits is None or topk_idx is None:
                 return None
 
-            E = int(getattr(moe, "num_experts", 0) or 0)
+            E = int(getattr(moe_mod, "num_experts", 0) or 0)
             if E <= 0:
                 return None
 
@@ -357,52 +454,57 @@ class MoEHead(BaseModel):
             usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
 
             # Entropy
-            ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()  # scalar
-            ent_full_norm = ent_full / math.log(E)
+            H_full = float(math.log(E))
+            H_hard = float(_entropy_from_dist(usage_hard).item() / (H_full + 1e-12))
+            H_soft = float(_entropy_from_dist(usage_soft).item() / (H_full + 1e-12))
 
-            ent_hard = _entropy_from_dist(usage_hard)
-            ent_hard_norm = ent_hard / math.log(E)
-
-            ent_soft = _entropy_from_dist(usage_soft)
-            ent_soft_norm = ent_soft / math.log(E)
-
-            # Logits stats
-            logits_std = float(logits2.std(unbiased=False).item())
-            logits_maxabs = float(logits2.abs().max().item())
-
-            # Margin top1-top2 (how sharp routing is)
-            top2 = torch.topk(logits2, k=min(2, E), dim=-1).values  # [N,2]
-            if top2.size(-1) >= 2:
-                gap = float((top2[:, 0] - top2[:, 1]).mean().item())
-            else:
-                gap = 0.0
-
-            # Loads
+            # Imbalance ratio: max/min
             max_hard = float(usage_hard.max().item())
             min_hard = float(usage_hard.min().item())
+            imb_hard = float((max_hard / max(min_hard, 1e-12)))
+
             max_soft = float(usage_soft.max().item())
             min_soft = float(usage_soft.min().item())
+            imb_soft = float((max_soft / max(min_soft, 1e-12)))
+
+            # Dead experts
+            dead_hard = int((usage_hard <= 0.0).sum().item())
+            dead_soft = int((usage_soft <= 1e-6).sum().item())
+
+            # Top/bottom experts by hard usage
+            top_vals, top_idx = torch.topk(usage_hard, k=min(3, E), largest=True)
+            bot_vals, bot_idx = torch.topk(usage_hard, k=min(3, E), largest=False)
+
+            top = [(f"e{int(i)}", float(v)) for v, i in zip(top_vals.tolist(), top_idx.tolist())]
+            bot = [(f"e{int(i)}", float(v)) for v, i in zip(bot_vals.tolist(), bot_idx.tolist())]
+
+            # Logits dispersion (helps detect flat router)
+            logits_std = float(logits2.float().std(unbiased=False).item())
+            maxabs = float(logits2.float().abs().max().item())
+            # gap between top1 and top2 (average)
+            sorted_logits = torch.topk(logits2.float(), k=min(2, E), dim=-1).values
+            gap12 = float((sorted_logits[:, 0] - sorted_logits[:, 1]).mean().item()) if sorted_logits.size(-1) >= 2 else 0.0
 
             return {
-                "layer": int(layer_id),
+                "layer": layer_id,
+                "E": E,
+                "H_full": H_full,
+                "H_hard": H_hard,
+                "H_soft": H_soft,
 
-                # entropy
-                "H_full_norm": float(ent_full_norm.item()),
-                "H_hard_norm": float(ent_hard_norm.item()),
-                "H_soft_norm": float(ent_soft_norm.item()),
-
-                # logits
                 "logits_std": logits_std,
-                "logits_maxabs": logits_maxabs,
-                "gap_top1_top2": gap,
+                "maxabs": maxabs,
+                "gap12": gap12,
 
-                # usage
-                "usage_hard": usage_hard.detach().cpu(),
-                "usage_soft": usage_soft.detach().cpu(),
-
-                # min max
                 "max_hard": max_hard,
                 "min_hard": min_hard,
+                "imb_hard": imb_hard,
+                "dead_hard": dead_hard,
+                "dead_soft": dead_soft,
+
+                "top_hard": top,
+                "bot_hard": bot,
+
                 "max_soft": max_soft,
                 "min_soft": min_soft,
 
@@ -416,40 +518,12 @@ class MoEHead(BaseModel):
         # Case 1: MoEHead style
         enc = getattr(self, "encoder", None)
         head_moe = getattr(enc, "moe_ffn", None) if enc is not None else None
-        s_head = _stats_from_moe(head_moe, layer_id=-1)
+        s_head = _stats_from_moe(head_moe, layer_id="Head")
         if s_head is not None:
             stats.append(s_head)
-            return stats
-
-        # Case 2: per-layer MoE FFN style
-        base = enc
-        if base is None:
-            return stats
-
-        base = getattr(base, "base_encoder", base)
-
-        layers = None
-        if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
-            layers = base.encoder.layer
-        elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
-            layers = base.encoder.layers
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layer"):
-            layers = base.transformer.layer
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layers"):
-            layers = base.transformer.layers
-        elif hasattr(base, "layers"):
-            layers = base.layers
-
-        if layers is None:
-            return stats
-
-        for li, layer in enumerate(layers):
-            moe = getattr(layer, "moe_ffn", None)
-            s = _stats_from_moe(moe, layer_id=li)
-            if s is not None:
-                stats.append(s)
 
         return stats
+
     
     def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
         stats = self._moe_debug_stats_per_layer()

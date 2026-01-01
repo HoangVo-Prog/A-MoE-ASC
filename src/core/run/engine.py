@@ -410,7 +410,9 @@ def run_training_loop(
                 f"aux_loss {train_metrics['aux_loss']:.6f} "
                 f"lambda_loss {train_metrics['loss_lambda']:.6f} "
                 f"total_loss {train_metrics['loss_total']:.6f} "
-                f"\nF1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
+                f"loss_entropy {train_metrics['loss_entropy']:.6f}"
+                f"router_entropy {train_metrics['router_entropy']:.6f}"
+                f"\n Train F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
             )
             log += ("\n")
 
