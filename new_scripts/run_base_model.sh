@@ -49,14 +49,11 @@ LOSS_FLAGS="--loss_type ${LOSS_TYPE}"
 
 case "${LOSS_TYPE}" in
   ce)
-    # Plain CE
     ;;
   weighted_ce)
-    # Weighted CE uses dataset-specific alpha
     LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS}"
     ;;
   focal)
-    # Focal uses dataset-specific alpha and gamma
     LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS} --focal_gamma ${FOCAL_GAMMA}"
     ;;
   *)
@@ -66,11 +63,22 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
+# =========================
+# Optional: benchmark_methods from env var "benchmark_methods"
+# Usage: benchmark_methods="concat" bash file.sh
+# =========================
+METHOD_FLAGS=""
+if [[ -n "${benchmark_methods:-}" ]]; then
+  METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
+fi
+
 echo "▶ Running benchmark baseline with:"
-echo "  dataset_type = ${DATASET_TYPE}"
-echo "  loss_type    = ${LOSS_TYPE}"
-echo "  loss_flags   = ${LOSS_FLAGS}"
+echo "  dataset_type   = ${DATASET_TYPE}"
+echo "  loss_type      = ${LOSS_TYPE}"
+echo "  loss_flags     = ${LOSS_FLAGS}"
+echo "  method_flags   = ${METHOD_FLAGS}"
 echo
+
 # =========================
 # Run
 # =========================
@@ -82,5 +90,5 @@ python -m main \
   --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
-  --benchmark_methods concat \
+  ${METHOD_FLAGS} \
   ${LOSS_FLAGS}
