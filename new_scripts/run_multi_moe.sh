@@ -75,7 +75,7 @@ echo
 # Run
 # =========================
 python -m main \
-  --mode MoEHead \
+  --mode MultiMoeHead \
   --moe_topk_schedule \
   --model_name bert-base-uncased \
   --benchmark_fusions \

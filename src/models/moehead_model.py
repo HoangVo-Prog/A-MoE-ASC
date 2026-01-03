@@ -1,24 +1,14 @@
 import math
-from typing import Any, Dict, Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn as nn
 
 from src.core.loss.focal_loss import FocalLoss
 from src.models.base_model import BaseModel
 
 
 class MoE(nn.Module):
-    """
-    A lightweight token-level Mixture-of-Experts FFN block.
-
-    - Routes active tokens (optionally mask pad tokens) to top-k experts.
-    - Applies per-expert 2-layer FFN: H -> I -> H.
-    - Returns residual + LayerNorm: LN(moe(x) + x)
-    - Caches router logits + hard topk indices for aux loss / debug.
-    """
-
     def __init__(
         self,
         *,
@@ -30,9 +20,9 @@ class MoE(nn.Module):
         act_fn: nn.Module,
         router_bias: bool,
         router_jitter: float,
-        capacity_factor: Optional[float],
-        route_mask_pad_tokens: bool,
-        layer_norm: Optional[nn.Module],
+        capacity_factor: float,
+        route_mask_pad_tokens,
+        layer_norm,
     ) -> None:
         super().__init__()
         assert 1 <= top_k <= num_experts
@@ -41,10 +31,8 @@ class MoE(nn.Module):
         self.intermediate_size = int(intermediate_size)
         self.num_experts = int(num_experts)
         self.moe_top_k = int(top_k)
-
         self.dropout = nn.Dropout(float(dropout_p))
         self.act_fn = act_fn
-
         self.router_jitter = float(router_jitter)
         self.capacity_factor = capacity_factor
         self.route_mask_pad_tokens = bool(route_mask_pad_tokens)
@@ -60,16 +48,15 @@ class MoE(nn.Module):
 
         self.ln = layer_norm if layer_norm is not None else nn.LayerNorm(self.hidden_size)
 
-        # cache for aux loss / debug
-        self.last_router_logits: Optional[torch.Tensor] = None
-        self.last_topk_idx: Optional[torch.Tensor] = None
+        self.last_router_logits = None
+        self.last_topk_idx = None
 
-        # init router near-uniform but break symmetry (important for deterministic torch.topk ties)
+        # init router near-uniform, but break symmetry (important for top-k routing)
         nn.init.normal_(self.router.weight, mean=0.0, std=1e-3)
         if self.router.bias is not None:
             nn.init.zeros_(self.router.bias)
 
-    def forward(self, hidden_states: torch.Tensor, *, token_mask: Optional[torch.Tensor]) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, *, token_mask) -> torch.Tensor:
         bsz, seqlen, hdim = hidden_states.shape
         x = hidden_states.reshape(-1, hdim)  # [N, H]
 
@@ -95,6 +82,7 @@ class MoE(nn.Module):
         topk_vals, topk_idx = torch.topk(router_logits, k=self.moe_top_k, dim=-1)  # [N_active, K]
         topk_w = torch.softmax(topk_vals, dim=-1)  # [N_active, K]
 
+        # cache for aux loss and debug
         self.last_router_logits = router_logits
         self.last_topk_idx = topk_idx
 
@@ -110,7 +98,7 @@ class MoE(nn.Module):
         flat_kpos = torch.arange(self.moe_top_k, device=x_active.device).repeat(x_active.shape[0])
 
         for e in range(self.num_experts):
-            sel = flat_idx == e
+            sel = (flat_idx == e)
             if not torch.any(sel):
                 continue
 
@@ -118,8 +106,7 @@ class MoE(nn.Module):
             k_pos = flat_kpos[sel]
 
             if cap is not None and tok_pos.numel() > cap:
-                # keep higher routing weights first to reduce arbitrary drops
-                w_sel = topk_w.index_select(0, tok_pos).gather(1, k_pos.unsqueeze(1)).squeeze(1)  # [M]
+                w_sel = topk_w.index_select(0, tok_pos).gather(1, k_pos.unsqueeze(1)).squeeze(1)
                 keep = torch.topk(w_sel, k=cap, largest=True, sorted=False).indices
                 tok_pos = tok_pos.index_select(0, keep)
                 k_pos = k_pos.index_select(0, keep)
@@ -130,7 +117,7 @@ class MoE(nn.Module):
             y = self.experts_dense2[e](y)
             y = self.dropout(y)
 
-            w = topk_w.index_select(0, tok_pos).gather(1, k_pos.unsqueeze(1)).squeeze(1)  # [M]
+            w = topk_w.index_select(0, tok_pos).gather(1, k_pos.unsqueeze(1)).squeeze(1)
             out_active.index_add_(0, tok_pos, y * w.unsqueeze(1))
 
         if active_idx is not None:
@@ -151,33 +138,8 @@ class MoE(nn.Module):
         self.moe_top_k = k
 
 
-def _extract_token_mask_from_attention_mask(attention_mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-    """
-    token_mask is expected 0/1 with 1 = valid token.
-    Supports common HF mask formats:
-      - 2D {0,1}
-      - 4D extended/additive (0 keep, negative mask)
-    """
-    if attention_mask is None:
-        return None
-
-    if attention_mask.dim() == 4:
-        m = attention_mask[:, 0, 0, :]
-        if m.dtype == torch.bool:
-            return m.long()
-        m_f = m.float()
-        if torch.min(m_f) < 0.0 and torch.max(m_f) <= 0.0:
-            return (m_f == 0.0).long()
-        return (m_f > 0.0).long()
-
-    return attention_mask
-
-
 class EncoderWithMoEHead(nn.Module):
-    """
-    Wraps a base encoder and applies a single MoE FFN block to the last hidden states.
-    """
-
+    """Wrapper that adds a single MoE layer on top of base encoder output"""
     def __init__(self, *, base_encoder: nn.Module, moe_ffn: MoE) -> None:
         super().__init__()
         self.base_encoder = base_encoder
@@ -186,7 +148,21 @@ class EncoderWithMoEHead(nn.Module):
     def forward(self, *args, **kwargs):
         outputs = self.base_encoder(*args, **kwargs)
 
-        token_mask = _extract_token_mask_from_attention_mask(kwargs.get("attention_mask", None))
+        attn_mask = kwargs.get("attention_mask", None)
+        token_mask = None
+        if attn_mask is not None:
+            if attn_mask.dim() == 4:
+                m = attn_mask[:, 0, 0, :]
+                if m.dtype == torch.bool:
+                    token_mask = m.long()
+                else:
+                    m_f = m.float()
+                    if torch.min(m_f) < 0.0 and torch.max(m_f) <= 0.0:
+                        token_mask = (m_f == 0.0).long()
+                    else:
+                        token_mask = (m_f > 0.0).long()
+            else:
+                token_mask = attn_mask
 
         if isinstance(outputs, (tuple, list)):
             last_hidden = outputs[0]
@@ -202,11 +178,7 @@ class EncoderWithMoEHead(nn.Module):
 
 
 class MoEHead(BaseModel):
-    """
-    MoE Head (single MoE layer applied on encoder output).
-    Keeps BaseModel's fusion/classifier behavior; only augments encoder output with MoE.
-    """
-
+    """Model with a single MoE layer on top of the encoder"""
     def __init__(
         self,
         *,
@@ -220,13 +192,9 @@ class MoEHead(BaseModel):
         aux_loss_weight: float,
         num_experts: int,
         moe_top_k: int,
-        moe_topk_schedule: bool,
-        moe_topk_start: int,
-        moe_topk_end: int,
-        moe_topk_switch_epoch: int,
         router_bias: bool,
         router_jitter: float,
-        capacity_factor,
+        capacity_factor: float,
         route_mask_pad_tokens: bool,
         router_entropy_weight: float = 0.0,
         aux_warmup_steps: int = 0,
@@ -242,27 +210,21 @@ class MoEHead(BaseModel):
             class_weights=class_weights,
             focal_gamma=focal_gamma,
         )
-
-        self.aux_loss_weight = float(aux_loss_weight)
-
+        
+        self.aux_loss_weight = aux_loss_weight
         self.router_entropy_weight = float(router_entropy_weight)
         self.aux_warmup_steps = int(aux_warmup_steps)
         self.jitter_warmup_steps = int(jitter_warmup_steps)
         self.jitter_end = float(jitter_end)
-
         self._global_step = 0
 
         cfg = getattr(self.encoder, "config", None)
         hidden_size = int(getattr(cfg, "hidden_size"))
         intermediate_size = int(getattr(cfg, "intermediate_size", hidden_size * 4))
         hidden_act = str(getattr(cfg, "hidden_act", "gelu")).lower()
-        act_fn: nn.Module = nn.GELU() if hidden_act == "gelu" else nn.ReLU()
+        act_fn = nn.GELU() if hidden_act == "gelu" else nn.ReLU()
         dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
-
-        self._topk_schedule_enabled = bool(moe_topk_schedule)
-        self._topk_start = int(moe_topk_start)
-        self._topk_end = int(moe_topk_end)
-        self._topk_switch_epoch = int(moe_topk_switch_epoch)
+        self._jitter_start = float(router_jitter)
 
         moe_head = MoE(
             hidden_size=hidden_size,
@@ -277,8 +239,6 @@ class MoEHead(BaseModel):
             route_mask_pad_tokens=route_mask_pad_tokens,
             layer_norm=nn.LayerNorm(hidden_size),
         )
-
-        self._jitter_start = float(router_jitter)
 
         base_encoder = self.encoder
         self.encoder = EncoderWithMoEHead(base_encoder=base_encoder, moe_ffn=moe_head)
@@ -296,7 +256,7 @@ class MoEHead(BaseModel):
             self._global_step += 1
             moe = getattr(self.encoder, "moe_ffn", None)
             if moe is not None:
-                moe.router_jitter = float(self._jitter_now())
+                moe.router_jitter = float(self._jitter())
 
         return super().forward(
             input_ids_sent=input_ids_sent,
@@ -307,7 +267,8 @@ class MoEHead(BaseModel):
             fusion_method=fusion_method,
         )
 
-    def _collect_aux_loss(self) -> torch.Tensor:
+    def _collect_aux_loss(self):
+        """Load-balancing loss for single MoE head"""
         moe = getattr(self.encoder, "moe_ffn", None)
         if moe is None:
             return torch.zeros((), device=next(self.parameters()).device)
@@ -323,16 +284,17 @@ class MoEHead(BaseModel):
         n_tokens, n_experts = logits.shape
         k = topk_idx.shape[1]
 
-        probs = torch.softmax(logits.float(), dim=-1).to(dtype=logits.dtype)  # [N, E]
-        importance = probs.sum(dim=0) / float(n_tokens)  # [E]
+        probs = torch.softmax(logits.float(), dim=-1).to(dtype=logits.dtype)
+        importance = probs.sum(dim=0) / float(n_tokens)
 
-        oh = F.one_hot(topk_idx, num_classes=n_experts).to(dtype=probs.dtype)  # [N, K, E]
-        load = oh.sum(dim=(0, 1)) / float(n_tokens * k)  # [E]
+        oh = F.one_hot(topk_idx, num_classes=n_experts).to(dtype=probs.dtype)
+        load = oh.sum(dim=(0, 1)) / float(n_tokens * k)
 
         aux = n_experts * torch.sum(importance * load)
-        return torch.clamp(aux, min=0.0, max=10.0)
+        aux = torch.clamp(aux, min=0.0, max=10.0)
+        return aux
 
-    def _aux_weight_now(self) -> float:
+    def _aux_weight(self) -> float:
         w = float(self.aux_loss_weight)
         if not self.training:
             return w
@@ -341,7 +303,7 @@ class MoEHead(BaseModel):
             return w * t
         return w
 
-    def _jitter_now(self) -> float:
+    def _jitter(self) -> float:
         if not self.training:
             return float(self._jitter_start)
         if self.jitter_warmup_steps and self.jitter_warmup_steps > 0:
@@ -350,6 +312,7 @@ class MoEHead(BaseModel):
         return float(self._jitter_start)
 
     def _collect_router_entropy(self) -> torch.Tensor:
+        """Mean per-token routing entropy for single MoE head"""
         moe = getattr(self.encoder, "moe_ffn", None)
         if moe is None:
             return torch.zeros((), device=next(self.parameters()).device)
@@ -359,12 +322,13 @@ class MoEHead(BaseModel):
             return torch.zeros((), device=next(self.parameters()).device)
 
         n_experts = logits.shape[-1]
-        probs = torch.softmax(logits.float(), dim=-1)  # [N, E]
-        ent = -(probs * torch.log(probs.clamp_min(1e-9))).sum(dim=-1).mean()
+        probs = torch.softmax(logits.float(), dim=-1)
+        ent = -(probs * torch.log(probs.clamp_min(1e-9))).sum(dim=-1)
+        ent = ent.mean()
         ent = ent / float(math.log(n_experts + 1e-9))
         return ent.to(dtype=logits.dtype, device=logits.device)
 
-    def _compute_loss(self, logits, labels) -> Dict[str, Any]:
+    def _compute_loss(self, logits, labels):
         if labels is None:
             return {
                 "loss": None,
@@ -386,9 +350,9 @@ class MoEHead(BaseModel):
             loss_main = loss_fn(logits, labels)
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
-
+        
         aux = self._collect_aux_loss()
-        aux_w = self._aux_weight_now()
+        aux_w = self._aux_weight()
         loss_lambda = aux_w * aux
 
         entropy = self._collect_router_entropy()
@@ -407,7 +371,145 @@ class MoEHead(BaseModel):
             "loss_total": loss_total,
         }
 
-    def configure_topk_schedule(self, *, enabled: bool, start_k: int, end_k: int, switch_epoch: int) -> None:
+    @torch.no_grad()
+    def _moe_debug_stats(self):
+        """Debug statistics for single MoE head"""
+        def _entropy_from_dist(p: torch.Tensor) -> torch.Tensor:
+            eps = 1e-12
+            return -(p * (p + eps).log()).sum()
+
+        def _cv(p: torch.Tensor) -> float:
+            mu = p.mean().clamp_min(1e-12)
+            return float((p.std(unbiased=False) / mu).item())
+
+        moe = getattr(self.encoder, "moe_ffn", None)
+        if moe is None:
+            return None
+
+        logits = getattr(moe, "last_router_logits", None)
+        topk_idx = getattr(moe, "last_topk_idx", None)
+        if logits is None or topk_idx is None:
+            return None
+
+        E = int(getattr(moe, "num_experts", 0) or 0)
+        if E <= 0:
+            return None
+
+        logits2 = logits.reshape(-1, logits.size(-1)) if logits.dim() == 3 else logits
+        topk2 = topk_idx.reshape(-1, topk_idx.size(-1)) if topk_idx.dim() == 3 else topk_idx
+
+        probs = torch.softmax(logits2, dim=-1)
+
+        counts = torch.zeros(E, device=logits2.device, dtype=torch.float32)
+        counts.scatter_add_(
+            0,
+            topk2.reshape(-1),
+            torch.ones_like(topk2.reshape(-1), dtype=torch.float32),
+        )
+        usage_hard = counts / counts.sum().clamp_min(1.0)
+
+        usage_soft = probs.mean(dim=0)
+        usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
+
+        ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()
+        ent_full_norm = ent_full / math.log(E)
+
+        ent_hard = _entropy_from_dist(usage_hard)
+        ent_hard_norm = ent_hard / math.log(E)
+
+        ent_soft = _entropy_from_dist(usage_soft)
+        ent_soft_norm = ent_soft / math.log(E)
+
+        logits_std = float(logits2.std(unbiased=False).item())
+        logits_maxabs = float(logits2.abs().max().item())
+
+        top2 = torch.topk(logits2, k=min(2, E), dim=-1).values
+        if top2.size(-1) >= 2:
+            gap = float((top2[:, 0] - top2[:, 1]).mean().item())
+        else:
+            gap = 0.0
+
+        max_hard = float(usage_hard.max().item())
+        min_hard = float(usage_hard.min().item())
+        max_soft = float(usage_soft.max().item())
+        min_soft = float(usage_soft.min().item())
+
+        return {
+            "layer": -1,
+            "H_full_norm": float(ent_full_norm.item()),
+            "H_hard_norm": float(ent_hard_norm.item()),
+            "H_soft_norm": float(ent_soft_norm.item()),
+            "logits_std": logits_std,
+            "logits_maxabs": logits_maxabs,
+            "gap_top1_top2": gap,
+            "usage_hard": usage_hard.detach().cpu(),
+            "usage_soft": usage_soft.detach().cpu(),
+            "max_hard": max_hard,
+            "min_hard": min_hard,
+            "max_soft": max_soft,
+            "min_soft": min_soft,
+            "cv_hard": _cv(usage_hard),
+            "cv_soft": _cv(usage_soft),
+        }
+
+    def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
+        s = self._moe_debug_stats()
+        if s is None:
+            print("[MoE] No stats yet.")
+            return
+
+        print("\n[MoE Debug - Single Head]")
+        uh = s["usage_hard"].float()
+        us = s["usage_soft"].float()
+
+        dead_h0 = int((uh == 0).sum().item())
+        dead_h = int((uh < eps_dead).sum().item())
+        dead_s0 = int((us == 0).sum().item())
+        dead_s = int((us < eps_dead).sum().item())
+
+        topk = min(topn, uh.numel())
+        botk = min(bottomn, uh.numel())
+
+        topv_h, topi_h = torch.topk(uh, k=topk, largest=True)
+        botv_h, boti_h = torch.topk(uh, k=botk, largest=False)
+        topv_s, topi_s = torch.topk(us, k=topk, largest=True)
+        botv_s, boti_s = torch.topk(us, k=botk, largest=False)
+
+        top_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_h, topi_h)])
+        bot_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_h, boti_h)])
+        top_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_s, topi_s)])
+        bot_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_s, boti_s)])
+
+        imb_h = float(s["max_hard"] / (s["min_hard"] + 1e-12))
+        imb_s = float(s["max_soft"] / (s["min_soft"] + 1e-12))
+
+        print(
+            f"MoE Head | "
+            f"H_full={s['H_full_norm']:.6f} H_soft={s['H_soft_norm']:.6f} H_hard={s['H_hard_norm']:.6f} | "
+            f"logits_std={s['logits_std']:.6f} maxabs={s['logits_maxabs']:.6f} gap12={s['gap_top1_top2']:.6f}"
+        )
+        print(
+            f"  HARD: min={s['min_hard']:.6f} max={s['max_hard']:.6f} cv={s['cv_hard']:.3f} imb={imb_h:.2f} "
+            f"dead(==0)={dead_h0} dead(<{eps_dead:g})={dead_h}"
+        )
+        print(f"    top: {top_pairs_h}")
+        print(f"    bot: {bot_pairs_h}")
+        print(
+            f"  SOFT: min={s['min_soft']:.6f} max={s['max_soft']:.6f} cv={s['cv_soft']:.3f} imb={imb_s:.2f} "
+            f"dead(==0)={dead_s0} dead(<{eps_dead:g})={dead_s}"
+        )
+        print(f"    top: {top_pairs_s}")
+        print(f"    bot: {bot_pairs_s}")
+        print()
+
+    def configure_topk_schedule(
+        self,
+        *,
+        enabled: bool,
+        start_k: int,
+        end_k: int,
+        switch_epoch: int,
+    ) -> None:
         self._topk_schedule_enabled = bool(enabled)
         self._topk_start = int(start_k)
         self._topk_end = int(end_k)
@@ -421,5 +523,10 @@ class MoEHead(BaseModel):
     def set_epoch(self, epoch_idx_0based: int) -> None:
         if not getattr(self, "_topk_schedule_enabled", False):
             return
-        k = self._topk_start if epoch_idx_0based < self._topk_switch_epoch else self._topk_end
+
+        if epoch_idx_0based < self._topk_switch_epoch:
+            k = self._topk_start
+        else:
+            k = self._topk_end
+
         self.encoder.moe_ffn.set_top_k(k)
