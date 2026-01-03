@@ -20,6 +20,7 @@ class MoeBaseTrainConfig(BaseTrainConfig):
     amp_dtype: str = "fp16"
     adamw_foreach: bool = False
     adamw_fused: bool = False
+    
 
 
 @dataclass
@@ -28,9 +29,13 @@ class MoEConfig:
     num_experts: int = 8
     moe_top_k: int = 2
     router_bias: bool = True
-    router_jitter: float = 0.05 
+    router_jitter: float = 0.001 
+    jitter_warmup_steps: int = 0
+    router_entropy_weight: float = 0.01
     capacity_factor = None 
     route_mask_pad_tokens: bool = False 
+    
+    router_temperature: float = 1.0
     
     # Multi Moe Head 
     moe_topk_schedule: bool = False

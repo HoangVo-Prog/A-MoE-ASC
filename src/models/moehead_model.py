@@ -21,7 +21,8 @@ class MoE(nn.Module):
         router_bias: bool,
         router_jitter: float,
         capacity_factor: float,
-        route_mask_pad_tokens,
+        route_mask_pad_tokens: bool,
+        router_temperature: float,
         layer_norm,
     ) -> None:
         super().__init__()
@@ -36,6 +37,7 @@ class MoE(nn.Module):
         self.router_jitter = float(router_jitter)
         self.capacity_factor = capacity_factor
         self.route_mask_pad_tokens = bool(route_mask_pad_tokens)
+        self.router_temperature = router_temperature
 
         self.router = nn.Linear(self.hidden_size, self.num_experts, bias=bool(router_bias))
 
@@ -52,7 +54,7 @@ class MoE(nn.Module):
         self.last_topk_idx = None
 
         # init router near-uniform, but break symmetry (important for top-k routing)
-        nn.init.normal_(self.router.weight, mean=0.0, std=1e-3)
+        nn.init.normal_(self.router.weight, mean=0.0, std=0.01)
         if self.router.bias is not None:
             nn.init.zeros_(self.router.bias)
 
@@ -78,7 +80,8 @@ class MoE(nn.Module):
         else:
             x_route = x_active
 
-        router_logits = self.router(x_route)  # [N_active, E]
+        router_logits = self.router(x_route) / self.router_temperature  # [N_active, E]
+                
         topk_vals, topk_idx = torch.topk(router_logits, k=self.moe_top_k, dim=-1)  # [N_active, K]
         topk_w = torch.softmax(topk_vals, dim=-1)  # [N_active, K]
 
@@ -196,6 +199,7 @@ class MoEHead(BaseModel):
         router_jitter: float,
         capacity_factor: float,
         route_mask_pad_tokens: bool,
+        router_temperature: float,
         router_entropy_weight: float = 0.0,
         aux_warmup_steps: int = 0,
         jitter_warmup_steps: int = 0,
@@ -237,6 +241,7 @@ class MoEHead(BaseModel):
             router_jitter=router_jitter,
             capacity_factor=capacity_factor,
             route_mask_pad_tokens=route_mask_pad_tokens,
+            router_temperature=router_temperature,
             layer_norm=nn.LayerNorm(hidden_size),
         )
 

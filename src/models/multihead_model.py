@@ -7,8 +7,96 @@ import torch.nn as nn
 from src.models.moehead_model import MoE, MoEHead
 
 
+class TransformerLayerWithMoE(nn.Module):
+    """Wrapper that adds MoE FFN to a transformer layer"""
+    def __init__(self, *, base_layer: nn.Module, moe_ffn: MoE) -> None:
+        super().__init__()
+        self.base_layer = base_layer
+        self.moe_ffn = moe_ffn
+        
+    def forward(self, *args, **kwargs):
+        # Forward through original layer
+        outputs = self.base_layer(*args, **kwargs)
+        
+        # Extract attention mask for routing
+        attn_mask = kwargs.get("attention_mask", None)
+        token_mask = None
+        if attn_mask is not None:
+            if attn_mask.dim() == 4:
+                m = attn_mask[:, 0, 0, :]
+                if m.dtype == torch.bool:
+                    token_mask = m.long()
+                else:
+                    m_f = m.float()
+                    if torch.min(m_f) < 0.0 and torch.max(m_f) <= 0.0:
+                        token_mask = (m_f == 0.0).long()
+                    else:
+                        token_mask = (m_f > 0.0).long()
+            else:
+                token_mask = attn_mask
+        
+        # Apply MoE FFN to hidden states
+        if isinstance(outputs, (tuple, list)):
+            hidden = outputs[0]
+            new_hidden = self.moe_ffn(hidden, token_mask=token_mask)
+            return (new_hidden,) + tuple(outputs[1:])
+        
+        if hasattr(outputs, "last_hidden_state"):
+            new_hidden = self.moe_ffn(outputs.last_hidden_state, token_mask=token_mask)
+            outputs.last_hidden_state = new_hidden
+            return outputs
+        
+        return self.moe_ffn(outputs, token_mask=token_mask)
+
+
+class EncoderWithMultiMoE(nn.Module):
+    """Wrapper that embeds MoE layers into multiple transformer layers"""
+    def __init__(self, *, base_encoder: nn.Module, moe_layer_indices: list, moe_configs: dict) -> None:
+        super().__init__()
+        self.base_encoder = base_encoder
+        self.moe_layer_indices = sorted(moe_layer_indices)
+        
+        # Find the layers list in base encoder
+        self.layers = self._find_layers(base_encoder)
+        if self.layers is None:
+            raise ValueError("Cannot find transformer layers in base encoder")
+        
+        # Wrap specified layers with MoE
+        for idx in self.moe_layer_indices:
+            if idx >= len(self.layers):
+                raise ValueError(f"Layer index {idx} out of range (encoder has {len(self.layers)} layers)")
+            
+            # Create MoE module for this layer
+            moe = MoE(**moe_configs)
+            
+            # Wrap the layer
+            original_layer = self.layers[idx]
+            self.layers[idx] = TransformerLayerWithMoE(
+                base_layer=original_layer,
+                moe_ffn=moe
+            )
+    
+    def _find_layers(self, encoder):
+        """Find the layers list in various encoder architectures"""
+        # Try common patterns
+        if hasattr(encoder, "encoder") and hasattr(encoder.encoder, "layer"):
+            return encoder.encoder.layer
+        elif hasattr(encoder, "encoder") and hasattr(encoder.encoder, "layers"):
+            return encoder.encoder.layers
+        elif hasattr(encoder, "transformer") and hasattr(encoder.transformer, "layer"):
+            return encoder.transformer.layer
+        elif hasattr(encoder, "transformer") and hasattr(encoder.transformer, "layers"):
+            return encoder.transformer.layers
+        elif hasattr(encoder, "layers"):
+            return encoder.layers
+        return None
+    
+    def forward(self, *args, **kwargs):
+        return self.base_encoder(*args, **kwargs)
+
+
 class MultiMoEHead(MoEHead):
-    """Model with MoE layers embedded in multiple transformer layers (not just a single head)"""
+    """Model with MoE layers embedded in multiple transformer layers"""
     
     def __init__(
         self,
@@ -35,8 +123,12 @@ class MultiMoEHead(MoEHead):
         aux_warmup_steps: int = 0,
         jitter_warmup_steps: int = 0,
         jitter_end: float = 0.0,
+        moe_layer_indices: list = None,  # Which layers to add MoE to
     ) -> None:
-        super().__init__(
+        # Call grandparent init to avoid MoEHead's single-layer setup
+        from src.models.base_model import BaseModel
+        BaseModel.__init__(
+            self,
             model_name=model_name,
             num_labels=num_labels,
             dropout=dropout,
@@ -44,23 +136,108 @@ class MultiMoEHead(MoEHead):
             loss_type=loss_type,
             class_weights=class_weights,
             focal_gamma=focal_gamma,
-            aux_loss_weight=aux_loss_weight,
-            num_experts=num_experts,
-            moe_top_k=moe_top_k,
-            router_bias=router_bias,
-            router_jitter=router_jitter,
-            capacity_factor=capacity_factor,
-            route_mask_pad_tokens=route_mask_pad_tokens,
-            router_entropy_weight=router_entropy_weight,
-            aux_warmup_steps=aux_warmup_steps,
-            jitter_warmup_steps=jitter_warmup_steps,
-            jitter_end=jitter_end,
         )
         
+        # MoE-specific configs
+        self.aux_loss_weight = aux_loss_weight
+        self.router_entropy_weight = float(router_entropy_weight)
+        self.aux_warmup_steps = int(aux_warmup_steps)
+        self.jitter_warmup_steps = int(jitter_warmup_steps)
+        self.jitter_end = float(jitter_end)
+        self._jitter_start = float(router_jitter)
+        self._global_step = 0
+        
+        # Top-k schedule
         self._topk_schedule_enabled = moe_topk_schedule
         self._topk_start = moe_topk_start
         self._topk_end = moe_topk_end
         self._topk_switch_epoch = moe_topk_switch_epoch
+        
+        # Default to last 3 layers if not specified
+        if moe_layer_indices is None:
+            cfg = getattr(self.encoder, "config", None)
+            num_layers = getattr(cfg, "num_hidden_layers", 12)
+            moe_layer_indices = list(range(max(0, num_layers - 3), num_layers))
+        
+        self.moe_layer_indices = moe_layer_indices
+        
+        # Get encoder config
+        cfg = getattr(self.encoder, "config", None)
+        hidden_size = int(getattr(cfg, "hidden_size"))
+        intermediate_size = int(getattr(cfg, "intermediate_size", hidden_size * 4))
+        hidden_act = str(getattr(cfg, "hidden_act", "gelu")).lower()
+        act_fn = nn.GELU() if hidden_act == "gelu" else nn.ReLU()
+        dropout_p = float(getattr(cfg, "hidden_dropout_prob", dropout))
+        
+        # Prepare MoE config
+        moe_configs = {
+            "hidden_size": hidden_size,
+            "intermediate_size": intermediate_size,
+            "num_experts": num_experts,
+            "top_k": moe_top_k if not moe_topk_schedule else moe_topk_start,
+            "dropout_p": dropout_p,
+            "act_fn": act_fn,
+            "router_bias": router_bias,
+            "router_jitter": router_jitter,
+            "capacity_factor": capacity_factor,
+            "route_mask_pad_tokens": route_mask_pad_tokens,
+            "layer_norm": nn.LayerNorm(hidden_size),
+        }
+        
+        # Wrap encoder with multi-layer MoE
+        base_encoder = self.encoder
+        self.encoder = EncoderWithMultiMoE(
+            base_encoder=base_encoder,
+            moe_layer_indices=moe_layer_indices,
+            moe_configs=moe_configs
+        )
+    
+    def forward(
+        self,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        labels=None,
+        fusion_method: str = "concat",
+    ):
+        if self.training:
+            self._global_step += 1
+            # Update jitter for all MoE layers
+            new_jitter = float(self._jitter())
+            for moe in self._get_all_moe_modules():
+                moe.router_jitter = new_jitter
+        
+        return MoEHead.forward(
+            self,
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            labels=labels,
+            fusion_method=fusion_method,
+        )
+    
+    def _get_all_moe_modules(self):
+        """Get all MoE modules from wrapped layers"""
+        moe_modules = []
+        layers = self.encoder.layers
+        for idx in self.moe_layer_indices:
+            if idx < len(layers):
+                layer = layers[idx]
+                if isinstance(layer, TransformerLayerWithMoE):
+                    moe_modules.append(layer.moe_ffn)
+        return moe_modules
+    
+    def _get_moe_by_layer_id(self, layer_id: int):
+        """Helper to retrieve MoE module by layer ID"""
+        if layer_id < 0 or layer_id >= len(self.encoder.layers):
+            return None
+        
+        layer = self.encoder.layers[layer_id]
+        if isinstance(layer, TransformerLayerWithMoE):
+            return layer.moe_ffn
+        return None
     
     @torch.no_grad()
     def _moe_debug_stats_per_layer(self):
@@ -149,42 +326,11 @@ class MultiMoEHead(MoEHead):
             }
 
         stats = []
-
-        # First check if this is single-head MoE style
-        enc = getattr(self, "encoder", None)
-        head_moe = getattr(enc, "moe_ffn", None) if enc is not None else None
-        s_head = _stats_from_moe(head_moe, layer_id=-1)
-        if s_head is not None:
-            stats.append(s_head)
-            return stats
-
-        # Otherwise, look for per-layer MoE FFN style
-        base = enc
-        if base is None:
-            return stats
-
-        base = getattr(base, "base_encoder", base)
-
-        # Try different common encoder architectures
-        layers = None
-        if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
-            layers = base.encoder.layer
-        elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
-            layers = base.encoder.layers
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layer"):
-            layers = base.transformer.layer
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layers"):
-            layers = base.transformer.layers
-        elif hasattr(base, "layers"):
-            layers = base.layers
-
-        if layers is None:
-            return stats
-
-        # Collect stats from each layer that has MoE
-        for li, layer in enumerate(layers):
-            moe = getattr(layer, "moe_ffn", None)
-            s = _stats_from_moe(moe, layer_id=li)
+        
+        # Collect stats from each MoE layer
+        for layer_id in self.moe_layer_indices:
+            moe = self._get_moe_by_layer_id(layer_id)
+            s = _stats_from_moe(moe, layer_id=layer_id)
             if s is not None:
                 stats.append(s)
 
@@ -196,7 +342,7 @@ class MultiMoEHead(MoEHead):
         if not stats:
             return torch.zeros((), device=next(self.parameters()).device)
         
-        # For multi-layer: aggregate aux loss from all layers
+        # Aggregate aux loss from all layers
         total_aux = torch.zeros((), device=next(self.parameters()).device)
         
         for s in stats:
@@ -230,37 +376,6 @@ class MultiMoEHead(MoEHead):
             total_aux = total_aux / float(len(stats))
         
         return total_aux
-    
-    def _get_moe_by_layer_id(self, layer_id: int):
-        """Helper to retrieve MoE module by layer ID"""
-        if layer_id == -1:
-            # Single head case
-            enc = getattr(self, "encoder", None)
-            return getattr(enc, "moe_ffn", None) if enc is not None else None
-        
-        # Per-layer case
-        enc = getattr(self, "encoder", None)
-        if enc is None:
-            return None
-        
-        base = getattr(enc, "base_encoder", enc)
-        
-        layers = None
-        if hasattr(base, "encoder") and hasattr(base.encoder, "layer"):
-            layers = base.encoder.layer
-        elif hasattr(base, "encoder") and hasattr(base.encoder, "layers"):
-            layers = base.encoder.layers
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layer"):
-            layers = base.transformer.layer
-        elif hasattr(base, "transformer") and hasattr(base.transformer, "layers"):
-            layers = base.transformer.layers
-        elif hasattr(base, "layers"):
-            layers = base.layers
-        
-        if layers is None or layer_id >= len(layers):
-            return None
-        
-        return getattr(layers[layer_id], "moe_ffn", None)
 
     def _collect_router_entropy(self) -> torch.Tensor:
         """Collect mean routing entropy across all MoE layers"""
@@ -302,7 +417,7 @@ class MultiMoEHead(MoEHead):
         print("\n[MoE Debug - Multi-Layer]")
         for s in stats:
             layer_id = int(s["layer"])
-            layer_txt = "Head" if layer_id == -1 else f"{layer_id:02d}"
+            layer_txt = f"{layer_id:02d}"
 
             uh = s["usage_hard"].float()
             us = s["usage_soft"].float()
@@ -347,3 +462,32 @@ class MultiMoEHead(MoEHead):
             print(f"    bot: {bot_pairs_s}")
 
         print()
+        
+    def configure_topk_schedule(
+        self,
+        *,
+        enabled: bool,
+        start_k: int,
+        end_k: int,
+        switch_epoch: int,
+    ) -> None:
+        """Configure top-k scheduling for all MoE layers"""
+        self._topk_schedule_enabled = bool(enabled)
+        self._topk_start = int(start_k)
+        self._topk_end = int(end_k)
+        self._topk_switch_epoch = int(switch_epoch)
+
+        # Apply to all MoE layers
+        k = self._topk_start if self._topk_schedule_enabled else self._topk_end
+        for moe in self._get_all_moe_modules():
+            moe.set_top_k(k)
+
+    def set_epoch(self, epoch_idx_0based: int) -> None:
+        """Update top-k based on epoch for all MoE layers"""
+        if not getattr(self, "_topk_schedule_enabled", False):
+            return
+
+        k = self._topk_start if epoch_idx_0based < self._topk_switch_epoch else self._topk_end
+        
+        for moe in self._get_all_moe_modules():
+            moe.set_top_k(k)

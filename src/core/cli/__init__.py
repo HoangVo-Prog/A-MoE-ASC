@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr_head", type=float, default=5e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--warmup_ratio", type=float, default=0.0)
 
     parser.add_argument(
         "--fusion_method",
@@ -102,14 +102,15 @@ def parse_args() -> argparse.Namespace:
     # MoE options
     parser.add_argument("--moe_num_experts", type=int, default=8)
     parser.add_argument("--moe_top_k", type=int, default=2)
-    parser.add_argument("--aux_loss_weight", type=float, default=0.01)
+    parser.add_argument("--aux_loss_weight", type=float, default=0.05)
 
     parser.add_argument("--freeze_moe", action="store_true")
     parser.add_argument("--route_mask_pad_tokens", action="store_true") 
+    parser.add_argument("--router_temperature", type=float, default=1.0)
     parser.add_argument("--step_print_moe", type=float, default=200)
     parser.add_argument("--capacity_factor", type=float, default=None)
     
-    parser.add_argument("--no_amp", action="store_true")
+    parser.add_argument("--use_amp", action="store_true")
     parser.add_argument("--adamw_foreach", action="store_true") 
     parser.add_argument("--adamw_fused", action="store_true") 
 

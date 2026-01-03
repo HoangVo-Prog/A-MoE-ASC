@@ -69,7 +69,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
         # General case: freeze the entire encoder (head-only warmup).
         print(f"{mode} mode: freezing entire encoder")
-        _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
+        _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=True)
         _set_encoder_train_eval(model, frozen=True)
         return True
 
@@ -88,10 +88,10 @@ def train_one_epoch(
     fusion_method: str = "concat",
     f1_average: str = "macro",
     step_print_moe: Optional[float] = 100,
-    use_amp: bool = True,
+    use_amp: bool = False,  # bạn đang tắt AMP
     amp_dtype: str = "fp16",
     scaler: Optional[GradScaler] = None,
-    max_grad_norm: Optional[float] = None,
+    max_grad_norm: Optional[float] = 1.0,
 ) -> Dict[str, float]:
     model.train()
 
@@ -106,58 +106,120 @@ def train_one_epoch(
     all_preds: list[int] = []
     all_labels: list[int] = []
 
-    amp_dtype_torch = (
-        torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
-    )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
+    def _get_router(model_: nn.Module):
+        enc = getattr(model_, "encoder", None)
+        moe_ffn = getattr(enc, "moe_ffn", None) if enc is not None else None
+        router = getattr(moe_ffn, "router", None) if moe_ffn is not None else None
+        return router
+
+    # precompute router param ids for checking which optimizer group contains router
+    router_param_ids = {id(p) for n, p in model.named_parameters() if "moe_ffn.router" in n}
+
     for step, batch in enumerate(dataloader):
+        router = _get_router(model)
+
+        if step == 0:
+            # LR at step start
+            try:
+                print("lr at step start:", float(optimizer.param_groups[0]["lr"]))
+            except Exception:
+                pass
+
+            # Print router's optimizer group hyperparams
+            for gi, g in enumerate(optimizer.param_groups):
+                has_router = any(id(p) in router_param_ids for p in g["params"])
+                if has_router:
+                    print(
+                        "router group:",
+                        gi,
+                        "lr=",
+                        float(g.get("lr", 0.0)),
+                        "weight_decay=",
+                        g.get("weight_decay", None),
+                    )
+
+            # Snapshot router params BEFORE forward
+            if router is not None:
+                with torch.no_grad():
+                    w0 = router.weight.detach().clone()
+                    b0 = router.bias.detach().clone() if router.bias is not None else None
+                    print("pre-step w mean:", float(router.weight.mean().item()))
+                    if router.bias is not None:
+                        print("pre-step b mean:", float(router.bias.mean().item()))
+
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(
-            "cuda",
-            enabled=bool(use_amp),
-            dtype=amp_dtype_torch,
-        ):
-            outputs = model(
-                input_ids_sent=batch["input_ids_sent"],
-                attention_mask_sent=batch["attention_mask_sent"],
-                input_ids_term=batch["input_ids_term"],
-                attention_mask_term=batch["attention_mask_term"],
-                labels=batch["label"],
-                fusion_method=fusion_method,
-            )
+        outputs = model(
+            input_ids_sent=batch["input_ids_sent"],
+            attention_mask_sent=batch["attention_mask_sent"],
+            input_ids_term=batch["input_ids_term"],
+            attention_mask_term=batch["attention_mask_term"],
+            labels=batch["label"],
+            fusion_method=fusion_method,
+        )
 
-            loss_total = outputs["loss"]
-            logits = outputs["logits"]
+        loss_total = outputs["loss"]
+        logits = outputs["logits"]
 
-            # only meaningful for ver2-return path; safe even if missing
-            loss_main = outputs.get("loss_main", None)
-            loss_lambda = outputs.get("loss_lambda", None)
-            loss_aux = outputs.get("aux_loss", None)
+        loss_main = outputs.get("loss_main", None)
+        loss_lambda = outputs.get("loss_lambda", None)
+        loss_aux = outputs.get("aux_loss", None)
 
-        # backward + step
-        if use_amp:
-            if scaler is None:
-                raise RuntimeError("use_amp=True but scaler is None")
-            scaler.scale(loss_total).backward()
+        if step == 0:
+            lt = loss_total.detach()
+            print("loss_total finite:", bool(torch.isfinite(lt).item()), "value:", float(lt))
+            print("logits finite:", bool(torch.isfinite(logits.detach()).all().item()))
 
-            if max_grad_norm is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+        # backward
+        loss_total.backward()
 
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_total.backward()
-            if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
-            optimizer.step()
+        if step == 0 and router is not None:
+            for n, p in model.named_parameters():
+                if "moe_ffn.router" in n:
+                    if p.grad is None:
+                        print(n, "grad is None")
+                    else:
+                        g = p.grad.detach()
+                        print(
+                            n,
+                            "grad_norm",
+                            float(g.norm().item()),
+                            "grad_has_nan",
+                            bool(torch.isnan(g).any().item()),
+                            "grad_has_inf",
+                            bool(torch.isinf(g).any().item()),
+                        )
 
+        # clip (optional)
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+
+        # optimizer step
+        optimizer.step()
+
+        if step == 0 and router is not None:
+            with torch.no_grad():
+                print("post-step w mean:", float(router.weight.mean().item()))
+                if router.bias is not None:
+                    print("post-step b mean:", float(router.bias.mean().item()))
+                dw = (router.weight.detach() - w0).abs().mean().item()
+                print("router |Δw| mean:", float(dw))
+                if b0 is not None and router.bias is not None:
+                    db = (router.bias.detach() - b0).abs().mean().item()
+                    print("router |Δb| mean:", float(db))
+
+        # IMPORTANT: scheduler.step MUST be after optimizer.step
         if scheduler is not None:
             scheduler.step()
+            if step == 0:
+                try:
+                    print("lr after sched:", float(optimizer.param_groups[0]["lr"]))
+                except Exception:
+                    pass
 
         # stats
         total_loss_sum += safe_float(loss_total)
@@ -192,7 +254,6 @@ def train_one_epoch(
             "f1": f1,
         }
 
-    # ver1 compatible output
     return {
         "loss": total_loss_sum / denom,
         "acc": acc,
@@ -313,16 +374,9 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    optimizer, scheduler = build_optimizer_and_scheduler(
-        model=model,
-        lr=cfg.base.lr,
-        lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
-        warmup_ratio=cfg.base.warmup_ratio,
-        total_steps=steps_per_epoch * max(1, int(cfg.base.epochs)),
-        params=trainable_params(),
-        adamw_foreach=cfg.base.adamw_foreach,
-        adamw_fused=cfg.base.adamw_fused,
-    )
+
+    
+    optimizer = scheduler = None
 
     scaler = GradScaler() if cfg.base.use_amp else None
 
@@ -331,9 +385,26 @@ def run_training_loop(
 
         # --- Apply freeze policy for this epoch ---
         freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
-
+        
+        if optimizer is None:
+            optimizer, scheduler = build_optimizer_and_scheduler(
+                model=model,
+                lr=cfg.base.lr,
+                lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
+                warmup_ratio=cfg.base.warmup_ratio,
+                total_steps=steps_per_epoch * max(1, int(cfg.base.epochs)),
+                params=trainable_params(),
+                adamw_foreach=cfg.base.adamw_foreach,
+                adamw_fused=cfg.base.adamw_fused,
+            )
+                    
         if cfg.base.freeze_epochs > 0 and epoch < cfg.base.freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
+            
+            router_param_ids = {id(p) for n, p in model.named_parameters() if "moe_ffn.router" in n}
+            opt_param_ids = {id(p) for g in optimizer.param_groups for p in g["params"]}
+            print("router params covered:", len(router_param_ids & opt_param_ids), "/", len(router_param_ids))
+
 
         # --- Rebuild optimizer exactly at unfreeze boundary ---
         if cfg.base.freeze_epochs > 0 and epoch == cfg.base.freeze_epochs:
