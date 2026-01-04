@@ -66,6 +66,31 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
             _set_encoder_train_eval(model, frozen=True)
             return True
+        
+        if mode == "MoESkConnectionModel":
+            enc = getattr(model, "encoder", None)
+            if enc is None:
+                return False
+
+            base = getattr(enc, "base_encoder", None)
+            if base is None:
+                # fallback: behave like general case
+                print(f"{mode} mode: encoder has no base_encoder, freezing entire encoder")
+                _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=True)
+                _set_encoder_train_eval(model, frozen=True)
+                return True
+
+            print(f"{mode} mode: freezing base_encoder only, keeping MoE-skip trainable")
+
+            # 1) Freeze backbone params
+            for p in base.parameters():
+                p.requires_grad = False
+
+            # 2) Keep everything outside base_encoder trainable (moe_sk_h/moe_sk_2h, heads, router, experts)
+            for name, p in enc.named_parameters():
+                if name.startswith("base_encoder."):
+                    continue
+                p.requires_grad = True
 
         # General case: freeze the entire encoder (head-only warmup).
         print(f"{mode} mode: freezing entire encoder")
