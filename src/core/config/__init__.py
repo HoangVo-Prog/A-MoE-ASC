@@ -14,6 +14,8 @@ class Config:
     max_len_sent: int = 24
     max_len_term: int = 4
     num_labels: int = 3
+    num_workers: int = 4
+
 
     # ====== Training ======
     epochs: int = 15
@@ -65,6 +67,7 @@ class Config:
     # ====== MoE toggles ======
     freeze_moe: bool = False
     aux_loss_weight: float = 0.01
+    aux_warmup_steps: int = 0
     step_print_moe: float = 100
     do_ensemble_logits: bool = True
     head_type: str = "linear"
@@ -74,6 +77,7 @@ class Config:
     router_bias: bool = True
     router_jitter: float = 0.001
     jitter_warmup_steps: int = 0
+    jitter_end: float = 0
     router_entropy_weight: float = 0.0
     route_mask_pad_tokens: bool = True
     router_temperature: float = 1.0
@@ -90,11 +94,13 @@ class Config:
     top_k_decay: str = "custom"  # "linear", "exponential", "custom"
     top_k_schedule: Optional[list[int]] = field(default_factory=lambda: [6, 4, 2])
 
-    sk_mix_mode: str = "rep"
-    sk_beta_start: float = 0.0
-    sk_beta_end: float = 1.0
-    sk_beta_warmup_epochs: int = 0
+    # Skip connection
+    expert_hidden: Optional[int] = None
+    beta_start: float = 0.0
+    beta_end: float = 1.0,
+    beta_warmup_steps: int = 0
 
+    # Mixture of Fusion
     mof_experts: Optional[list[str]] = field(
         default_factory=lambda: 
             [
@@ -110,26 +116,8 @@ class Config:
                 "late_interaction",
             ]
     )
-    
-    mof_mix_level: str = "rep"
-    mof_lb_coef: float = 0.001
-    mof_lb_mode: str = "switch"
-    mof_entropy_coef: float = 0.001
-    mof_mixed_repr_norm: str = "layernorm"
-    mof_mixed_repr_norm_clamp: float = 0.0
-    mof_residual_alpha_init: float = 0.1
-    mof_residual_alpha_learnable: int = 1
-    mof_router_temperature: float = 1.0
-    mof_disable_expert_scaling: bool = False
-    mof_expert_norm_clamp: float = 0.0
-    mof_logit_clamp: float = 0.0
-    mof_debug: bool = False
-    mof_debug_every: int = 100
-    mof_debug_max_batch: int = 1
-    mof_debug_max_experts: int = 0
     encoder_lr_scale: float = 0.1
 
-    num_workers: int = 4
 
     # ----------------- factory -----------------
     @staticmethod
