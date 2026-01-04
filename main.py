@@ -7,7 +7,7 @@ from src.core.run import run_benchmark_fusion, train_multi_seed, train_kfold
 def main():
     cfg = Config.from_cli().finalize().validate()
     
-    print("Configuration")
+    print("Configuration:")
     print(cfg)
     print()
 

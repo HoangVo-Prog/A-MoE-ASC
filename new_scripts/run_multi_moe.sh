@@ -75,8 +75,7 @@ echo
 # Run
 # =========================
 python -m main \
-  --mode MultiMoeHead \
-  --moe_topk_schedule \
+  --mode MultiMoEHead \
   --model_name bert-base-uncased \
   --benchmark_fusions \
   --num_seeds 3 \

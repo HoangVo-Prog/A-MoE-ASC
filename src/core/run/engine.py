@@ -118,36 +118,6 @@ def train_one_epoch(
     router_param_ids = {id(p) for n, p in model.named_parameters() if "moe_ffn.router" in n}
 
     for step, batch in enumerate(dataloader):
-        router = _get_router(model)
-
-        if step == 0:
-            # LR at step start
-            try:
-                print("lr at step start:", float(optimizer.param_groups[0]["lr"]))
-            except Exception:
-                pass
-
-            # Print router's optimizer group hyperparams
-            for gi, g in enumerate(optimizer.param_groups):
-                has_router = any(id(p) in router_param_ids for p in g["params"])
-                if has_router:
-                    print(
-                        "router group:",
-                        gi,
-                        "lr=",
-                        float(g.get("lr", 0.0)),
-                        "weight_decay=",
-                        g.get("weight_decay", None),
-                    )
-
-            # Snapshot router params BEFORE forward
-            if router is not None:
-                with torch.no_grad():
-                    w0 = router.weight.detach().clone()
-                    b0 = router.bias.detach().clone() if router.bias is not None else None
-                    print("pre-step w mean:", float(router.weight.mean().item()))
-                    if router.bias is not None:
-                        print("pre-step b mean:", float(router.bias.mean().item()))
 
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
@@ -169,30 +139,8 @@ def train_one_epoch(
         loss_lambda = outputs.get("loss_lambda", None)
         loss_aux = outputs.get("aux_loss", None)
 
-        if step == 0:
-            lt = loss_total.detach()
-            print("loss_total finite:", bool(torch.isfinite(lt).item()), "value:", float(lt))
-            print("logits finite:", bool(torch.isfinite(logits.detach()).all().item()))
-
         # backward
         loss_total.backward()
-
-        if step == 0 and router is not None:
-            for n, p in model.named_parameters():
-                if "moe_ffn.router" in n:
-                    if p.grad is None:
-                        print(n, "grad is None")
-                    else:
-                        g = p.grad.detach()
-                        print(
-                            n,
-                            "grad_norm",
-                            float(g.norm().item()),
-                            "grad_has_nan",
-                            bool(torch.isnan(g).any().item()),
-                            "grad_has_inf",
-                            bool(torch.isinf(g).any().item()),
-                        )
 
         # clip (optional)
         if max_grad_norm is not None:
@@ -201,25 +149,9 @@ def train_one_epoch(
         # optimizer step
         optimizer.step()
 
-        if step == 0 and router is not None:
-            with torch.no_grad():
-                print("post-step w mean:", float(router.weight.mean().item()))
-                if router.bias is not None:
-                    print("post-step b mean:", float(router.bias.mean().item()))
-                dw = (router.weight.detach() - w0).abs().mean().item()
-                print("router |Δw| mean:", float(dw))
-                if b0 is not None and router.bias is not None:
-                    db = (router.bias.detach() - b0).abs().mean().item()
-                    print("router |Δb| mean:", float(db))
-
-        # IMPORTANT: scheduler.step MUST be after optimizer.step
         if scheduler is not None:
             scheduler.step()
-            if step == 0:
-                try:
-                    print("lr after sched:", float(optimizer.param_groups[0]["lr"]))
-                except Exception:
-                    pass
+            
 
         # stats
         total_loss_sum += safe_float(loss_total)
@@ -359,7 +291,6 @@ def run_training_loop(
 
     print("=======================================================================")
     print("Fusion Method:", method)
-    print("=======================================================================")
 
     steps_per_epoch = max(1, len(train_loader))
 
@@ -392,6 +323,7 @@ def run_training_loop(
     scaler = GradScaler() if cfg.use_amp else None
 
     for epoch in range(int(cfg.epochs)):
+        print("=======================================================================")
         print(f"{tag}Epoch {epoch + 1}/{cfg.epochs}")
 
         # Apply freeze policy for this epoch
@@ -457,7 +389,7 @@ def run_training_loop(
                 f"aux_loss {train_metrics['aux_loss']:.6f} "
                 f"lambda_loss {train_metrics['loss_lambda']:.6f} "
                 f"total_loss {train_metrics['loss_total']:.6f} "
-                f"\n Train F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
+                f"\nTrain F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
             )
             log += "\n"
         else:
@@ -502,7 +434,10 @@ def run_training_loop(
                 best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 best_epoch = epoch
                 epochs_no_improve = 0
+                print()
+                print("*************************************************************")
                 print("[MODEL] New best model on macro_f1 with neutral_f1 constraint")
+                print()
             else:
                 epochs_no_improve += 1
                 if cfg.early_stop_patience > 0 and epochs_no_improve >= int(cfg.early_stop_patience):

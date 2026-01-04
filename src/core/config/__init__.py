@@ -1,8 +1,8 @@
 from __future__ import annotations
-import argparse
-from dataclasses import dataclass, fields
-from typing import Optional, Sequence, List, get_type_hints, get_origin, get_args, Union
 
+import argparse
+from dataclasses import dataclass, field, fields, MISSING
+from typing import Optional, Sequence, List, get_type_hints, get_origin, get_args, Union
 
 
 @dataclass
@@ -36,7 +36,7 @@ class Config:
     mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoF"
     fusion_method: str = "concat"
     benchmark_fusions: bool = False
-    benchmark_methods: str = "concat"
+    benchmark_methods: str = "sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction"
     train_full_only: bool = False
 
     # ====== Seeds / kfold ======
@@ -62,7 +62,7 @@ class Config:
     adamw_foreach: bool = False
     adamw_fused: bool = False
 
-    # ====== MoE togglestoggles ======
+    # ====== MoE toggles ======
     freeze_moe: bool = False
     aux_loss_weight: float = 0.01
     step_print_moe: float = 100
@@ -72,10 +72,10 @@ class Config:
     num_experts: int = 8
     moe_top_k: int = 2
     router_bias: bool = True
-    router_jitter: float = 0.003
-    jitter_warmup_steps: int = 300
+    router_jitter: float = 0.001
+    jitter_warmup_steps: int = 0
     router_entropy_weight: float = 0.0
-    route_mask_pad_tokens: bool = False 
+    route_mask_pad_tokens: bool = True
     router_temperature: float = 1.0
     capacity_factor: Optional[float] = None
 
@@ -83,6 +83,12 @@ class Config:
     moe_topk_start: int = 4
     moe_topk_end: int = 2
     moe_topk_switch_epoch: int = 3
+
+    # ====== Multi MoE ======
+    multi_moe_top_k: int = 6
+    num_moe_layers: int = 3
+    top_k_decay: str = "custom"  # "linear", "exponential", "custom"
+    top_k_schedule: Optional[list[int]] = field(default_factory=lambda: [6, 4, 2])
 
     sk_mix_mode: str = "rep"
     sk_beta_start: float = 0.0
@@ -121,6 +127,14 @@ class Config:
             return len(args) == 1 and args[0] is bool
         return False
 
+    @staticmethod
+    def _unwrap_optional(t):
+        origin = get_origin(t)
+        if origin is Union:
+            args = [a for a in get_args(t) if a is not type(None)]
+            return args[0] if len(args) == 1 else t
+        return t
+
     @classmethod
     def from_cli(cls, argv=None):
         parser = argparse.ArgumentParser("ATSC Trainer")
@@ -128,18 +142,36 @@ class Config:
 
         for f in fields(cls):
             name = f.name
-            default = f.default
             hinted_type = type_hints.get(name, f.type)
+            hinted_type = cls._unwrap_optional(hinted_type)
 
+            # Resolve default (support default_factory)
+            if f.default is not MISSING:
+                default = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[attr-defined]
+                default = f.default_factory()        # type: ignore[misc]
+            else:
+                default = None
+
+            # BOOL: add BOTH --x and --no_x
             if cls._is_bool_type(hinted_type):
-                if default is False:
-                    parser.add_argument(f"--{name}", action="store_true")
-                else:
-                    parser.add_argument(f"--no_{name}", dest=name, action="store_false")
+                group = parser.add_mutually_exclusive_group(required=False)
+                group.add_argument(f"--{name}", dest=name, action="store_true")
+                group.add_argument(f"--no_{name}", dest=name, action="store_false")
+                parser.set_defaults(**{name: bool(default)})
                 continue
 
+            # list[int] (hoặc Optional[list[int]]): parse as repeated ints
+            origin = get_origin(hinted_type)
+            if hinted_type == list[int] or origin is list:
+                # Nếu bạn muốn cho phép rỗng: dùng nargs="*"
+                # Nếu muốn bắt buộc có ít nhất 1 số khi truyền flag: dùng nargs="+"
+                parser.add_argument(f"--{name}", nargs="*", type=int, default=default)
+                continue
+
+            # NON-BOOL
             if default is None:
-                parser.add_argument(f"--{name}", default=default)
+                parser.add_argument(f"--{name}", default=None)
             else:
                 parser.add_argument(f"--{name}", type=type(default), default=default)
 
@@ -163,7 +195,6 @@ class Config:
             s = self.class_weights.strip()
             self.class_weights = None if not s else [float(x.strip()) for x in s.split(",")]
 
-        # normalize benchmark_methods empty -> use default list already in string
         self.benchmark_methods = (self.benchmark_methods or "").strip()
         return self
 
