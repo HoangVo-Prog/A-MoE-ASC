@@ -165,13 +165,13 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
-        if step_print_i and (step > 0) and (step % step_print_i == 0):
+        if step_print_i > step or (step_print_i and (step > 0) and (step % step_print_i == 0)):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
                 except Exception as e:
                     print("[ERROR] Can't print MoE debug logs:", e)
-
+            
     denom = max(1, n_steps)
     acc = float(accuracy_score(all_labels, all_preds))
     f1 = float(f1_score(all_labels, all_preds, average=f1_average))

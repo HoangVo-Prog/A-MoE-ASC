@@ -65,7 +65,7 @@ class Config:
     # ====== MoE toggles ======
     freeze_moe: bool = False
     aux_loss_weight: float = 0.01
-    step_print_moe: float = 50
+    step_print_moe: float = 100
     do_ensemble_logits: bool = True
     head_type: str = "linear"
 
