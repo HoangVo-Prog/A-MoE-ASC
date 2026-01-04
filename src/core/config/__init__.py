@@ -97,7 +97,7 @@ class Config:
     # Skip connection
     expert_hidden: Optional[int] = None
     beta_start: float = 0.0
-    beta_end: float = 1.0,
+    beta_end: float = 1.0
     beta_warmup_steps: int = 0
 
     # Mixture of Fusion
