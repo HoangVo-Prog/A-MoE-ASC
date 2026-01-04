@@ -4,11 +4,19 @@ set -e
 # =========================
 # Inputs
 # =========================
-EPOCHS="${1:-10}"
-START_K="${2:-4}"
-END_K="${3:-2}"
-SWITCH_EPOCH="${4:-3}"
-LOSS_TYPE="${5:-ce}"
+LOSS_TYPE="${1:-ce}"
+DATASET_TYPE="${2:-laptop14}"
+
+# Only support these dataset types
+case "${DATASET_TYPE}" in
+  laptop14|rest14)
+    ;;
+  *)
+    echo "❌ Unsupported dataset_type: ${DATASET_TYPE}"
+    echo "Supported: laptop14 | rest14"
+    exit 1
+    ;;
+esac
 
 # =========================
 # Project root
@@ -17,21 +25,39 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export PYTHONPATH="$ROOT_DIR/src"
 
 # =========================
+# Dataset-specific weights/gamma (ABSA 3-class)
+# Order: (Positive, Negative, Neutral)
+# =========================
+CLASS_WEIGHTS=""
+FOCAL_GAMMA=""
+
+case "${DATASET_TYPE}" in
+  laptop14)
+    CLASS_WEIGHTS="1.0,1.6,1.2"
+    FOCAL_GAMMA="2.0"
+    ;;
+  rest14)
+    CLASS_WEIGHTS="1.4,2.2,0.8"
+    FOCAL_GAMMA="2.0"
+    ;;
+esac
+
+# =========================
 # Loss-specific flags
 # =========================
 LOSS_FLAGS="--loss_type ${LOSS_TYPE}"
 
 case "${LOSS_TYPE}" in
   ce)
-    # Cross-Entropy
+    # Plain CE
     ;;
   weighted_ce)
-    # Neutral ~20% → boost neutral
-    LOSS_FLAGS="${LOSS_FLAGS} --class_weights 1.0,2.5,1.0"
+    # Weighted CE uses dataset-specific alpha
+    LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS}"
     ;;
   focal)
-    # Focal + class weight
-    LOSS_FLAGS="${LOSS_FLAGS} --class_weights 1.0,2.5,1.0 --focal_gamma 2.0"
+    # Focal uses dataset-specific alpha and gamma
+    LOSS_FLAGS="${LOSS_FLAGS} --class_weights ${CLASS_WEIGHTS} --focal_gamma ${FOCAL_GAMMA}"
     ;;
   *)
     echo "❌ Unsupported loss_type: ${LOSS_TYPE}"
@@ -40,37 +66,29 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-echo "▶ Running multi moe with:"
-echo "  epochs        = ${EPOCHS}"
-echo "  start k       = ${START_K}"
-echo "  end k         = ${END_K}"
-echo "  switch epoch  = ${SWITCH_EPOCH}"
-echo "  loss_type     = ${LOSS_TYPE}"
-echo "  loss_flags    = ${LOSS_FLAGS}"
-echo
+METHOD_FLAGS=""
+if [[ -n "${benchmark_methods:-}" ]]; then
+  METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
+fi
 
+echo "▶ Running multi moe with:"
+echo "  dataset_type   = ${DATASET_TYPE}"
+echo "  loss_type      = ${LOSS_TYPE}"
+echo "  loss_flags     = ${LOSS_FLAGS}"
+echo "  method_flags   = ${METHOD_FLAGS}"
+echo
 # =========================
 # Run
 # =========================
-python -m moe_head.runner \
-  --locked_baseline \
+python -m main \
+  --mode MultiMoEHead \
+  --model_name bert-base-uncased \
   --benchmark_fusions \
   --num_seeds 3 \
-  --moe_top_k "${START_K}" \
-  --moe_topk_schedule \
-  --moe_topk_start "${START_K}" \
-  --moe_topk_end "${END_K}" \
-  --moe_topk_switch_epoch "${SWITCH_EPOCH}" \
-  --epochs "${EPOCHS}" \
   --output_dir "$ROOT_DIR/saved_model" \
-  --output_name phase1_locked_baseline \
-  --train_path "$ROOT_DIR/dataset/atsa/laptop14/train.json" \
-  --val_path   "$ROOT_DIR/dataset/atsa/laptop14/val.json" \
-  --test_path  "$ROOT_DIR/dataset/atsa/laptop14/test.json" \
-  --use_moe \
+  --output_name base_model.json \
+  --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
+  --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --route_mask_pad_tokens \
-  --aux_loss_weight 0.01 \
-  --step_print_moe 100 \
-  --amp_dtype fp16 \
-  --benchmark_methods concat \
-  ${LOSS_FLAGS}
+  ${LOSS_FLAGS} \
+  ${METHOD_FLAGS}
