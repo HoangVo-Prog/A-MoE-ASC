@@ -74,24 +74,36 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
             base = getattr(enc, "base_encoder", None)
             if base is None:
-                # fallback: behave like general case
                 print(f"{mode} mode: encoder has no base_encoder, freezing entire encoder")
                 _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=True)
                 _set_encoder_train_eval(model, frozen=True)
                 return True
 
-            print(f"{mode} mode: freezing base_encoder only, keeping MoE-skip trainable")
+            print(f"{mode} mode: freezing base_encoder only, keeping MoE-skip + fusion modules trainable")
 
             # 1) Freeze backbone params
             for p in base.parameters():
                 p.requires_grad = False
+            base.eval()
 
-            # 2) Keep everything outside base_encoder trainable (moe_sk_h/moe_sk_2h, heads, router, experts)
+            # 2) Keep MoE modules trainable
             for name, p in enc.named_parameters():
                 if name.startswith("base_encoder."):
                     continue
                 p.requires_grad = True
-
+            
+            # 3) Keep fusion modules trainable (nằm ngoài encoder)
+            # Các modules này đã tự động trainable vì không thuộc base_encoder
+            # Nhưng cần đảm bảo chúng ở train mode
+            for name, module in model.named_modules():
+                if name.startswith("encoder.base_encoder"):
+                    continue
+                if hasattr(module, 'train') and callable(module.train):
+                    if name and not name.startswith("encoder.base_encoder"):
+                        module.train()
+            
+            return True
+                
         # General case: freeze the entire encoder (head-only warmup).
         print(f"{mode} mode: freezing entire encoder")
         _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=True)
@@ -165,13 +177,6 @@ def train_one_epoch(
         loss_aux = outputs.get("aux_loss", None)
 
         # backward
-        if step == 0:
-            print("[DEBUG] loss_total.requires_grad:", loss_total.requires_grad)
-            print("[DEBUG] logits.requires_grad:", logits.requires_grad)
-            print("[DEBUG] loss_main.requires_grad:", (loss_main.requires_grad if loss_main is not None else None))
-            n_trainable = sum(p.requires_grad for p in model.parameters())
-            print("[DEBUG] num_trainable_params:", n_trainable)
-
         loss_total.backward()
 
         # clip (optional)
