@@ -76,113 +76,50 @@ def _cfg_to_dict(cfg) -> dict:
     except Exception:
         return dict(getattr(cfg, "__dict__", {}))
 
-def _dataclass_to_dict_shallow(obj: Any) -> Dict[str, Any]:
-    return {f.name: getattr(obj, f.name) for f in fields(obj)}
+
+def cfg_to_flat_dict(cfg: Any) -> Dict[str, Any]:
+    # Support dataclass Config hoặc object có __dict__
+    if is_dataclass(cfg) and not isinstance(cfg, type):
+        return asdict(cfg)
+    if isinstance(cfg, dict):
+        return dict(cfg)
+    return dict(getattr(cfg, "__dict__", {}))
 
 
-def to_dict(d: Any) -> dict:
-    if is_dataclass(d) and not isinstance(d, type):
-        return _dataclass_to_dict_shallow(d)
-    if isinstance(d, argparse.Namespace):
-        return vars(d)
-    if isinstance(d, Mapping):
-        return dict(d)
-    raise TypeError(f"Unsupported input type: {type(d)}")
+def build_kwargs_from_signature(cfg_dict: Dict[str, Any], model_cls: type) -> Dict[str, Any]:
+    sig = inspect.signature(model_cls.__init__)
 
+    # Nếu model __init__ có **kwargs thì pass hết cho nhanh
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        # nhưng vẫn bỏ self
+        return dict(cfg_dict)
 
-def _get_attr_or_key(obj: Any, key: str) -> Any:
-    if obj is None:
-        raise KeyError(key)
-    if isinstance(obj, Mapping) and key in obj:
-        return obj[key]
-    if hasattr(obj, key):
-        return getattr(obj, key)
-    raise KeyError(key)
+    kwargs: Dict[str, Any] = {}
+    missing_required = []
 
-
-def infer_store_true_dests(parser: argparse.ArgumentParser) -> set[str]:
-    """
-    Tìm các dest thuộc nhóm store_true (flag không có giá trị, default thường là False).
-    """
-    dests: set[str] = set()
-
-    # argparse dùng các Action nội bộ, nên check theo đặc trưng hành vi
-    for a in getattr(parser, "_actions", []):
-        # Bỏ help
-        if getattr(a, "dest", None) in (None, "help"):
+    for name, p in sig.parameters.items():
+        if name == "self":
             continue
 
-        # Case phổ biến: store_true
-        # a.const == True và a.default == False (thường)
-        const = getattr(a, "const", None)
-        default = getattr(a, "default", None)
+        if name in cfg_dict:
+            kwargs[name] = cfg_dict[name]
+            continue
 
-        if const is True and (default is False or default is None):
-            dests.add(a.dest)
+        # param bắt buộc mà cfg không có
+        if p.default is inspect._empty and p.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            missing_required.append(name)
 
-        # Một số parser custom có thể set default khác, nhưng vẫn là flag dạng boolean
-        # Nếu muốn strict hơn thì bỏ nhánh này.
-        # elif isinstance(default, bool) and const is True:
-        #     dests.add(a.dest)
+    if missing_required:
+        raise TypeError(
+            f"{model_cls.__name__} is missing required args from cfg: {missing_required}. "
+            f"Either add them to Config or give defaults in {model_cls.__name__}.__init__."
+        )
 
-    return dests
+    return kwargs
 
-
-def filter_config_kwargs(
-    d: Any,
-    config_or_model: Any,
-    *,
-    fallback_sources: Optional[Iterable[Any]] = None,
-    arg_parser: Optional[argparse.ArgumentParser] = None,
-    drop_false_store_true: bool = True,
-) -> dict:
-    raw = to_dict(d)
-
-    # Nếu d là argparse.Namespace hoặc đến từ argparse, xử lý store_true
-    if drop_false_store_true and arg_parser is not None:
-        store_true_dests = infer_store_true_dests(arg_parser)
-
-        # Với store_true: False có nghĩa là "không truyền flag", nên drop để không override fallback/config
-        for k in list(raw.keys()):
-            if k in store_true_dests and raw.get(k) is False:
-                raw.pop(k, None)
-
-    # Case A: dataclass schema
-    cls = config_or_model if isinstance(config_or_model, type) else type(config_or_model)
-    if is_dataclass(cls):
-        allowed = {f.name for f in fields(cls)}
-        return {k: v for k, v in raw.items() if k in allowed}
-
-    # Case B: class/callable signature
-    target = config_or_model.__init__ if inspect.isclass(config_or_model) else config_or_model
-    sig = inspect.signature(target)
-
-    # Nếu có **kwargs thì không cần lọc
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-        return raw
-
-    allowed = {k for k in sig.parameters.keys() if k != "self"}
-
-    out: dict[str, Any] = {}
-
-    # 1) ưu tiên lấy trực tiếp từ raw
-    for k in allowed:
-        if k in raw:
-            out[k] = raw[k]
-
-    # 2) nếu thiếu, thử lấy từ fallback_sources (ví dụ cfg.base/cfg.moe/cfg.kfold)
-    if fallback_sources:
-        for k in allowed:
-            if k in out:
-                continue
-            for src in fallback_sources:
-                try:
-                    out[k] = _get_attr_or_key(src, k)
-                    break
-                except KeyError:
-                    continue
-
-    return out
 
 def safe_float(x) -> float:
     if x is None:

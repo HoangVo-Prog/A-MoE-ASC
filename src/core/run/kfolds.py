@@ -22,11 +22,11 @@ from .engine import run_training_loop, eval_model
 
 
 def train_kfold(config, method):
-    os.makedirs(config.base.output_dir, exist_ok=True)
+    os.makedirs(config.output_dir, exist_ok=True)
     
     tokenizer = get_tokenizer(config)
     full_train_set, test_set = get_dataset(config, tokenizer)
-    seeds = [config.kfold.seed + i for i in range(config.base.num_seeds)]
+    seeds = [config.seed + i for i in range(config.num_seeds)]
     
     label2id = full_train_set.label2id
     id2label = {v: k for k, v in label2id.items()}
@@ -38,7 +38,7 @@ def train_kfold(config, method):
     
     all_results = {
         "seeds": seeds,
-        "folds": config.kfold.k,
+        "folds": config.k,
         "runs": {},
         "summary": {},
         "full_confusion": {},
@@ -64,7 +64,7 @@ def train_kfold(config, method):
         fold_val_cms = []
         fold_test_cms = []      
         
-        for fold in range(config.kfold.k):
+        for fold in range(config.k):
             print(f"Training method={method}, seed={seed}, fold={fold}...")
             
             train_ds, val_ds = kfold_train_set.get_fold(fold)
@@ -261,7 +261,7 @@ def train_kfold(config, method):
 
     all_results["summary"] = summary
     
-    output_path = os.path.join(config.base.output_dir, config.base.output_name)
+    output_path = os.path.join(config.output_dir, config.output_name)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
 

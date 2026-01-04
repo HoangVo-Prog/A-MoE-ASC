@@ -24,11 +24,11 @@ from .train import train_multi_seed
 
 
 def run_benchmark_fusion(config):
-    os.makedirs(config.base.output_dir, exist_ok=True)
+    os.makedirs(config.output_dir, exist_ok=True)
     
     tokenizer = get_tokenizer(config)
     full_train_set, test_set = get_dataset(config, tokenizer)
-    seeds = [config.kfold.seed + i for i in range(config.base.num_seeds)]
+    seeds = [config.seed + i for i in range(config.num_seeds)]
     
     label2id = full_train_set.label2id
     id2label = {v: k for k, v in label2id.items()}
@@ -39,12 +39,12 @@ def run_benchmark_fusion(config):
     kfold_train_set = get_kfold_dataset(config, tokenizer)
     full_train_dataloader, _, test_loader = get_dataloader(config, train_set=full_train_set, test_set=test_set)
     
-    methods = parse_str_list(config.base.benchmark_methods)
+    methods = parse_str_list(config.benchmark_methods)
     
     all_results = {
         "methods": methods,
         "seeds": seeds,
-        "folds": config.kfold.k,
+        "folds": config.k_folds,
         "runs": {},
         "summary": {},
         "full_confusion": {},
@@ -71,7 +71,7 @@ def run_benchmark_fusion(config):
             fold_val_cms = []
             fold_test_cms = []      
             
-            for fold in range(config.kfold.k):                
+            for fold in range(config.k_folds):                
                 train_ds, val_ds = kfold_train_set.get_fold(fold)
                 train_loader, val_loader, _ = get_dataloader(cfg=config, train_set=train_ds, val_set=val_ds) 
                 
@@ -230,7 +230,7 @@ def run_benchmark_fusion(config):
             id2label=id2label,
             seeds=seeds,
             print_cf_matrix=False,
-            do_ensemble_logits=config.base.do_ensemble_logits,
+            do_ensemble_logits=config.do_ensemble_logits,
             verbose_ensemble_report=False,
         )
 
@@ -307,7 +307,7 @@ def run_benchmark_fusion(config):
 
     all_results["summary"] = summary
 
-    output_path = os.path.join(config.base.output_dir, config.base.output_name)
+    output_path = os.path.join(config.output_dir, config.output_name)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
 

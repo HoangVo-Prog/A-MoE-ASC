@@ -83,6 +83,7 @@ python -m main \
   --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
+  --benchmark_fusions \
   --benchmark_methods concat \
   --route_mask_pad_tokens \
   ${LOSS_FLAGS}

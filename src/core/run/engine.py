@@ -41,28 +41,28 @@ def _set_encoder_train_eval(model: nn.Module, *, frozen: bool) -> None:
 def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> bool:
     """
     Schedule A (stable warmup):
-    - For the first `cfg.base.freeze_epochs` epochs: freeze the entire encoder (BERT backbone),
+    - For the first `cfg.freeze_epochs` epochs: freeze the entire encoder (BERT backbone),
       so only modules outside `model.encoder` are trained.
     - After that: unfreeze the encoder and train everything.
 
     Exception:
-    - If `cfg.base.mode == "MoEFFN"`, we keep the existing specialized logic
+    - If `cfg.mode == "MoEFFN"`, we keep the existing specialized logic
       (MoE FFN lives inside the encoder and is handled there).
     """
-    fe = int(getattr(cfg.base, "freeze_epochs", 0) or 0)
+    fe = cfg.freeze_epochs
     if fe <= 0:
         _set_encoder_requires_grad(cfg, model, trainable=True, keep_moe_trainable=False)
         _set_encoder_train_eval(model, frozen=False)
         return False
 
     in_freeze = epoch_idx_0based < fe
-    mode = str(getattr(cfg.base, "mode", "")).strip()
+    mode = cfg.mode
 
     if in_freeze:
         # Keep the user's existing MoEFFN logic untouched.
         if mode == "MoEFFN":
             print("MoEFFN mode: freezing base encoder, keeping MoE FFN trainable")
-            keep_moe = not bool(getattr(cfg.base, "freeze_moe", False))
+            keep_moe = cfg.freeze_moe
             _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=keep_moe)
             _set_encoder_train_eval(model, frozen=True)
             return True
@@ -335,9 +335,9 @@ def run_training_loop(
     test_loader,
     id2label,
     tag,
-):     
+):
     moe = bool(getattr(model, "_collect_aux_loss", False))
-    
+
     if moe:
         history = {
             "train_total_loss": [],
@@ -349,8 +349,8 @@ def run_training_loop(
             "val_f1": [],
         }
     else:
-        history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}   
-        
+        history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+
     best_macro_f1 = -1.0
     best_f1_neutral = -1.0
     best_state_dict = None
@@ -362,7 +362,7 @@ def run_training_loop(
     print("=======================================================================")
 
     steps_per_epoch = max(1, len(train_loader))
-    
+
     neutral_idx = None
     for k, v in id2label.items():
         if str(v).lower().strip() == "neutral":
@@ -374,40 +374,37 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
+    # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
+    freeze0 = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
+    warmup_ratio_phase1 = 0.0 if freeze0 else float(cfg.warmup_ratio)
 
-    
-    optimizer = scheduler = None
+    optimizer, scheduler = build_optimizer_and_scheduler(
+        model=model,
+        lr=cfg.lr,
+        lr_head=cfg.lr_head,
+        warmup_ratio=warmup_ratio_phase1,
+        total_steps=steps_per_epoch * max(1, int(cfg.epochs)),
+        params=trainable_params(),
+        adamw_foreach=cfg.adamw_foreach,
+        adamw_fused=cfg.adamw_fused,
+    )
 
-    scaler = GradScaler() if cfg.base.use_amp else None
+    scaler = GradScaler() if cfg.use_amp else None
 
-    for epoch in range(int(cfg.base.epochs)):
-        print(f"{tag}Epoch {epoch + 1}/{cfg.base.epochs}")
+    for epoch in range(int(cfg.epochs)):
+        print(f"{tag}Epoch {epoch + 1}/{cfg.epochs}")
 
-        # --- Apply freeze policy for this epoch ---
-        freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
-        
-        if optimizer is None:
-            optimizer, scheduler = build_optimizer_and_scheduler(
-                model=model,
-                lr=cfg.base.lr,
-                lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
-                warmup_ratio=cfg.base.warmup_ratio,
-                total_steps=steps_per_epoch * max(1, int(cfg.base.epochs)),
-                params=trainable_params(),
-                adamw_foreach=cfg.base.adamw_foreach,
-                adamw_fused=cfg.base.adamw_fused,
-            )
-                    
-        if cfg.base.freeze_epochs > 0 and epoch < cfg.base.freeze_epochs:
-            print(f"Encoder frozen (epoch {epoch + 1}/{cfg.base.freeze_epochs})")
-            
-            router_param_ids = {id(p) for n, p in model.named_parameters() if "moe_ffn.router" in n}
-            opt_param_ids = {id(p) for g in optimizer.param_groups for p in g["params"]}
-            print("router params covered:", len(router_param_ids & opt_param_ids), "/", len(router_param_ids))
+        # Apply freeze policy for this epoch
+        if epoch == 0:
+            freeze = freeze0
+        else:
+            freeze = maybe_freeze_encoder(cfg, model, epoch_idx_0based=epoch)
 
+        if cfg.freeze_epochs > 0 and epoch < cfg.freeze_epochs:
+            print(f"Encoder frozen (epoch {epoch + 1}/{cfg.freeze_epochs})")
 
-        # --- Rebuild optimizer exactly at unfreeze boundary ---
-        if cfg.base.freeze_epochs > 0 and epoch == cfg.base.freeze_epochs:
+        # Rebuild optimizer exactly at unfreeze boundary
+        if cfg.freeze_epochs > 0 and epoch == cfg.freeze_epochs:
             print("Encoder unfrozen, rebuilding optimizer to include newly-trainable params")
             try:
                 del optimizer
@@ -417,19 +414,23 @@ def run_training_loop(
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            remaining_steps = steps_per_epoch * max(1, int(cfg.base.epochs) - int(epoch))
+            remaining_steps = steps_per_epoch * max(1, int(cfg.epochs) - int(epoch))
+
+            # Phase 2 uses the real warmup_ratio (or set to 0.0 if you want to avoid reset completely)
+            warmup_ratio_phase2 = 0.0
+
             optimizer, scheduler = build_optimizer_and_scheduler(
                 model=model,
-                lr=cfg.base.lr,
-                lr_head=getattr(cfg.base, 'lr_head', cfg.base.lr),
-                warmup_ratio=cfg.base.warmup_ratio,
+                lr=cfg.lr,
+                lr_head=cfg.lr_head,
+                warmup_ratio=warmup_ratio_phase2,
                 total_steps=remaining_steps,
                 params=trainable_params(),
-                adamw_foreach=cfg.base.adamw_foreach,
-                adamw_fused=cfg.base.adamw_fused,
+                adamw_foreach=cfg.adamw_foreach,
+                adamw_fused=cfg.adamw_fused,
             )
 
-        # --- training ---
+        # Training
         train_metrics = train_one_epoch(
             model=model,
             dataloader=train_loader,
@@ -437,20 +438,20 @@ def run_training_loop(
             scheduler=scheduler,
             fusion_method=method,
             f1_average="macro",
-            step_print_moe=cfg.base.step_print_moe,
-            use_amp=cfg.base.use_amp,
-            amp_dtype=cfg.base.amp_dtype,
+            step_print_moe=cfg.step_print_moe,
+            use_amp=cfg.use_amp,
+            amp_dtype=cfg.amp_dtype,
             scaler=scaler,
-            max_grad_norm=cfg.base.max_grad_norm,
+            max_grad_norm=cfg.max_grad_norm,
         )
-        
+
         if moe:
             history["train_total_loss"].append(train_metrics["loss_total"])
             history["train_main_loss"].append(train_metrics["loss_main"])
             history["train_lambda_loss"].append(train_metrics["loss_lambda"])
             history["train_f1"].append(train_metrics["f1"])
             history["train_acc"].append(train_metrics["acc"])
-            
+
             log = (
                 f"Train main_loss {train_metrics['loss_main']:.6f} "
                 f"aux_loss {train_metrics['aux_loss']:.6f} "
@@ -458,19 +459,18 @@ def run_training_loop(
                 f"total_loss {train_metrics['loss_total']:.6f} "
                 f"\n Train F1 {train_metrics['f1']:.4f} acc {train_metrics['acc']:.4f}"
             )
-            log += ("\n")
-
-        else: 
+            log += "\n"
+        else:
             history["train_loss"].append(float(train_metrics["loss"]))
             history["train_f1"].append(float(train_metrics["f1"]))
-            
+
             log = (
                 f"Train loss {train_metrics['loss']:.4f} "
                 f"F1 {train_metrics['f1']:.4f} "
                 f"acc {train_metrics['acc']:.4f}"
             )
-            log += ("\n")
-            
+            log += "\n"
+
         if val_loader is not None:
             print("Validation Confusion Matrix")
             val_metrics = eval_model(
@@ -493,7 +493,6 @@ def run_training_loop(
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
                 f"| Val neutral f1 {neutral_f1:.4f}"
-
             )
 
             should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral)
@@ -506,16 +505,14 @@ def run_training_loop(
                 print("[MODEL] New best model on macro_f1 with neutral_f1 constraint")
             else:
                 epochs_no_improve += 1
-                if cfg.base.early_stop_patience > 0 and epochs_no_improve >= int(cfg.base.early_stop_patience):
-                    print(
-                        f"Early stopping triggered after {cfg.base.early_stop_patience} epochs without improvement"
-                    )
+                if cfg.early_stop_patience > 0 and epochs_no_improve >= int(cfg.early_stop_patience):
+                    print(f"Early stopping triggered after {cfg.early_stop_patience} epochs without improvement")
                     print(log)
                     break
-                
+
         if test_loader is not None:
             print("Test Confusion Matrix")
-            test_metrics =  eval_model(
+            test_metrics = eval_model(
                 model=model,
                 dataloader=test_loader,
                 id2label=id2label,
