@@ -554,7 +554,7 @@ class MoFModel(BaseModel):
             "cv_soft": _cv(usage_soft),
         }
 
-    def print_mof_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
+    def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
         """Print debug information about MoF routing"""
         s = self._mof_debug_stats()
         if s is None:
