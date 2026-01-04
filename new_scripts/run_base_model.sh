@@ -63,16 +63,12 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-# =========================
-# Optional: benchmark_methods from env var "benchmark_methods"
-# Usage: benchmark_methods="concat" bash file.sh
-# =========================
 METHOD_FLAGS=""
 if [[ -n "${benchmark_methods:-}" ]]; then
   METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
 fi
 
-echo "▶ Running benchmark baseline with:"
+echo "▶ Running base model with:"
 echo "  dataset_type   = ${DATASET_TYPE}"
 echo "  loss_type      = ${LOSS_TYPE}"
 echo "  loss_flags     = ${LOSS_FLAGS}"
@@ -90,5 +86,5 @@ python -m main \
   --output_name base_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
-  ${METHOD_FLAGS} \
-  ${LOSS_FLAGS}
+  ${LOSS_FLAGS} \
+  ${METHOD_FLAGS}

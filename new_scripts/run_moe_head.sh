@@ -66,10 +66,16 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
+METHOD_FLAGS=""
+if [[ -n "${benchmark_methods:-}" ]]; then
+  METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
+fi
+
 echo "▶ Running moe head with:"
-echo "  dataset_type = ${DATASET_TYPE}"
-echo "  loss_type    = ${LOSS_TYPE}"
-echo "  loss_flags   = ${LOSS_FLAGS}"
+echo "  dataset_type   = ${DATASET_TYPE}"
+echo "  loss_type      = ${LOSS_TYPE}"
+echo "  loss_flags     = ${LOSS_FLAGS}"
+echo "  method_flags   = ${METHOD_FLAGS}"
 echo
 # =========================
 # Run
@@ -84,6 +90,6 @@ python -m main \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --benchmark_fusions \
-  --benchmark_methods concat \
   --route_mask_pad_tokens \
-  ${LOSS_FLAGS}
+  ${LOSS_FLAGS} \
+  ${METHOD_FLAGS}
