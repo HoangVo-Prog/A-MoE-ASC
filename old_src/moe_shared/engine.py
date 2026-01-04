@@ -45,7 +45,6 @@ def train_one_epoch(
     lambda_loss_sum = 0.0
     n_steps = 0
     
-    total_loss = 0.0
     all_preds = []
     all_labels = []
 

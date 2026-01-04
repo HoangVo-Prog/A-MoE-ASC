@@ -46,7 +46,6 @@ def _parse_str_list(csv: str) -> list[str]:
         return []
     return [p.strip() for p in s.split(",") if p.strip()]
 
-
 def _mean_std(xs: list[float]) -> tuple[float, float]:
     arr = np.asarray(xs, dtype=np.float64)
     if arr.size == 0:
@@ -54,7 +53,6 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
     if arr.size == 1:
         return float(arr.mean()), 0.0
     return float(arr.mean()), float(arr.std(ddof=1))
-
 
 def _aggregate_confusions(cms: list[np.ndarray]) -> dict:
     if len(cms) == 0:

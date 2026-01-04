@@ -10,6 +10,21 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the tech guy then said the service center does not do 1-to-1 exchange and i have to direct my concern to the \"sales\" team, which is the retail shop which i bought my netbook from.",
+    "aspect": "service center",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the tech guy then said the service center does not do 1-to-1 exchange and i have to direct my concern to the \"sales\" team, which is the retail shop which i bought my netbook from.",
+    "aspect": "\"sales\" team",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the tech guy then said the service center does not do 1-to-1 exchange and i have to direct my concern to the \"sales\" team, which is the retail shop which i bought my netbook from.",
+    "aspect": "tech guy",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "it is of high quality, has a killer gui, is extremely stable, is highly expandable, is bundled with lots of very good applications, is easy to use, and is absolutely gorgeous.",
     "aspect": "quality",
     "sentiment": "positive"
@@ -32,6 +47,26 @@
   {
     "sentence": "easy to start up and does not overheat as much as other laptops.",
     "aspect": "start up",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i even got my teenage son one, because of the features that it offers, like, ichat, photobooth, garage band and more!",
+    "aspect": "features",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i even got my teenage son one, because of the features that it offers, like, ichat, photobooth, garage band and more!",
+    "aspect": "ichat",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i even got my teenage son one, because of the features that it offers, like, ichat, photobooth, garage band and more!",
+    "aspect": "photobooth",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i even got my teenage son one, because of the features that it offers, like, ichat, photobooth, garage band and more!",
+    "aspect": "garage band",
     "sentiment": "positive"
   },
   {
@@ -97,6 +132,16 @@
   {
     "sentence": "i love the way the entire suite of software works together.",
     "aspect": "suite of software",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the speed is incredible and i am more than satisfied.",
+    "aspect": "speed",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "this laptop meets every expectation and windows 7 is great!",
+    "aspect": "windows 7",
     "sentiment": "positive"
   },
   {
@@ -275,8 +320,23 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "i was happy with my purchase of a toshiba satellite l305d-s5934 laptop until it came time to have it repaired under the toshiba warranty.",
+    "aspect": "toshiba warranty",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "amazing quality!",
     "aspect": "quality",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the fact that you can spend over $100 on just a webcam underscores the value of this machine.",
+    "aspect": "webcam",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the fact that you can spend over $100 on just a webcam underscores the value of this machine.",
+    "aspect": "value",
     "sentiment": "positive"
   },
   {
@@ -308,6 +368,11 @@
     "sentence": "then after 4 or so months the charger stopped working so i was forced to go out and buy new hardware just to keep this computer running.",
     "aspect": "hardware",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "if a website ever freezes (which is rare), its really easy to force quit.",
+    "aspect": "force quit",
+    "sentiment": "positive"
   },
   {
     "sentence": "it rarely works and when it does it's incredibly slow.",
@@ -372,6 +437,16 @@
   {
     "sentence": "the reality was, it heated up very quickly, and took way too long to do simple things, like opening my documents folder.",
     "aspect": "opening my documents folder",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i had always used pcs and been constantly frustrated by the crashing and the poorly designed operating systems that were never very intuitive.",
+    "aspect": "operating systems",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "then, within 5 months, the charger crapped out on me.",
+    "aspect": "charger",
     "sentiment": "negative"
   },
   {
@@ -565,6 +640,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "it is always reliable, never bugged and responds well.",
+    "aspect": "responds",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "after about a week i finally got it back and was told that the motherboard had failed and so they installed a new motherboard.",
     "aspect": "motherboard",
     "sentiment": "negative"
@@ -583,6 +663,11 @@
     "sentence": "they had to replace the motherboard in april",
     "aspect": "motherboard",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "yes, the computer was light weight, less expensive than the average laptop, and was pretty self explantory in use.",
+    "aspect": "use",
+    "sentiment": "positive"
   },
   {
     "sentence": "also, if you need to talk to a representive at microsoft, there is a charge, which i believe is robbery, since you are charged enormous amounts for a very badly designed system, which most people would have went with xp if they could.",
@@ -608,6 +693,11 @@
     "sentence": "i love windows 7 which is a vast improvment over vista.",
     "aspect": "vista",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "keyboard is great, very quiet for all the typing that i do.",
+    "aspect": "keyboard",
+    "sentiment": "positive"
   },
   {
     "sentence": "dell's customer disservice is an insult to it's customers who pay good money for shoddy products.",
@@ -660,6 +750,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "2 months later, the battery went.",
+    "aspect": "battery",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "you may need to special order a bag.",
     "aspect": "bag",
     "sentiment": "neutral"
@@ -693,6 +788,11 @@
     "sentence": "the keyboard feels good and i type just fine on it.",
     "aspect": "keyboard",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i thought the white mac computers looked dirty too quicly where you use the mousepad and where you place your hands when typing.",
+    "aspect": "mousepad",
+    "sentiment": "neutral"
   },
   {
     "sentence": "and not to mention after using it for a few months or so, the battery will slowly less and less hold a charge until you can't leave it unplugged for more than 5 minutes without the thing dying.",
@@ -800,6 +900,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "another thing i might add is the battery life is excellent.",
+    "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "one drawback, i wish the keys were backlit.",
     "aspect": "keys",
     "sentiment": "negative"
@@ -890,6 +995,31 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i've been impressed with the battery life and the performance for such a small amount of memory.",
+    "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i've been impressed with the battery life and the performance for such a small amount of memory.",
+    "aspect": "performance",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i've been impressed with the battery life and the performance for such a small amount of memory.",
+    "aspect": "memory",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "it's applications are terrific, including the replacements for microsoft office.",
+    "aspect": "applications",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it's applications are terrific, including the replacements for microsoft office.",
+    "aspect": "microsoft office",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "they improved nothing else such as resolution, appearance, cooling system, graphics card, etc.",
     "aspect": "resolution",
     "sentiment": "negative"
@@ -958,6 +1088,16 @@
     "sentence": "  the board has a bad connector with the power supply and shortly after warrenty expires the power supply will start having issues.",
     "aspect": "power supply",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "my dad has one of the very first toshibas ever made, yes its abit slow now but still works well and i hooked to my ethernet!",
+    "aspect": "ethernet",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "my dad has one of the very first toshibas ever made, yes its abit slow now but still works well and i hooked to my ethernet!",
+    "aspect": "works",
+    "sentiment": "positive"
   },
   {
     "sentence": "mostly i love the drag and drop feature.",
@@ -1030,6 +1170,16 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "additional caveat: the base installation comes with some toshiba-specific software that may or may not be to a user's liking.",
+    "aspect": "base installation",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "additional caveat: the base installation comes with some toshiba-specific software that may or may not be to a user's liking.",
+    "aspect": "software",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "  taking it back to best buy i found that a tiny plastic piece inside had broken (manuf issue).",
     "aspect": "manuf",
     "sentiment": "negative"
@@ -1078,6 +1228,11 @@
     "sentence": "the tech store i purchased this from sent it back,,,,,eventually i got a new or repaired machine approximately 3 weeks later.",
     "aspect": "tech store",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "really like the textured surface which shows no fingerprints.",
+    "aspect": "surface",
+    "sentiment": "positive"
   },
   {
     "sentence": "the screen is bright and the keyboard is nice;",
@@ -1165,6 +1320,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "runs hot  i thought we were paying for quality in our decision to buy an apple product.",
+    "aspect": "quality",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "for the not so good, i got the stock screen - which is very glossy.",
     "aspect": "stock screen",
     "sentiment": "negative"
@@ -1203,6 +1363,16 @@
     "sentence": "the magnetic plug-in power charging power cord is great (i even put it to the test by accident)- excellent innovation!",
     "aspect": "magnetic plug-in power charging power cord",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "it seems they could have updated xp and done without creating vista.",
+    "aspect": "xp",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it seems they could have updated xp and done without creating vista.",
+    "aspect": "vista",
+    "sentiment": "negative"
   },
   {
     "sentence": "  it is easy to use, fast and has great graphics for the money.",
@@ -1263,6 +1433,16 @@
     "sentence": "i had purchased it from a major electronics store and took it to their service department to find out what the problem was.",
     "aspect": "service department",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "the store honored their warrenty and made the comment that they don't even recommend the hp brand because of the problems with their warrentys.",
+    "aspect": "warrenty",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the store honored their warrenty and made the comment that they don't even recommend the hp brand because of the problems with their warrentys.",
+    "aspect": "warrentys",
+    "sentiment": "negative"
   },
   {
     "sentence": "i always use a backup hard disk to store important files at all times.",
@@ -1350,6 +1530,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "with a mac you don't have to worry about antivirus software or firewall, it's so wonderful.",
+    "aspect": "antivirus software",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "with a mac you don't have to worry about antivirus software or firewall, it's so wonderful.",
+    "aspect": "firewall",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "am very glad i bought it, great netbook, low price.",
     "aspect": "price",
     "sentiment": "positive"
@@ -1390,6 +1580,21 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "fan vents to the side, so no cooling pad needed, great feature!",
+    "aspect": "fan",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "fan vents to the side, so no cooling pad needed, great feature!",
+    "aspect": "cooling pad",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "fan vents to the side, so no cooling pad needed, great feature!",
+    "aspect": "feature",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i use my mac all the time, i love the software, the way it takes a short time to load things, how easy it is to use and most of all how you don't have to worry about viruses.",
     "aspect": "software",
     "sentiment": "positive"
@@ -1398,6 +1603,21 @@
     "sentence": "wasted me at least 8 hours of installation time.",
     "aspect": "installation time",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "it has far exceeded my expectations for power, storage, and abilitiy.",
+    "aspect": "power",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it has far exceeded my expectations for power, storage, and abilitiy.",
+    "aspect": "storage",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it has far exceeded my expectations for power, storage, and abilitiy.",
+    "aspect": "abilitiy",
+    "sentiment": "positive"
   },
   {
     "sentence": "a great feature is the spotlight search: one can search for documents by simply typing a keyword, rather than parsing tens of file folders for a document.",
@@ -1455,6 +1675,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "mac is not made for gaming.",
+    "aspect": "gaming",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "well i spilled something on it and they replaced it with this model, which gets hot and the battery doesn't make it through 1 dvd.",
     "aspect": "battery",
     "sentiment": "negative"
@@ -1505,6 +1730,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "tech support tells me the latter problem is a power supply problem and have offered to fix it if it happens again.",
+    "aspect": "tech support",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "tech support tells me the latter problem is a power supply problem and have offered to fix it if it happens again.",
+    "aspect": "power supply",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "how does the power supply not work!!!",
     "aspect": "power supply",
     "sentiment": "negative"
@@ -1513,6 +1748,11 @@
     "sentence": "sells for the same as a netbook without sacrificing size.",
     "aspect": "size",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "  upon giving them the serial number the first thing i was told, was that it was out of warranty and i could pay to have it repaired.",
+    "aspect": "warranty",
+    "sentiment": "neutral"
   },
   {
     "sentence": "windows xp sp2 caused many problems on the computer, so i had to remove it.",
@@ -1542,6 +1782,11 @@
   {
     "sentence": "none of the techs at hp knew what they were doing.",
     "aspect": "techs at hp",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "this is my second one and the same problem, bad video card  unreliable overall, this will be my second time returning this laptop back to best buy.",
+    "aspect": "video card",
     "sentiment": "negative"
   },
   {
@@ -1690,6 +1935,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "maximum sound isn't nearly as loud as it should be.",
+    "aspect": "maximum sound",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "i loaded windows 7 via bootcamp and it works flawlessly!",
     "aspect": "windows 7",
     "sentiment": "positive"
@@ -1758,6 +2008,16 @@
     "sentence": "have not yet needed any customer support with this yet so to me that is a great thing, which is leaps and bounds ahead of pc in my opinion.",
     "aspect": "customer support",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i gave it to my daughter because i just hated the screen, hated that it had no cd drive to at least play cd's when i wanted to listen to music and do schoolwork.",
+    "aspect": "screen",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i gave it to my daughter because i just hated the screen, hated that it had no cd drive to at least play cd's when i wanted to listen to music and do schoolwork.",
+    "aspect": "cd drive",
+    "sentiment": "negative"
   },
   {
     "sentence": "it runs very quiet too which is a plus.",
@@ -1835,6 +2095,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "it is so much easier to use",
+    "aspect": "use",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "there is no need to open a program first and the cliick open or import.",
     "aspect": "program",
     "sentiment": "positive"
@@ -1905,6 +2170,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "microsoft word was not on it andi had to buy it seperately.",
+    "aspect": "microsoft word",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "it has 3 usb ports, 1 sd memory card reader and an sd memory car expansion.",
     "aspect": "usb ports",
     "sentiment": "neutral"
@@ -1962,6 +2232,11 @@
   {
     "sentence": "the aspire wont even boot past the acer screen with a droid (i have tried both motorola and htc) plugged into the usb port.",
     "aspect": "boot",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the battery life was shorter than expected.",
+    "aspect": "battery life",
     "sentiment": "negative"
   },
   {
@@ -2050,6 +2325,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "my kids (and dogs) destroyed two power cords by pulling on them.",
+    "aspect": "power cords",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "i had upgraded my old macbook to lion, so i kind of knew what i was getting, but hadn't been able to enjoy some of the awesome new multi-touch features.",
     "aspect": "multi-touch features",
     "sentiment": "positive"
@@ -2063,6 +2343,21 @@
     "sentence": "the screen is a little glary, and i hated the clicking buttons, but i got used to them.",
     "aspect": "clicking buttons",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "not to mention, the battery life is absolutely amazing.",
+    "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "windows also shuts the computer down for no reason without warning.",
+    "aspect": "windows",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "not using wired lan not sure what thats about.",
+    "aspect": "wired lan",
+    "sentiment": "neutral"
   },
   {
     "sentence": "now for the hardware problems.",
@@ -2200,6 +2495,16 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "waiting for the i7 was well worth it, great value for the price.",
+    "aspect": "price",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "waiting for the i7 was well worth it, great value for the price.",
+    "aspect": "i7",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "now,,,,,my monitor has been acting up for about 2 months.",
     "aspect": "monitor",
     "sentiment": "negative"
@@ -2225,9 +2530,19 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i needed a driver for my hp and they would not help me with out me paying over $50 for it.",
+    "aspect": "driver",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "call tech support, standard email the form and fax it back in to us.",
     "aspect": "tech support",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "they sent it back with a huge crack in it and it still didn't work.",
+    "aspect": "work",
+    "sentiment": "negative"
   },
   {
     "sentence": " a coupla months later, they change my hard drive.",
@@ -2470,6 +2785,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "oh and if thats not bad enough it doesn't come with a recovery cd so you can make one if you know how to or buy one if you buy it the cost is $25 for two cds.",
+    "aspect": "recovery cd",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the price and features more than met my needs.",
     "aspect": "price",
     "sentiment": "positive"
@@ -2600,6 +2920,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "it is stamped and not in pieces therefore it is a stronger more resilient frame.",
+    "aspect": "frame",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i am first time mac buyer and am amazed at features and ease of use the mac offers.",
     "aspect": "features",
     "sentiment": "positive"
@@ -2653,6 +2978,11 @@
     "sentence": "i'm still within the one year warranty but the repair \"depot\"  has deemed that this time it was caused by physical abuse and is not  covered.",
     "aspect": "repair \"depot\"",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "  but i needed a laptop for school use.",
+    "aspect": "school use",
+    "sentiment": "neutral"
   },
   {
     "sentence": "this is the complete opposite to an ergonomic design.",
@@ -3005,9 +3335,29 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i had to call hp and ask for a recovery disk because the computer does not come with one and completely redo it all.",
+    "aspect": "recovery disk",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "im glad that it has such great features in it.",
     "aspect": "features",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i like those programs better than office and you can save your files to be completely compatible with the office programs as well.",
+    "aspect": "programs",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i like those programs better than office and you can save your files to be completely compatible with the office programs as well.",
+    "aspect": "office",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i like those programs better than office and you can save your files to be completely compatible with the office programs as well.",
+    "aspect": "office programs",
+    "sentiment": "neutral"
   },
   {
     "sentence": "great wifi too.",
@@ -3068,6 +3418,31 @@
     "sentence": "although its windows vista compared to windows xp sucks.",
     "aspect": "windows xp",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "  we have had numerous problems with vista, such as adobe flash player just quits and has to be uninstalled and then reinsalled, internet explore just quits and you lose whatever you were working on, also, the same windows update has appeared on this computer since we got it and has been updated probably 400 times, the same update.",
+    "aspect": "vista",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "  we have had numerous problems with vista, such as adobe flash player just quits and has to be uninstalled and then reinsalled, internet explore just quits and you lose whatever you were working on, also, the same windows update has appeared on this computer since we got it and has been updated probably 400 times, the same update.",
+    "aspect": "adobe flash player",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "  we have had numerous problems with vista, such as adobe flash player just quits and has to be uninstalled and then reinsalled, internet explore just quits and you lose whatever you were working on, also, the same windows update has appeared on this computer since we got it and has been updated probably 400 times, the same update.",
+    "aspect": "internet explore",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "  we have had numerous problems with vista, such as adobe flash player just quits and has to be uninstalled and then reinsalled, internet explore just quits and you lose whatever you were working on, also, the same windows update has appeared on this computer since we got it and has been updated probably 400 times, the same update.",
+    "aspect": "windows update",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "  we have had numerous problems with vista, such as adobe flash player just quits and has to be uninstalled and then reinsalled, internet explore just quits and you lose whatever you were working on, also, the same windows update has appeared on this computer since we got it and has been updated probably 400 times, the same update.",
+    "aspect": "update",
+    "sentiment": "negative"
   },
   {
     "sentence": "with the switch being at the top you need to memorize the key combination rather than just flicking a switch.",
@@ -3143,6 +3518,21 @@
     "sentence": "at first it worked well for a month or so then the system board failed and i send it in to toshiba some complaints and three weeks later i then receive my laptop back only to discover that it still has the same problem so now i have to send it back again to get it fixed again.",
     "aspect": "system board",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "  until i bought the dell, i thought you just looked for what you wanted (size, software, options, hardware) and purchase the best deal you could find.",
+    "aspect": "size",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "  until i bought the dell, i thought you just looked for what you wanted (size, software, options, hardware) and purchase the best deal you could find.",
+    "aspect": "software",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "  until i bought the dell, i thought you just looked for what you wanted (size, software, options, hardware) and purchase the best deal you could find.",
+    "aspect": "hardware",
+    "sentiment": "neutral"
   },
   {
     "sentence": "it has plenty of memory, lots of hard drive, and great graphics.",
@@ -3415,6 +3805,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the unibody construction is solid, sleek and beautiful.",
+    "aspect": "unibody construction",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "this macbook is an outstanding product with great value.",
     "aspect": "value",
     "sentiment": "positive"
@@ -3500,6 +3895,16 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "fan noise: the fan made a constant hissing noise in the background.",
+    "aspect": "fan",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "fan noise: the fan made a constant hissing noise in the background.",
+    "aspect": "fan",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the screen is bright and clear, the operating system is solid and friendly to a novice.",
     "aspect": "screen",
     "sentiment": "positive"
@@ -3527,6 +3932,11 @@
   {
     "sentence": "finally, the biggest problem has been tech support.",
     "aspect": "tech support",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "\" this isn't a big deal, i haven't noticed the issue with dvds or other media, only through usb output.",
+    "aspect": "usb output",
     "sentiment": "negative"
   },
   {
@@ -3720,6 +4130,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the screen resolution was exactly what i was looking for.",
+    "aspect": "screen resolution",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "even though it is running snow leopard, 2.4 ghz c2d is a bit of an antiquated cpu and thus the occasional spinning wheel would appear when running office mac applications such as word or excel.",
     "aspect": "snow leopard",
     "sentiment": "positive"
@@ -3770,8 +4185,33 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i was originally concerned that i couldn't view work i had done in college on my mac because of the pc formatting, but i was even more thrilled to learn of programs like ilife and iwork that allow you to convert your pc documents into readable files on macs.",
+    "aspect": "programs",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i was originally concerned that i couldn't view work i had done in college on my mac because of the pc formatting, but i was even more thrilled to learn of programs like ilife and iwork that allow you to convert your pc documents into readable files on macs.",
+    "aspect": "ilife",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i was originally concerned that i couldn't view work i had done in college on my mac because of the pc formatting, but i was even more thrilled to learn of programs like ilife and iwork that allow you to convert your pc documents into readable files on macs.",
+    "aspect": "iwork",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "10 hours of battery life is really something else....",
     "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "runs fast and the regular layout keyboard is so much better.",
+    "aspect": "regular layout keyboard",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "runs fast and the regular layout keyboard is so much better.",
+    "aspect": "runs",
     "sentiment": "positive"
   },
   {
@@ -3835,6 +4275,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": ":-)if you buy this - don't go into it expecting 7 hrs of battery life, and you'll be perfectly satisfied.",
+    "aspect": "battery life",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "needs longer lasting battery, more than 1 to 2 hrs.",
     "aspect": "battery",
     "sentiment": "negative"
@@ -3895,6 +4340,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "it's wonderful for computer gaming.",
+    "aspect": "gaming",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "you have to toss out the wifi card and replace it just to have any sort of network capability.",
     "aspect": "network capability",
     "sentiment": "negative"
@@ -3907,6 +4357,11 @@
   {
     "sentence": "and the best part is that it even comes with a free printer (when they have a certain promotion/offer going, of course)!",
     "aspect": "printer",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it is very easy for anyone to use an apple and specially the mcbook pro notebook.",
+    "aspect": "use",
     "sentiment": "positive"
   },
   {
@@ -3970,6 +4425,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i've owned this labtop for less then two months, already the mouse button has broke.",
+    "aspect": "mouse button",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "it did fairly well, other than it's poor performance, overheating and occational blue screen.",
     "aspect": "performance",
     "sentiment": "negative"
@@ -4003,6 +4463,26 @@
     "sentence": "it's so bad that i'm thinking i only got half a battery or something.",
     "aspect": "battery",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "good keyboard, long battery life, largest hard drive and windows 7.",
+    "aspect": "keyboard",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "good keyboard, long battery life, largest hard drive and windows 7.",
+    "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "good keyboard, long battery life, largest hard drive and windows 7.",
+    "aspect": "hard drive",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "good keyboard, long battery life, largest hard drive and windows 7.",
+    "aspect": "windows 7",
+    "sentiment": "positive"
   },
   {
     "sentence": "the processor is very quick and effective as i load webpages and applications.",
@@ -4150,6 +4630,26 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "it's also very capable of doing moderate video editing (although you may need the performance boost of the larger macbook pros for heavy duty mobile video editing).",
+    "aspect": "video editing",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it's also very capable of doing moderate video editing (although you may need the performance boost of the larger macbook pros for heavy duty mobile video editing).",
+    "aspect": "performance",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "it's also very capable of doing moderate video editing (although you may need the performance boost of the larger macbook pros for heavy duty mobile video editing).",
+    "aspect": "mobile video editing",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "my main reason to convert was the imovie program.",
+    "aspect": "imovie program",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "it has a faster processor and more ram.",
     "aspect": "processor",
     "sentiment": "positive"
@@ -4182,6 +4682,16 @@
   {
     "sentence": "would like more trendy, high tech features.",
     "aspect": "features",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "keyboard is great but primary and secondary control buttons could be more durable.",
+    "aspect": "keyboard",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "keyboard is great but primary and secondary control buttons could be more durable.",
+    "aspect": "control buttons",
     "sentiment": "negative"
   },
   {
@@ -4252,6 +4762,11 @@
   {
     "sentence": "the speed gives you the power to work on these projects seamlessly, and multiple at a time if you sowish.",
     "aspect": "speed",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "awesome laptop and the perfect size to carry around in college.",
+    "aspect": "size",
     "sentiment": "positive"
   },
   {
@@ -4440,6 +4955,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "it had some kind of pre installed software update that completely shut the computer down when you clicked it.",
+    "aspect": "pre installed software update",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "ever since i bought this laptop, so far i've experience nothing but constant break downs of the laptop and bad customer services i received over the phone with toshiba customer services hotlines.",
     "aspect": "customer services",
     "sentiment": "negative"
@@ -4447,6 +4967,11 @@
   {
     "sentence": "ever since i bought this laptop, so far i've experience nothing but constant break downs of the laptop and bad customer services i received over the phone with toshiba customer services hotlines.",
     "aspect": "toshiba customer services",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "also, the space bar makes a noisy click every time you use it.",
+    "aspect": "space bar",
     "sentiment": "negative"
   },
   {
@@ -4550,9 +5075,29 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "everything from the design to the os is simple and to the point.",
+    "aspect": "design",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "everything from the design to the os is simple and to the point.",
+    "aspect": "os",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i'v spent as much for shipping as i would to buy a new netbook -- of course a different brand.",
     "aspect": "shipping",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "i personally like the gaming look but needed a machine that delivered gaming performance while still looking professional in front of my customers.",
+    "aspect": "gaming look",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i personally like the gaming look but needed a machine that delivered gaming performance while still looking professional in front of my customers.",
+    "aspect": "gaming performance",
+    "sentiment": "positive"
   },
   {
     "sentence": "this just keeps having it's hard drive replaced!",
@@ -4595,6 +5140,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "i had read online that some users were having sound problems.",
+    "aspect": "sound",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "my last computer, a toshiba, cost only $400, and worked like a charm for many years.",
     "aspect": "cost",
     "sentiment": "positive"
@@ -4633,6 +5183,16 @@
     "sentence": "*=webcam is a bit laggy, not the greatest.",
     "aspect": "webcam",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "i am not much of a computer techie, so i can understand some of the internal problems, though i do have trend micro as an antiviral program.",
+    "aspect": "trend micro",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i am not much of a computer techie, so i can understand some of the internal problems, though i do have trend micro as an antiviral program.",
+    "aspect": "antiviral program",
+    "sentiment": "neutral"
   },
   {
     "sentence": "the computer continued to give me issues and in late june it completely died again and i tried to call acer again to get it fixed and they refused to help me, they said my warrenty was up and hung up on me.",
@@ -4925,6 +5485,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "keyboard could use some trimming.",
+    "aspect": "keyboard",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "its white color is stylish for college students and easy to take to carry and take to classes.",
     "aspect": "color",
     "sentiment": "positive"
@@ -4963,6 +5528,11 @@
     "sentence": "this is what i call a good after sales service.",
     "aspect": "after sales service",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i took off a star because the machine has a lot of junk software on it.",
+    "aspect": "software",
+    "sentiment": "negative"
   },
   {
     "sentence": "with what i do know how to do, the computer works beautiful.",
@@ -5025,6 +5595,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "  however the frozen screens kept happening.",
+    "aspect": "screens",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "it is short on space, and downloads always had problems being completed, or were said to be 'corrupted'.",
     "aspect": "space",
     "sentiment": "negative"
@@ -5053,6 +5628,16 @@
     "sentence": "runs smooth and quick.",
     "aspect": "runs",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "the downside to this netbook is pretty much the same for any netbook: screen size is not something i'd stare at for the entire 10-11 hours of battery life five days a week.",
+    "aspect": "screen size",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the downside to this netbook is pretty much the same for any netbook: screen size is not something i'd stare at for the entire 10-11 hours of battery life five days a week.",
+    "aspect": "battery life",
+    "sentiment": "neutral"
   },
   {
     "sentence": "the graphics are great.",
@@ -5118,6 +5703,11 @@
     "sentence": "what i'd like is for the laptop to run well without having to purchase additional memory.",
     "aspect": "run",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "it works exactly like it did the day i took it out of the box.",
+    "aspect": "works",
+    "sentiment": "positive"
   },
   {
     "sentence": "it is fast booting up , shutting down, and connection with the internet.",
@@ -5235,6 +5825,21 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i previously purchased a 13\" macbook (had pro specs and was aluminum style) which had a nvidia 9800 (if i am not mistaken) and it had major heating issues.",
+    "aspect": "aluminum style",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i previously purchased a 13\" macbook (had pro specs and was aluminum style) which had a nvidia 9800 (if i am not mistaken) and it had major heating issues.",
+    "aspect": "specs",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i previously purchased a 13\" macbook (had pro specs and was aluminum style) which had a nvidia 9800 (if i am not mistaken) and it had major heating issues.",
+    "aspect": "nvidia 9800",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "the people there just changed for me on the spot and i got a new arm piece and they didn't even request for a receipt.",
     "aspect": "arm piece",
     "sentiment": "positive"
@@ -5253,6 +5858,11 @@
     "sentence": "the first fell apart right after the 1-year-warranty.",
     "aspect": "1-year-warranty",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "oh and it has word and stuff but its a trial verion so after about a month or so when you go to open it it asks for a product key which didnt come with the computer and even after clicking cancel it wont let you use it at all i use the old word processer which works good.",
+    "aspect": "word processer",
+    "sentiment": "positive"
   },
   {
     "sentence": "the keyboard has a wonderful nature feel.",
@@ -5500,6 +6110,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "unless you need the bluetooth 3.",
+    "aspect": "bluetooth 3",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "i was sorly disapointed to discover that hp (what i thought was a reputable company) wouldn't honor the warrenty when the fan blade fell apart.",
     "aspect": "warrenty",
     "sentiment": "negative"
@@ -5583,6 +6198,11 @@
     "sentence": "it's so nice to look at and the keys are easy to type with.",
     "aspect": "look",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i am forever changed and will no longer buy a windows based machine for personal use.",
+    "aspect": "windows",
+    "sentiment": "negative"
   },
   {
     "sentence": "the only thing i would change about it is the mouse keys.",
@@ -5710,6 +6330,21 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "aside from the trial software and the short battery life, lack of a webcam, its great.",
+    "aspect": "trial software",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "aside from the trial software and the short battery life, lack of a webcam, its great.",
+    "aspect": "battery life",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "aside from the trial software and the short battery life, lack of a webcam, its great.",
+    "aspect": "webcam",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "as a die-hard windows enthusiast, i shunned the idea of a mac until this point.",
     "aspect": "windows",
     "sentiment": "positive"
@@ -5720,6 +6355,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the computer loads in about a 1/10th of the time that my pc did, and i have all of the programs that were on my pc.",
+    "aspect": "programs",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the computer loads in about a 1/10th of the time that my pc did, and i have all of the programs that were on my pc.",
+    "aspect": "loads",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "graphics are clean and sharp, internet interfaces are seamless.",
     "aspect": "graphics",
     "sentiment": "positive"
@@ -5728,6 +6373,11 @@
     "sentence": "graphics are clean and sharp, internet interfaces are seamless.",
     "aspect": "internet interfaces",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "the newer black keyboard took a little bit away from the previous gray one which looked really slick, but it is still a great notebook!",
+    "aspect": "black keyboard",
+    "sentiment": "negative"
   },
   {
     "sentence": "sony parts reliability and quality of service is recenlty the worst.",
@@ -5980,9 +6630,74 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "screen",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "keyboard",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "screen",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "island backlit keyboard",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "multi-touch mouse",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "screen, keyboard, and mouse: if you cant see yourself spending the extra money to jump up to a mac the beautiful screen, responsive island backlit keyboard, and fun multi-touch mouse is worth the extra money to me alone.",
+    "aspect": "mouse",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "the os takes some getting used to especially after being a windows user for so long but the learning curve is so worth it!",
     "aspect": "windows",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "iwork",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "programs",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "microsoft office",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "word processing",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "spreadsheets",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i also purchased iwork to go with it which has programs for word processing, spreadsheets, and presentations (similar to microsoft office).",
+    "aspect": "presentations",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "overall, i experienced a huge change in that my mac runs pretty fast compared to my old pc.",
+    "aspect": "runs",
+    "sentiment": "positive"
   },
   {
     "sentence": "when i got the computer back and realizwed it still was not correct hp told me it was out of warranty and now it was my problem.",
@@ -6007,6 +6722,11 @@
   {
     "sentence": "it was secure and easy to navigate.",
     "aspect": "navigate",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i was a little weary at purchasing another 13\" macbook almost 2 years later but t looks like the newer macbooks have gotten its current line of graphics cards in order this time around.",
+    "aspect": "graphics cards",
     "sentiment": "positive"
   },
   {
@@ -6055,6 +6775,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "took several hours with customer support before i could even start the pc out of the box.",
+    "aspect": "customer support",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "asus facial recognition doesn't work and windows logon isn't either.",
     "aspect": "facial recognition",
     "sentiment": "negative"
@@ -6077,6 +6802,21 @@
   {
     "sentence": "i contacted acer and they are giving me free recovery dvds, so don't go and pay for them, just ask for them and they should give them to you.",
     "aspect": "recovery dvds",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "now when i order i did not go full scale for the webcam or full keyboard i wanted something for basics of being easy to carry when i use crutchs or wheelchair and with a backpack laptop bag.",
+    "aspect": "webcam",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "now when i order i did not go full scale for the webcam or full keyboard i wanted something for basics of being easy to carry when i use crutchs or wheelchair and with a backpack laptop bag.",
+    "aspect": "keyboard",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "now when i order i did not go full scale for the webcam or full keyboard i wanted something for basics of being easy to carry when i use crutchs or wheelchair and with a backpack laptop bag.",
+    "aspect": "carry",
     "sentiment": "positive"
   },
   {
@@ -6215,6 +6955,21 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the pro is a great product, i wish that the 13 inch models came with the intel i processors and had a more comfortable edge (the edges hurt my wrists).",
+    "aspect": "intel i processors",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the pro is a great product, i wish that the 13 inch models came with the intel i processors and had a more comfortable edge (the edges hurt my wrists).",
+    "aspect": "edge",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the pro is a great product, i wish that the 13 inch models came with the intel i processors and had a more comfortable edge (the edges hurt my wrists).",
+    "aspect": "edges",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "one drawback i noticed was sound quality via usb.",
     "aspect": "sound quality via usb",
     "sentiment": "negative"
@@ -6235,6 +6990,21 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "that's very possible, but since they don't make windows xp drivers for the sound card in this machine, i was stuck until windows 7 came out.",
+    "aspect": "windows xp drivers",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "that's very possible, but since they don't make windows xp drivers for the sound card in this machine, i was stuck until windows 7 came out.",
+    "aspect": "sound card",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "that's very possible, but since they don't make windows xp drivers for the sound card in this machine, i was stuck until windows 7 came out.",
+    "aspect": "windows 7",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i'ts nice to have the higher-end laptops, but this fits my budget and the features i need.",
     "aspect": "features",
     "sentiment": "positive"
@@ -6250,6 +7020,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "also the speakers are not very loud, but it is a netbook.",
+    "aspect": "speakers",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "love this laptop wonderful price for what you get!",
+    "aspect": "price",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "just a black screen!",
     "aspect": "screen",
     "sentiment": "negative"
@@ -6263,6 +7043,11 @@
     "sentence": "eventually my battery wouldn't charge, so unless i had it plugged in it wouldn't even power on.",
     "aspect": "battery",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "purchased for development purposes, but it has turned into my everyday laptop as well for surfing, e-mail, etc.",
+    "aspect": "surfing",
+    "sentiment": "positive"
   },
   {
     "sentence": "my first problem was with the pre-loaded norton firewall/security program.",
@@ -6435,6 +7220,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "it takes me approximately 3 tries to get to each site, then after closing the browser and reopening it it actually works.",
+    "aspect": "browser",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "easy to carry, can be taken anywhere, can be hooked up to printers,headsets.",
     "aspect": "carry",
     "sentiment": "positive"
@@ -6513,6 +7303,11 @@
     "sentence": "-4 ram slots, 2 hdd bays*, 16gb ram support -no wireless issues, at least for me.",
     "aspect": "wireless",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i agree with the previous comment that asus tech support is horrible which is a con in my opinion.",
+    "aspect": "asus tech support",
+    "sentiment": "negative"
   },
   {
     "sentence": "in fact, somehow (and i never opened it up) some specks of dust or something got inside the screen and are now there permanently, behind the front of the screen, in the way of the display.",
@@ -6700,6 +7495,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "i saw walmart had the same computer for about $650 but still knowing what i know now,i would not buy it at that price.",
+    "aspect": "price",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "of course, for a student, weight is always an issue.",
     "aspect": "weight",
     "sentiment": "neutral"
@@ -6780,6 +7580,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "there are no viruses or spyware to worry about like on a windows computer.",
+    "aspect": "windows",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "to be honest i think it was faulty equipment or something but idk.",
     "aspect": "equipment",
     "sentiment": "negative"
@@ -6787,6 +7592,21 @@
   {
     "sentence": "i also love the small, convenient size of my laptop, making it a perfect tool for my academic studies.",
     "aspect": "size",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i love its solid build, light wt and excellent battery life (for now).",
+    "aspect": "build",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i love its solid build, light wt and excellent battery life (for now).",
+    "aspect": "wt",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i love its solid build, light wt and excellent battery life (for now).",
+    "aspect": "battery life",
     "sentiment": "positive"
   },
   {
@@ -6865,6 +7685,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the keyboard is like no other laptop keyboard.",
+    "aspect": "keyboard",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the keyboard is like no other laptop keyboard.",
+    "aspect": "keyboard",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "-computer crashed frequently and battery life decreased very quickly.",
     "aspect": "battery life",
     "sentiment": "negative"
@@ -6940,6 +7770,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "it is super easy to use.",
+    "aspect": "use",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "many of my classmates computers hard drives crashed.",
     "aspect": "hard drives",
     "sentiment": "negative"
@@ -6980,6 +7815,16 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the notebook is lacking a hdmi port and a s-video port that would enable one to hook it to a tv.",
+    "aspect": "hdmi port",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the notebook is lacking a hdmi port and a s-video port that would enable one to hook it to a tv.",
+    "aspect": "s-video port",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the speakers on it are useless too.",
     "aspect": "speakers",
     "sentiment": "negative"
@@ -7000,6 +7845,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "in early may i got it back and this time i only had it back for 1 day before it had a new issue so it was sent back in for the 6th time they \"expedited\" the repairs so i was only supposed to have to be without it for 3 days and it was supposed to be fixed, by a \"senior tech\".",
+    "aspect": "senior tech",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "some features arent friendly ( volume wheel, sound quality, etc.",
     "aspect": "volume wheel",
     "sentiment": "negative"
@@ -7018,6 +7868,16 @@
     "sentence": "a cheaper price should not equal a \"cheap\" product.",
     "aspect": "price",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i think the manual is somewhere on the hard drive, but i rather have a hard copy.",
+    "aspect": "manual",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "i think the manual is somewhere on the hard drive, but i rather have a hard copy.",
+    "aspect": "hard drive",
+    "sentiment": "neutral"
   },
   {
     "sentence": "thank you best buy for putting my computer together and installing my first software - you guys were great too!",
@@ -7198,6 +8058,11 @@
     "sentence": "its very nice and once you learn the features you will be so happy to have such a sophisticated computer.",
     "aspect": "features",
     "sentiment": "neutral"
+  },
+  {
+    "sentence": "it is sleek and lightweight and charges quickly when needed.",
+    "aspect": "charges",
+    "sentiment": "positive"
   },
   {
     "sentence": "also you may need to charge it once a day, if for medium use every thing fast and easy with mac  the size and look is the most feature that attracted me to it.",
@@ -7555,6 +8420,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "this is the first time that i tried and owning a netbook although i have used 3 different laptops in the past 10 years, i find not much difference except of course for the screen size.",
+    "aspect": "screen size",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "but the biggest pain is that tech support is not available 24/7.",
     "aspect": "tech support",
     "sentiment": "negative"
@@ -7695,6 +8565,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "first the screen goes completely out.",
+    "aspect": "screen",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "i'm learning the finger options for the mousepad that allow for quicker browsing of web pages.",
     "aspect": "mousepad",
     "sentiment": "positive"
@@ -7782,6 +8657,11 @@
   {
     "sentence": "supplied software: the software that comes with this machine is greatly welcomed compared to what windows comes with.",
     "aspect": "windows",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i'm tired of the inept service.",
+    "aspect": "service",
     "sentiment": "negative"
   },
   {
@@ -7940,8 +8820,18 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "being a pc user my whole life, it's taking a bit of time to adapt to the os of a mac but i'm finding my way around.",
+    "aspect": "os",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "the computer will constantly be getting hot and burning your leg unless you go through the hassle of taking off the entire back of it just to clean out the fan.",
     "aspect": "fan",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i have in the past gotten superfine sandpaper and \"fixed\" the edges by rounding them off.",
+    "aspect": "edges",
     "sentiment": "negative"
   },
   {
@@ -8095,6 +8985,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "but, buy this model and just purchase 4gb of ram (2x2gb for $92 or 1x4gb for $99), and save yourself $100 than the other model with 8gb of ram.",
+    "aspect": "4gb of ram",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "but, buy this model and just purchase 4gb of ram (2x2gb for $92 or 1x4gb for $99), and save yourself $100 than the other model with 8gb of ram.",
+    "aspect": "8gb of ram",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "if you're looking for something to fly through those massive spreadsheets or play a graphics-intensive game, you'd be better off getting a machine aimed at that segment of the market.",
     "aspect": "game",
     "sentiment": "neutral"
@@ -8117,6 +9017,11 @@
   {
     "sentence": "so in a brief summary i would have to say that i would not recommend dell vostro 1000 to anyone due to it being a down right awful setup so in my opinion you should steer clear of them if you want a decent laptop.",
     "aspect": "setup",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "my friend just had to replace his entire motherboard, so did my wife, and it looks like i will have to as well.",
+    "aspect": "motherboard",
     "sentiment": "negative"
   },
   {
@@ -8162,6 +9067,16 @@
   {
     "sentence": "the ease of set up was terrific.",
     "aspect": "set up",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "everything i have tried has worked and i never have to carry the wall charger cause the battery is so awesome.",
+    "aspect": "wall charger",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "everything i have tried has worked and i never have to carry the wall charger cause the battery is so awesome.",
+    "aspect": "battery",
     "sentiment": "positive"
   },
   {
@@ -8510,6 +9425,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "the only objection i have is that after you buy it the windows 7 system is a starter and charges for the upgrade.",
+    "aspect": "windows 7 system",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "i dislike the weight and size, cubersome.",
     "aspect": "weight",
     "sentiment": "negative"
@@ -8525,6 +9445,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "i cannot be happier with the service or product.",
+    "aspect": "service",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i do transcription work on the side, and the flatline keyboard makes typing quick and easy as well.",
     "aspect": "flatline keyboard",
     "sentiment": "positive"
@@ -8532,6 +9457,26 @@
   {
     "sentence": "speakers doesn't sound that great.",
     "aspect": "speakers",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i love windows 7 but i can't give toshiba any credit for that, unless y'all get serious about ergonomics and making required connections less obtrusive i will be looking to different manufacturer next time.",
+    "aspect": "windows 7",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i love windows 7 but i can't give toshiba any credit for that, unless y'all get serious about ergonomics and making required connections less obtrusive i will be looking to different manufacturer next time.",
+    "aspect": "ergonomics",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "i love windows 7 but i can't give toshiba any credit for that, unless y'all get serious about ergonomics and making required connections less obtrusive i will be looking to different manufacturer next time.",
+    "aspect": "connections",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "after numerous calls to applecare tech support, i was directed to send in my computer;",
+    "aspect": "applecare tech support",
     "sentiment": "negative"
   },
   {
@@ -8645,6 +9590,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "  the battery is irreplaceable.",
+    "aspect": "battery",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "if you want a little more custom ability, drop a few bucks and upgrade to one of the more robust versions of win 7 and grab a 2gb stick of memory to spice it all up a bit more.",
     "aspect": "win 7",
     "sentiment": "positive"
@@ -8668,6 +9618,16 @@
     "sentence": "the internet was locekd and froze every time it was trying to be used, and the command prompt would not work at all.",
     "aspect": "command prompt",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "it's software and speed enable it to do amazing things.",
+    "aspect": "software",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it's software and speed enable it to do amazing things.",
+    "aspect": "speed",
+    "sentiment": "positive"
   },
   {
     "sentence": "could not keep up with me and finally the hard drive went out.",
@@ -8735,6 +9695,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "  after the warrenty expired the hard drive went bad and it would have cost more to fix then to replace.",
+    "aspect": "warrenty",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "  after the warrenty expired the hard drive went bad and it would have cost more to fix then to replace.",
+    "aspect": "hard drive",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the windows 7 starter is, in my opinion, a great way to think about using your netbook: basics, basics, basics.",
     "aspect": "windows 7 starter",
     "sentiment": "positive"
@@ -8790,6 +9760,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "so we exchanged it for the same on and after 2 hours it didn't work.",
+    "aspect": "work",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "i love the size, keyboard, the functions.",
     "aspect": "size",
     "sentiment": "positive"
@@ -8803,6 +9778,11 @@
     "sentence": "i love the size, keyboard, the functions.",
     "aspect": "functions",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "the mouse is way way way to sensitve.",
+    "aspect": "mouse",
+    "sentiment": "negative"
   },
   {
     "sentence": "the os is still as fast as the day that the laptop was purchased and continues to run flawlessly.",
@@ -8908,6 +9888,11 @@
     "sentence": "this is great if you have several lectures back to back and don't have a chance to charge during one of the lectures.",
     "aspect": "charge",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i wish toshiba would allow their customers to select an option that only boots the os at setup and removes all the unnecessary stuff.",
+    "aspect": "os",
+    "sentiment": "neutral"
   },
   {
     "sentence": "the screen brightness automatically adjusts.",
@@ -9060,8 +10045,28 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "  i would  rather spend my money on a computer that costs more then a toshiba that  isn't good at all.",
+    "aspect": "costs",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "(no problem with the ordering or shipping by the way.",
     "aspect": "shipping",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "and the ram (the thing that makes it faster) comes sporting 2 gigs for high performance to handle more stuff at once and surf the web a whole lot faster than before.",
+    "aspect": "ram",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "and the ram (the thing that makes it faster) comes sporting 2 gigs for high performance to handle more stuff at once and surf the web a whole lot faster than before.",
+    "aspect": "performance",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "and the ram (the thing that makes it faster) comes sporting 2 gigs for high performance to handle more stuff at once and surf the web a whole lot faster than before.",
+    "aspect": "surf the web",
     "sentiment": "positive"
   },
   {
@@ -9077,6 +10082,16 @@
   {
     "sentence": "fast, great visual!",
     "aspect": "visual",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it's priced very reasonable and works very well right out of the box.",
+    "aspect": "priced",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it's priced very reasonable and works very well right out of the box.",
+    "aspect": "works",
     "sentiment": "positive"
   },
   {
@@ -9148,6 +10163,16 @@
     "sentence": "the trackpad was easy to learn and navigate.",
     "aspect": "trackpad",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "applications open in seconds and there are no lags, hiccups or awkward moments when you wonder whether your computer is out for tea.",
+    "aspect": "applications",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "i respond that i do not have the old computer and this way i would lose the data on my hard drive.",
+    "aspect": "hard drive",
+    "sentiment": "negative"
   },
   {
     "sentence": "again in february my computer completely failed to the point that it could not load windows so i contacted acer to get it fixed thru my warrenty and it took about 3 days fighting on the phone with agents and it seemed as though none of them spoke english.",
@@ -9370,6 +10395,11 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "i have had no problems with it unlike some hardware defects on past models.",
+    "aspect": "hardware",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "either way, the keyboard is unsatisfactory.",
     "aspect": "keyboard",
     "sentiment": "negative"
@@ -9400,8 +10430,33 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "the applications are also very easy to find and maneuver, much easier than any other computer i have ever owned.",
+    "aspect": "applications",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "the large screen gives you the option to comfortably watch movies or tv shows on your computer instead of buying an additional tv for your dorm room.",
+    "aspect": "screen",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "great laptop for school, easy to use for beginners in the household.",
+    "aspect": "use",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "4) laptop still did not work, blue screen within a week...",
+    "aspect": "work",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "the only thing that isn't perfect about this netbook is the speakers, they are not loud at all but i expected that.",
     "aspect": "speakers",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "of course, i inspected the other netbooks and clearly their hinges are tighter and i even demonstrate the difference between my netbook and others.",
+    "aspect": "hinges",
     "sentiment": "negative"
   },
   {
@@ -9590,6 +10645,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "it is light and the battery last a very long time.",
+    "aspect": "battery",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "  and at one point, they blame me for installing a bad memory stick when i upgrade my memory for the first time during my purchase of the laptop (i bought the memory stick they recomended).",
     "aspect": "memory",
     "sentiment": "neutral"
@@ -9698,6 +10758,31 @@
     "sentence": "i can have both osx and windows xp running at the same time!",
     "aspect": "windows xp",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "overall : poor, features: average, performance: poor, battery life: excellent, price-value: poor",
+    "aspect": "features",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "overall : poor, features: average, performance: poor, battery life: excellent, price-value: poor",
+    "aspect": "performance",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "overall : poor, features: average, performance: poor, battery life: excellent, price-value: poor",
+    "aspect": "battery life",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "overall : poor, features: average, performance: poor, battery life: excellent, price-value: poor",
+    "aspect": "price",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "overall : poor, features: average, performance: poor, battery life: excellent, price-value: poor",
+    "aspect": "value",
+    "sentiment": "negative"
   },
   {
     "sentence": "microsoft seems to be unable to keep up with repairs for the multitude of windows problems.",
@@ -9890,6 +10975,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "looks nice, but has a horribly cheap feel.",
+    "aspect": "feel",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "looks nice, but has a horribly cheap feel.",
+    "aspect": "looks",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "i have other computers that get strong signals that don't drop in places that this \"net\"book loses its signal.",
     "aspect": "signals",
     "sentiment": "positive"
@@ -9975,6 +11070,11 @@
     "sentiment": "neutral"
   },
   {
+    "sentence": "the battery is really long.",
+    "aspect": "battery",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "anyway, in early july of this year, the dvd burner stopped working, and the computer stared having issues with power supply.",
     "aspect": "dvd burner",
     "sentiment": "negative"
@@ -10000,9 +11100,19 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "comes with imovie;",
+    "aspect": "imovie",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "computer has been at service facility more than in my hands.",
     "aspect": "service facility",
     "sentiment": "negative"
+  },
+  {
+    "sentence": "when i called sony the customer service was great.",
+    "aspect": "customer service",
+    "sentiment": "positive"
   },
   {
     "sentence": "  even though i had the receipt in front of me proving it still had 2 months left on the warranty.",
@@ -10105,6 +11215,16 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the battery life, before the battery completely died of course, left much to be desired.",
+    "aspect": "battery life",
+    "sentiment": "negative"
+  },
+  {
+    "sentence": "the battery life, before the battery completely died of course, left much to be desired.",
+    "aspect": "battery",
+    "sentiment": "negative"
+  },
+  {
     "sentence": "it is a real touchpad, not the toy i saw in other brands.",
     "aspect": "touchpad",
     "sentiment": "positive"
@@ -10172,6 +11292,16 @@
   {
     "sentence": "there is a backlit keyboard which is perfect for typing in the dark.",
     "aspect": "backlit keyboard",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it has a lot of memory and a great battery life.",
+    "aspect": "memory",
+    "sentiment": "positive"
+  },
+  {
+    "sentence": "it has a lot of memory and a great battery life.",
+    "aspect": "battery life",
     "sentiment": "positive"
   },
   {
@@ -10275,6 +11405,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "all apple associates are always wiling to help you out with anything, no matter when you purchased the computer and how many years passed.",
+    "aspect": "apple associates",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "also, my sister got the exact same laptop (since they were so cheap) and after 8 months, the screen split in half just from everyday use.",
     "aspect": "screen",
     "sentiment": "negative"
@@ -10283,6 +11418,11 @@
     "sentence": "the toshiba satellite has been more than i expected for the price.",
     "aspect": "price",
     "sentiment": "positive"
+  },
+  {
+    "sentence": "i had to adjust my mousepad sensitivity, because it is very sensitive.",
+    "aspect": "mousepad sensitivity",
+    "sentiment": "negative"
   },
   {
     "sentence": "i wish iwork or ms office came with the mac, but ms office doesn't even come with most pc laptops.",
@@ -10335,6 +11475,11 @@
     "sentiment": "positive"
   },
   {
+    "sentence": "i love my apple, it is quick and easy to use.",
+    "aspect": "use",
+    "sentiment": "positive"
+  },
+  {
     "sentence": "with notes saying they replaced the hard drive.",
     "aspect": "hard drive",
     "sentiment": "neutral"
@@ -10355,6 +11500,21 @@
     "sentiment": "negative"
   },
   {
+    "sentence": "the leather carrying case, keyboard and mouse arrived in two days from memphis warehouse.",
+    "aspect": "leather carrying case",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the leather carrying case, keyboard and mouse arrived in two days from memphis warehouse.",
+    "aspect": "keyboard",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "the leather carrying case, keyboard and mouse arrived in two days from memphis warehouse.",
+    "aspect": "mouse",
+    "sentiment": "neutral"
+  },
+  {
     "sentence": "the touch pad is among the best.",
     "aspect": "touch pad",
     "sentiment": "positive"
@@ -10367,6 +11527,31 @@
   {
     "sentence": "it's now all commodity hardware.",
     "aspect": "commodity hardware",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "we also use paralles so we can run virtual machines of windows xp professional, windows 7 home premium, windows server enterprise 2003, and windows server 2008 enterprise.",
+    "aspect": "paralles",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "we also use paralles so we can run virtual machines of windows xp professional, windows 7 home premium, windows server enterprise 2003, and windows server 2008 enterprise.",
+    "aspect": "windows xp professional",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "we also use paralles so we can run virtual machines of windows xp professional, windows 7 home premium, windows server enterprise 2003, and windows server 2008 enterprise.",
+    "aspect": "windows 7 home premium",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "we also use paralles so we can run virtual machines of windows xp professional, windows 7 home premium, windows server enterprise 2003, and windows server 2008 enterprise.",
+    "aspect": "windows server enterprise 2003",
+    "sentiment": "neutral"
+  },
+  {
+    "sentence": "we also use paralles so we can run virtual machines of windows xp professional, windows 7 home premium, windows server enterprise 2003, and windows server 2008 enterprise.",
+    "aspect": "windows server 2008 enterprise",
     "sentiment": "neutral"
   },
   {

@@ -314,8 +314,8 @@ class ACTokenEvidenceMoEClassifier(nn.Module):
         return out
 
     def print_moe_debug(self, topn: int = 3) -> None:
-        gate = self.moe._last_gate
-        idx = self.moe._last_topk_idx
+        gate = self._last_gate
+        idx = self._last_topk_idx
         if gate is None or idx is None:
             print("MoE debug: no cached gate yet")
             return
