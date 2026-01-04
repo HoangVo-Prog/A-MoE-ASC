@@ -75,7 +75,7 @@ echo
 # Run
 # =========================
 python -m main \
-  --mode MoESkConnection \
+  --mode MoESkConnectionModel \
   --model_name bert-base-uncased \
   --benchmark_fusions \
   --num_seeds 3 \
