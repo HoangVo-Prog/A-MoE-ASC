@@ -95,7 +95,22 @@ class Config:
     sk_beta_end: float = 1.0
     sk_beta_warmup_epochs: int = 0
 
-    mof_experts: str = "sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction"
+    mof_experts: Optional[list[str]] = field(
+        default_factory=lambda: 
+            [
+                "sent",
+                "term",
+                "concat",
+                "add",
+                "mul",
+                "cross",
+                "gated_concat",
+                "bilinear",
+                "coattn",
+                "late_interaction",
+            ]
+    )
+    
     mof_mix_level: str = "rep"
     mof_lb_coef: float = 0.001
     mof_lb_mode: str = "switch"
