@@ -47,7 +47,7 @@ class SeqMoELogits(nn.Module):
         dropout_p: float,
         expert_hidden: Optional[int],
         router_bias: bool,
-        router_jitter: str,
+        router_jitter: float,
     ):
         super().__init__()
         self.num_experts = int(num_experts)
@@ -62,6 +62,9 @@ class SeqMoELogits(nn.Module):
 
         self.last_router_logits: Optional[torch.Tensor] = None
         self.last_topk_idx: Optional[torch.Tensor] = None
+        
+        self.num_labels = num_labels
+        self.router_jitter = router_jitter
 
     def set_top_k(self, k: int) -> None:
         k = int(k)
@@ -93,7 +96,7 @@ class SeqMoELogits(nn.Module):
         # Weighted sum of expert outputs
         # Compute outputs only for selected experts (small E and K, simple loop)
         B = x.size(0)
-        C = self.cfg.num_labels
+        C = self.num_labels
         out = x.new_zeros((B, C))
 
         for j in range(k):
