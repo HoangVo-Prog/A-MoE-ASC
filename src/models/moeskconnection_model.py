@@ -542,13 +542,18 @@ class MoESkConnectionModel(BaseModel):
         aux_w = self._aux_weight()
         loss_lambda = aux_w * aux
         
+        print(loss_lambda, type(loss_lambda))
+        print(loss_main, type(loss_main))
+        
         entropy = self._collect_router_entropy(moe_module)
         
         print("Entropy", type(entropy), entropy)
 
         if entropy.requires_grad:
+            print(1)
             loss_entropy = self.router_entropy_weight * entropy
         else:
+            print(2)
             loss_entropy = torch.zeros_like(loss_main)
 
         loss_total = loss_main + loss_lambda + loss_entropy
