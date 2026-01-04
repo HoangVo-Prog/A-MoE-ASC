@@ -144,14 +144,6 @@ def train_one_epoch(
 
     for step, batch in enumerate(dataloader):
         
-        if step == 0:
-            print("[DEBUG] loss_total.requires_grad:", loss_total.requires_grad)
-            print("[DEBUG] logits.requires_grad:", logits.requires_grad)
-            print("[DEBUG] loss_main.requires_grad:", (loss_main.requires_grad if loss_main is not None else None))
-            n_trainable = sum(p.requires_grad for p in model.parameters())
-            print("[DEBUG] num_trainable_params:", n_trainable)
-
-
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         optimizer.zero_grad(set_to_none=True)
@@ -173,6 +165,13 @@ def train_one_epoch(
         loss_aux = outputs.get("aux_loss", None)
 
         # backward
+        if step == 0:
+            print("[DEBUG] loss_total.requires_grad:", loss_total.requires_grad)
+            print("[DEBUG] logits.requires_grad:", logits.requires_grad)
+            print("[DEBUG] loss_main.requires_grad:", (loss_main.requires_grad if loss_main is not None else None))
+            n_trainable = sum(p.requires_grad for p in model.parameters())
+            print("[DEBUG] num_trainable_params:", n_trainable)
+
         loss_total.backward()
 
         # clip (optional)
