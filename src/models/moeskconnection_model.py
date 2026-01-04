@@ -149,7 +149,6 @@ class MoESkConnection(nn.Module):
         dropout_p: float,
         expert_hidden: Optional[int] = None,
         router_bias: bool = True,
-        router_jitter: float = 0.0,
         beta_start: float = 0.0,
         beta_end: float = 1.0,
         beta_warmup_steps: int = 0,
@@ -178,7 +177,6 @@ class MoESkConnection(nn.Module):
             expert_hidden=expert_hidden,
             dropout_p=float(dropout_p),
             router_bias=bool(router_bias),
-            router_jitter=float(router_jitter),
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -305,7 +303,6 @@ class MoESkConnectionModel(BaseModel):
             dropout_p=dropout,
             expert_hidden=expert_hidden,
             router_bias=router_bias,
-            router_jitter=router_jitter,
             beta_start=beta_start,
             beta_end=beta_end,
             beta_warmup_steps=beta_warmup_steps,
@@ -320,7 +317,6 @@ class MoESkConnectionModel(BaseModel):
             dropout_p=dropout,
             expert_hidden=expert_hidden * 2 if expert_hidden else None,
             router_bias=router_bias,
-            router_jitter=router_jitter,
             beta_start=beta_start,
             beta_end=beta_end,
             beta_warmup_steps=beta_warmup_steps,
