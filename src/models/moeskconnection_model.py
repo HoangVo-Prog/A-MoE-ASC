@@ -78,8 +78,8 @@ class SeqMoELogits(nn.Module):
         # Router logits
         router_logits = self.router(x)  # [B, E]
 
-        if self.training and self.cfg.router_jitter and self.cfg.router_jitter > 0:
-            router_logits = router_logits + torch.randn_like(router_logits) * float(self.cfg.router_jitter)
+        if self.training and self.router_jitter and self.router_jitter > 0:
+            router_logits = router_logits + torch.randn_like(router_logits) * float(self.router_jitter)
 
         # TopK
         k = int(self.moe_top_k)
