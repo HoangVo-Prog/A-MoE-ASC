@@ -45,8 +45,9 @@ class SeqMoELogits(nn.Module):
         num_experts: int,
         top_k: int,
         dropout_p: float,
-        expert_hidden: Optional[int] = None,
-        router_bias: bool = True,
+        expert_hidden: Optional[int],
+        router_bias: bool,
+        router_jitter: str,
     ):
         super().__init__()
         self.num_experts = int(num_experts)
@@ -147,11 +148,12 @@ class MoESkConnection(nn.Module):
         num_experts: int,
         top_k: int,
         dropout_p: float,
-        expert_hidden: Optional[int] = None,
-        router_bias: bool = True,
-        beta_start: float = 0.0,
-        beta_end: float = 1.0,
-        beta_warmup_steps: int = 0,
+        expert_hidden: Optional[int],
+        router_bias: bool,
+        beta_start: float,
+        beta_end: float,
+        beta_warmup_steps: int,
+        router_jitter: float
     ) -> None:
         super().__init__()
         
@@ -177,6 +179,7 @@ class MoESkConnection(nn.Module):
             expert_hidden=expert_hidden,
             dropout_p=float(dropout_p),
             router_bias=bool(router_bias),
+            router_jitter=router_jitter,
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -306,6 +309,7 @@ class MoESkConnectionModel(BaseModel):
             beta_start=beta_start,
             beta_end=beta_end,
             beta_warmup_steps=beta_warmup_steps,
+            router_jitter=router_jitter
         )
         
         # MoE skip connection for 2H-dimensional inputs (concat)
@@ -320,6 +324,7 @@ class MoESkConnectionModel(BaseModel):
             beta_start=beta_start,
             beta_end=beta_end,
             beta_warmup_steps=beta_warmup_steps,
+            router_jitter=router_jitter
         )
         
         # Replace encoder with wrapped version
@@ -343,8 +348,8 @@ class MoESkConnectionModel(BaseModel):
             self._global_step += 1
             # Update jitter for both MoE modules
             new_jitter = float(self._jitter())
-            self.encoder.moe_sk_h.moe_residual.cfg.router_jitter = new_jitter
-            self.encoder.moe_sk_2h.moe_residual.cfg.router_jitter = new_jitter
+            self.encoder.moe_sk_h.moe_residual.router_jitter = new_jitter
+            self.encoder.moe_sk_2h.moe_residual.router_jitter = new_jitter
             # Increment steps for beta warmup
             self.encoder.moe_sk_h.increment_step()
             self.encoder.moe_sk_2h.increment_step()
