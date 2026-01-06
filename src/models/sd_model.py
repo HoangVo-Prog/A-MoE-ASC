@@ -242,7 +242,50 @@ class SDModel(BaseModel):
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
 
         # Patch 3 chưa thêm aux loss và dict MoE, sẽ làm ở Patch 4
-        return {"loss": loss, "logits": logits}
+                # ===== 5) Loss main (giữ y hệt BaseModel) =====
+        if labels is None:
+            return {"loss": None, "logits": logits}
+
+        if self.loss_type == "ce":
+            loss_main = F.cross_entropy(logits, labels)
+
+        elif self.loss_type == "weighted_ce":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_main = F.cross_entropy(logits, labels, weight=w)
+
+        elif self.loss_type == "focal":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
+            loss_main = loss_fn(logits, labels)
+
+        else:
+            raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+
+        # ===== 6) Aux losses (SD) =====
+        loss_bal = self._loss_balancing(g)
+        loss_div = self._loss_diversity()
+
+        aux_loss = (self.sd_lambda_bal * loss_bal) + (self.sd_lambda_div * loss_div)
+        loss_total = loss_main + aux_loss
+
+        # ===== 7) Optional debug stats =====
+        eps = 1e-12
+        gate_entropy_mean = (-(g.clamp_min(eps) * g.clamp_min(eps).log()).sum(dim=-1)).mean()
+        p_k = g.mean(dim=0).detach()
+
+        # ===== 8) Output dict compatible with engine MoE logging =====
+        return {
+            "loss": loss_total,
+            "logits": logits,
+            "loss_main": loss_main,
+            "aux_loss": aux_loss,
+            "loss_lambda": aux_loss,
+            "loss_bal": loss_bal.detach(),
+            "loss_div": loss_div.detach(),
+            "gate_entropy_mean": gate_entropy_mean.detach(),
+            "p_k": p_k,
+        }
+
 
         
     def _compute_gate(self, *, t: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
@@ -289,5 +332,23 @@ class SDModel(BaseModel):
 
         scale = float(self.sd_alpha) / float(self.sd_rank)
         return t + (scale * t_delta)
+    
+    def _collect_aux_loss(self) -> bool:
+        # Engine dùng hasattr(model, "_collect_aux_loss") để bật nhánh MoE logging
+        return True
+
+    def _loss_balancing(self, g: torch.Tensor) -> torch.Tensor:
+        # g: [B, K]
+        p = g.mean(dim=0)  # [K]
+        target = 1.0 / float(self.num_experts)
+        return ((p - target) ** 2).sum()
+
+    def _loss_diversity(self) -> torch.Tensor:
+        # A: [K, d, r]
+        K = self.num_experts
+        A_flat = self.A.reshape(K, -1)  # [K, d*r]
+        M = A_flat @ A_flat.t()         # [K, K]
+        M_off = M - torch.diag(torch.diag(M))
+        return (M_off ** 2).sum()
 
 
