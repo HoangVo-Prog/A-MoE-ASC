@@ -57,6 +57,11 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
     in_freeze = epoch_idx_0based < fe
     mode = cfg.mode
+    
+    if cfg.mode == "SDModel":
+        _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=False)
+        _set_encoder_train_eval(model, frozen=True)
+        return True  
 
     if in_freeze:
         # Keep the user's existing MoEFFN logic untouched.
@@ -103,7 +108,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
                         module.train()
             
             return True
-                
+              
         # General case: freeze the entire encoder (head-only warmup).
         print(f"{mode} mode: freezing entire encoder")
         _set_encoder_requires_grad(cfg, model, trainable=False, keep_moe_trainable=True)
