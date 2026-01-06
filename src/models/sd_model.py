@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -165,6 +166,13 @@ class SDModel(BaseModel):
 
         # 2) Gate
         g = self._compute_gate(t=t, s=s)  # [B, K]
+        
+        # cache for debug print
+        with torch.no_grad():
+            x_dbg = torch.cat([t, s], dim=-1)  # [B, 2d]
+            u_dbg = self.router(x_dbg)         # [B, K]
+        self.last_router_logits = u_dbg.detach()
+        self.last_gate = g.detach()
 
         # 3) Deform
         H_sent_tilde = self._deform_sentence_tokens(H_sent=H_sent, g=g)  # [B, Ls, d]
@@ -292,16 +300,83 @@ class SDModel(BaseModel):
             "p_k": p_k,
         }
             
+    def _sd_debug_stats(self):
+        if not hasattr(self, "last_gate") or self.last_gate is None:
+            return None
+        if not hasattr(self, "last_router_logits") or self.last_router_logits is None:
+            return None
+
+        probs = self.last_gate  # [B, K]
+        logits = self.last_router_logits  # [B, K]
+        B, E = probs.shape
+
+        # usage_hard: mean one-hot(argmax)
+        top1 = probs.argmax(dim=-1)  # [B]
+        usage_hard = torch.bincount(top1, minlength=E).float()
+        usage_hard = usage_hard / usage_hard.sum().clamp_min(1e-12)
+
+        # usage_soft: mean probs
+        usage_soft = probs.mean(dim=0)
+        usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
+
+        # entropies
+        ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()
+        ent_full_norm = ent_full / math.log(E)
+
+        ent_hard = -(usage_hard * (usage_hard + 1e-12).log()).sum()
+        ent_hard_norm = ent_hard / math.log(E)
+
+        ent_soft = -(usage_soft * (usage_soft + 1e-12).log()).sum()
+        ent_soft_norm = ent_soft / math.log(E)
+
+        # logits stats
+        logits2 = logits.float()
+        logits_std = float(logits2.std(unbiased=False).item())
+        logits_maxabs = float(logits2.abs().max().item())
+
+        # gap top1 top2 (from logits, not probs)
+        top2 = torch.topk(logits2, k=min(2, E), dim=-1).values
+        if top2.size(-1) >= 2:
+            gap = float((top2[:, 0] - top2[:, 1]).mean().item())
+        else:
+            gap = 0.0
+
+        max_hard = float(usage_hard.max().item())
+        min_hard = float(usage_hard.min().item())
+        max_soft = float(usage_soft.max().item())
+        min_soft = float(usage_soft.min().item())
+
+        def _cv(p: torch.Tensor) -> float:
+            mu = p.mean().clamp_min(1e-12)
+            return float((p.std(unbiased=False) / mu).item())
+
+        return {
+            "layer": -1,
+            "H_full_norm": float(ent_full_norm.item()),
+            "H_hard_norm": float(ent_hard_norm.item()),
+            "H_soft_norm": float(ent_soft_norm.item()),
+            "logits_std": logits_std,
+            "logits_maxabs": logits_maxabs,
+            "gap_top1_top2": gap,
+            "usage_hard": usage_hard.detach(),
+            "usage_soft": usage_soft.detach(),
+            "max_hard": max_hard,
+            "min_hard": min_hard,
+            "max_soft": max_soft,
+            "min_soft": min_soft,
+            "cv_hard": _cv(usage_hard),
+            "cv_soft": _cv(usage_soft),
+        }
+
     def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
-        stats = self._moe_debug_stats()
-        if stats is None:
+        s = self._sd_debug_stats()
+        if s is None:
             print("[MoE] No stats yet.")
             return
-        
-        print("\n[MoE Debug - Single Head]")
 
-        uh = stats["usage_hard"].float()
-        us = stats["usage_soft"].float()
+        print("\n[MoE Debug - Single Head]")
+        uh = s["usage_hard"].float()
+        us = s["usage_soft"].float()
 
         dead_h0 = int((uh == 0).sum().item())
         dead_h = int((uh < eps_dead).sum().item())
@@ -321,25 +396,24 @@ class SDModel(BaseModel):
         top_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_s, topi_s)])
         bot_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_s, boti_s)])
 
-        imb_h = float(stats["max_hard"] / (stats["min_hard"] + 1e-12))
-        imb_s = float(stats["max_soft"] / (stats["min_soft"] + 1e-12))
+        imb_h = float(s["max_hard"] / (s["min_hard"] + 1e-12))
+        imb_s = float(s["max_soft"] / (s["min_soft"] + 1e-12))
 
         print(
             f"MoE Head | "
-            f"H_full={stats['H_full_norm']:.6f} H_soft={stats['H_soft_norm']:.6f} H_hard={stats['H_hard_norm']:.6f} | "
-            f"logits_std={stats['logits_std']:.6f} maxabs={stats['logits_maxabs']:.6f} gap12={stats['gap_top1_top2']:.6f}"
+            f"H_full={s['H_full_norm']:.6f} H_soft={s['H_soft_norm']:.6f} H_hard={s['H_hard_norm']:.6f} | "
+            f"logits_std={s['logits_std']:.6f} maxabs={s['logits_maxabs']:.6f} gap12={s['gap_top1_top2']:.6f}"
         )
         print(
-            f"  HARD: min={stats['min_hard']:.6f} max={stats['max_hard']:.6f} cv={stats['cv_hard']:.3f} imb={imb_h:.2f} "
+            f"  HARD: min={s['min_hard']:.6f} max={s['max_hard']:.6f} cv={s['cv_hard']:.3f} imb={imb_h:.2f} "
             f"dead(==0)={dead_h0} dead(<{eps_dead:g})={dead_h}"
         )
         print(f"    top: {top_pairs_h}")
         print(f"    bot: {bot_pairs_h}")
         print(
-            f"  SOFT: min={stats['min_soft']:.6f} max={stats['max_soft']:.6f} cv={stats['cv_soft']:.3f} imb={imb_s:.2f} "
+            f"  SOFT: min={s['min_soft']:.6f} max={s['max_soft']:.6f} cv={s['cv_soft']:.3f} imb={imb_s:.2f} "
             f"dead(==0)={dead_s0} dead(<{eps_dead:g})={dead_s}"
         )
         print(f"    top: {top_pairs_s}")
         print(f"    bot: {bot_pairs_s}")
         print()
-
