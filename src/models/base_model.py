@@ -108,18 +108,24 @@ class BaseModel(nn.Module):
         # Loss config
         self.loss_type = loss_type.lower().strip()
 
+        cw = None
         if class_weights is None:
             cw = None
         elif isinstance(class_weights, torch.Tensor):
             cw = class_weights.detach().float()
         else:
-            if isinstance(class_weights, str):
-                s = class_weights.strip()
-                if not s:
-                    cw = None
-                else:
-                    cw = torch.tensor([float(x.strip()) for x in s.split(",") if x.strip()], dtype=torch.float)
-
+            s = str(class_weights).strip()
+            cw = (
+                None
+                if not s
+                else torch.tensor(
+                    [float(x) for x in s.split(",") if x.strip()],
+                    dtype=torch.float,
+                )
+            )
+        
+        if loss_type in ["weighed_ce", "focal"]:
+            print("Class weights:", cw)
 
         self.register_buffer("class_weights", cw if cw is not None else None)
 
