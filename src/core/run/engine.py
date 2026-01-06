@@ -352,22 +352,38 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
+        # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
     freeze0 = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
-    warmup_ratio_phase1 = 0.0 if freeze0 else float(cfg.warmup_ratio)
 
-    optimizer, scheduler = build_optimizer_and_scheduler(
-        model=model,
-        lr=cfg.lr,
-        lr_head=cfg.lr_head,
-        warmup_ratio=warmup_ratio_phase1,
-        total_steps=steps_per_epoch * max(1, int(cfg.epochs)),
-        params=trainable_params(),
-        adamw_foreach=cfg.adamw_foreach,
-        adamw_fused=cfg.adamw_fused,
-    )
+    # SDModel: build optimizer once and keep it for the whole training
+    if cfg.mode == "SDModel":
+        warmup_ratio_phase1 = float(cfg.warmup_ratio)
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model,
+            lr=cfg.lr,
+            lr_head=cfg.lr_head,
+            warmup_ratio=warmup_ratio_phase1,
+            total_steps=steps_per_epoch * max(1, int(cfg.epochs)),
+            params=trainable_params(),
+            adamw_foreach=cfg.adamw_foreach,
+            adamw_fused=cfg.adamw_fused,
+        )
+    else:
+        warmup_ratio_phase1 = 0.0 if freeze0 else float(cfg.warmup_ratio)
+        optimizer, scheduler = build_optimizer_and_scheduler(
+            model=model,
+            lr=cfg.lr,
+            lr_head=cfg.lr_head,
+            warmup_ratio=warmup_ratio_phase1,
+            total_steps=steps_per_epoch * max(1, int(cfg.epochs)),
+            params=trainable_params(),
+            adamw_foreach=cfg.adamw_foreach,
+            adamw_fused=cfg.adamw_fused,
+        )
+
 
     scaler = GradScaler() if cfg.use_amp else None
+            
 
     for epoch in range(int(cfg.epochs)):
         print("=======================================================================")
@@ -383,7 +399,7 @@ def run_training_loop(
             print(f"Encoder frozen (epoch {epoch + 1}/{cfg.freeze_epochs})")
 
         # Rebuild optimizer exactly at unfreeze boundary
-        if cfg.freeze_epochs > 0 and epoch == cfg.freeze_epochs:
+        if (cfg.mode != "SDModel") and (cfg.freeze_epochs > 0) and (epoch == cfg.freeze_epochs):
             print("Encoder unfrozen, rebuilding optimizer to include newly-trainable params")
             try:
                 del optimizer
