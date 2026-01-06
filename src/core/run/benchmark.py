@@ -54,7 +54,7 @@ def run_benchmark_fusion(config):
     per_method_seed_records = {m: [] for m in methods}
     
     if config.mode == "MoFModel":
-        methods = "MoF"
+        methods = ["MoF"]
     
     for method in methods:
         per_method_seed_records[method] = []

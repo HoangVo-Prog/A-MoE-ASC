@@ -71,7 +71,7 @@ if [[ -n "${benchmark_methods:-}" ]]; then
   METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
 fi
 
-echo "▶ Running moe ffn with:"
+echo "▶ Running sd model with:"
 echo "  dataset_type   = ${DATASET_TYPE}"
 echo "  loss_type      = ${LOSS_TYPE}"
 echo "  loss_flags     = ${LOSS_FLAGS}"
