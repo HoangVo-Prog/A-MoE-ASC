@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import ast
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel
@@ -115,19 +116,22 @@ class BaseModel(nn.Module):
             cw = class_weights.detach().float()
         else:
             s = str(class_weights).strip()
-            cw = (
-                None
-                if not s
-                else torch.tensor(
-                    [float(x) for x in s.split(",") if x.strip()],
+
+            if not s:
+                cw = None
+            elif s.startswith("[") and s.endswith("]"):
+                vals = ast.literal_eval(s)          # parses "[1.0, 1.6, 1.2]"
+                cw = torch.tensor([float(v) for v in vals], dtype=torch.float)
+            else:
+                cw = torch.tensor(
+                    [float(x.strip()) for x in s.split(",") if x.strip()],
                     dtype=torch.float,
                 )
-            )
+
+        self.register_buffer("class_weights", cw)
         
         if loss_type in ["weighed_ce", "focal"]:
             print("Class weights:", cw)
-
-        self.register_buffer("class_weights", cw if cw is not None else None)
 
         self.focal_gamma = float(focal_gamma)
 
