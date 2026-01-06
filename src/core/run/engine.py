@@ -130,10 +130,10 @@ def train_one_epoch(
     fusion_method: str = "concat",
     f1_average: str = "macro",
     step_print_moe: Optional[float] = 100,
-    use_amp: bool = False,  # bạn đang tắt AMP
+    use_amp: bool = True,
     amp_dtype: str = "fp16",
     scaler: Optional[GradScaler] = None,
-    max_grad_norm: Optional[float] = 1.0,
+    max_grad_norm: Optional[float] = None,
 ) -> Dict[str, float]:
     model.train()
 
@@ -148,52 +148,58 @@ def train_one_epoch(
     all_preds: list[int] = []
     all_labels: list[int] = []
 
+    amp_dtype_torch = (
+        torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
+    )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
-    def _get_router(model_: nn.Module):
-        enc = getattr(model_, "encoder", None)
-        moe_ffn = getattr(enc, "moe_ffn", None) if enc is not None else None
-        router = getattr(moe_ffn, "router", None) if moe_ffn is not None else None
-        return router
-
-    # precompute router param ids for checking which optimizer group contains router
-    router_param_ids = {id(p) for n, p in model.named_parameters() if "moe_ffn.router" in n}
-
     for step, batch in enumerate(dataloader):
-        
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
         optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(
-            input_ids_sent=batch["input_ids_sent"],
-            attention_mask_sent=batch["attention_mask_sent"],
-            input_ids_term=batch["input_ids_term"],
-            attention_mask_term=batch["attention_mask_term"],
-            labels=batch["label"],
-            fusion_method=fusion_method,
-        )
+        with autocast(
+            "cuda",
+            enabled=bool(use_amp),
+            dtype=amp_dtype_torch,
+        ):
+            outputs = model(
+                input_ids_sent=batch["input_ids_sent"],
+                attention_mask_sent=batch["attention_mask_sent"],
+                input_ids_term=batch["input_ids_term"],
+                attention_mask_term=batch["attention_mask_term"],
+                labels=batch["label"],
+                fusion_method=fusion_method,
+            )
 
-        loss_total = outputs["loss"]
-        logits = outputs["logits"]
+            loss_total = outputs["loss"]
+            logits = outputs["logits"]
 
-        loss_main = outputs.get("loss_main", None)
-        loss_lambda = outputs.get("loss_lambda", None)
-        loss_aux = outputs.get("aux_loss", None)
+            # only meaningful for ver2-return path; safe even if missing
+            loss_main = outputs.get("loss_main", None)
+            loss_lambda = outputs.get("loss_lambda", None)
+            loss_aux = outputs.get("aux_loss", None)
 
-        # backward
-        loss_total.backward()
+        # backward + step
+        if use_amp:
+            if scaler is None:
+                raise RuntimeError("use_amp=True but scaler is None")
+            scaler.scale(loss_total).backward()
 
-        # clip (optional)
-        if max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
 
-        # optimizer step
-        optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_total.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+            optimizer.step()
 
         if scheduler is not None:
             scheduler.step()
-            
 
         # stats
         total_loss_sum += safe_float(loss_total)
@@ -207,13 +213,13 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
-        if step_print_i > step or (step_print_i and (step > 0) and (step % step_print_i == 0)):
+        if step_print_i and (step > 0) and (step % step_print_i == 0):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
-                except Exception as e:
-                    print("[ERROR] Can't print MoE debug logs:", e)
-            
+                except Exception:
+                    pass
+
     denom = max(1, n_steps)
     acc = float(accuracy_score(all_labels, all_preds))
     f1 = float(f1_score(all_labels, all_preds, average=f1_average))
@@ -233,7 +239,6 @@ def train_one_epoch(
         "acc": acc,
         "f1": f1,
     }
-
 
 def eval_model(
     *,
