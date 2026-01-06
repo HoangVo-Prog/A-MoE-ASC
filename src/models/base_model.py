@@ -213,7 +213,7 @@ class BaseModel(nn.Module):
 
             if attention_mask_sent is not None:
                 mask = attention_mask_sent.unsqueeze(1).eq(0)  # [B, 1, Ls]
-                sim = sim.masked_fill(mask, -1e9)
+                sim = sim.masked_fill(mask.bool(), torch.finfo(sim.dtype).min)
 
             max_sim = sim.max(dim=-1).values  # [B, Lt]
 
