@@ -35,7 +35,7 @@ class Config:
     early_stop_patience: int = 3
 
     # ====== Run mode ======
-    mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoFModel"
+    mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoFModel", "SDModel", "SDMoEDirModel"
     fusion_method: str = "concat"
     benchmark_fusions: bool = False
     benchmark_methods: str = "sent,term,concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction"
