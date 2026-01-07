@@ -116,8 +116,15 @@ class Config:
                 "late_interaction",
             ]
     )
-    encoder_lr_scale: float = 0.1
 
+    # Semantic Deformation
+    
+    # ====== Semantic Deformation (SD) ======
+    sd_rank: int = 8
+    sd_alpha: float = 4.0          # ↓ GIẢM mạnh so với 16
+    sd_lambda_bal: float = 0.01    # giữ như cũ, ổn
+    sd_lambda_div: float = 0.0001  # ↓ rất nhẹ, tránh ép expert quá sớm
+    router_hidden_mult: float = 1.0
 
     # ----------------- factory -----------------
     @staticmethod

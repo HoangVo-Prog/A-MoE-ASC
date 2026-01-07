@@ -98,12 +98,13 @@ class SDModel(BaseModel):
             self.encoder.eval()
         return self
 
-    def _compute_gate(self, *, t: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def _compute_gate(self, *, t: torch.Tensor, s: torch.Tensor):
         x = torch.cat([t, s], dim=-1)  # [B, 2d]
         u = self.router(x)             # [B, K]
         tau = float(self.router_temperature) if self.router_temperature is not None else 1.0
         g = torch.softmax(u / tau, dim=-1)  # [B, K]
-        return g
+        return u, g
+
 
     def _deform_sentence_tokens(self, *, H_sent: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
         # H_sent: [B, Ls, d], g: [B, K]
@@ -164,14 +165,11 @@ class SDModel(BaseModel):
         s = H_sent[:, 0, :]  # [B, d]
         t = H_term[:, 0, :]  # [B, d]
 
-        # 2) Gate
-        g = self._compute_gate(t=t, s=s)  # [B, K]
-        
-        # cache for debug print
-        with torch.no_grad():
-            x_dbg = torch.cat([t, s], dim=-1)  # [B, 2d]
-            u_dbg = self.router(x_dbg)         # [B, K]
-        self.last_router_logits = u_dbg.detach()
+        # 2) Gate 
+        u, g = self._compute_gate(t=t, s=s)  # u:[B,K], g:[B,K]
+
+        # cache for debug print (no extra router call)
+        self.last_router_logits = u.detach()
         self.last_gate = g.detach()
 
         # 3) Deform
