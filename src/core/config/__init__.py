@@ -80,7 +80,7 @@ class Config:
     jitter_end: float = 0
     router_entropy_weight: float = 0.0
     route_mask_pad_tokens: bool = True
-    router_temperature: float = 1.5
+    router_temperature: float = 2.0
     capacity_factor: Optional[float] = None
 
     moe_topk_schedule: bool = False
