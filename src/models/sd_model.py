@@ -41,6 +41,10 @@ class SDModel(BaseModel):
         router_temperature: float = 1.0,
         router_bias: bool = True,
         router_hidden_mult: float = 1.0,
+        router_entropy_weight: float = 0.0,
+        router_jitter: float = 0.0,
+        jitter_warmup_steps: int = 0,
+        jitter_end: float = 0.0,
     ) -> None:
         super().__init__(
             model_name=model_name,
@@ -60,6 +64,15 @@ class SDModel(BaseModel):
         self.sd_lambda_div = float(sd_lambda_div)
         self.router_temperature = float(router_temperature)
         self.router_bias = bool(router_bias)
+        
+        self.router_entropy_weight = float(router_entropy_weight)
+        self.router_jitter = float(router_jitter)
+        self.jitter_warmup_steps = int(jitter_warmup_steps)
+        self.jitter_end = float(jitter_end)
+
+        # router step counter (không cần optimizer biết, chỉ để schedule jitter)
+        self.register_buffer("_router_step", torch.zeros((), dtype=torch.long), persistent=False)
+
 
         # Hard-freeze BERT encoder
         self._freeze_encoder_hard()
@@ -83,6 +96,27 @@ class SDModel(BaseModel):
         nn.init.normal_(b, mean=0.0, std=0.02)
         self.B = nn.Parameter(b.to(dtype=self.A.dtype))
 
+    def _get_jitter_sigma(self) -> float:
+        """Return current jitter sigma for router logits."""
+        sigma0 = float(self.router_jitter)
+        sigma_end = float(self.jitter_end)
+
+        if sigma0 <= 0.0:
+            return 0.0
+
+        step = int(self._router_step.item())
+        warm = int(self.jitter_warmup_steps)
+
+        # Trước warmup: dùng sigma0 để tăng exploration
+        if warm <= 0:
+            return sigma0
+
+        if step < warm:
+            return sigma0
+
+        # Sau warmup: dùng sigma_end (có thể = 0.0 hoặc nhỏ)
+        return sigma_end
+
     # Engine checks hasattr(model, "_collect_aux_loss") to enable MoE logging
     def _collect_aux_loss(self) -> bool:
         return True
@@ -101,9 +135,19 @@ class SDModel(BaseModel):
     def _compute_gate(self, *, t: torch.Tensor, s: torch.Tensor):
         x = torch.cat([t, s], dim=-1)  # [B, 2d]
         u = self.router(x)             # [B, K]
+
+        # Router jitter: chỉ bật khi training
+        if self.training:
+            sigma = self._get_jitter_sigma()
+            if sigma > 0.0:
+                u = u + torch.randn_like(u) * sigma
+            # tăng step sau mỗi forward train
+            self._router_step += 1
+
         tau = float(self.router_temperature) if self.router_temperature is not None else 1.0
-        g = torch.softmax(u / tau, dim=-1)  # [B, K]
+        g = torch.softmax(u / tau, dim=-1)
         return u, g
+
 
 
     def _deform_sentence_tokens(self, *, H_sent: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
@@ -166,11 +210,18 @@ class SDModel(BaseModel):
         t = H_term[:, 0, :]  # [B, d]
 
         # 2) Gate 
-        u, g = self._compute_gate(t=t, s=s)  # u:[B,K], g:[B,K]
-
-        # cache for debug print (no extra router call)
+        u, g = self._compute_gate(t=t, s=s)
         self.last_router_logits = u.detach()
         self.last_gate = g.detach()
+        
+        loss_entropy = None
+        if self.router_entropy_weight > 0.0:
+            # entropy H(p) = -sum p log p
+            # muốn gate mềm hơn => maximize entropy => add (-H) vào loss (minimize)
+            eps = 1e-12
+            ent = -(g * (g + eps).log()).sum(dim=-1).mean()  # scalar
+            loss_entropy = -ent  # negative entropy so minimizing encourages higher entropy
+
 
         # 3) Deform
         H_sent_tilde = self._deform_sentence_tokens(H_sent=H_sent, g=g)  # [B, Ls, d]
@@ -276,7 +327,13 @@ class SDModel(BaseModel):
         # 7) Aux loss (SD)
         loss_bal = self._loss_balancing(g)
         loss_div = self._loss_diversity()
-        aux_loss = (self.sd_lambda_bal * loss_bal) + (self.sd_lambda_div * loss_div)
+        aux_loss = (
+            self.sd_lambda_bal * loss_bal
+            + self.sd_lambda_div * loss_div
+        )
+
+        if loss_entropy is not None:
+            aux_loss = aux_loss + self.router_entropy_weight * loss_entropy
 
         loss_total = loss_main + aux_loss
 

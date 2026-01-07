@@ -80,7 +80,7 @@ class Config:
     jitter_end: float = 0
     router_entropy_weight: float = 0.0
     route_mask_pad_tokens: bool = True
-    router_temperature: float = 2.0
+    router_temperature: float = 1.0
     capacity_factor: Optional[float] = None
 
     moe_topk_schedule: bool = False
@@ -121,10 +121,10 @@ class Config:
     
     # ====== Semantic Deformation (SD) ======
     sd_rank: int = 8
-    sd_alpha: float = 4.0          # ↓ GIẢM mạnh so với 16
-    sd_lambda_bal: float = 0.01    # giữ như cũ, ổn
-    sd_lambda_div: float = 0.0001  # ↓ rất nhẹ, tránh ép expert quá sớm
-    router_hidden_mult: float = 1.0
+    sd_alpha: float = 4.0         
+    sd_lambda_bal: float = 0.05   
+    sd_lambda_div: float = 0.0  
+    router_hidden_mult: float = 1.0    
 
     # ----------------- factory -----------------
     @staticmethod
