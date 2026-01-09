@@ -24,7 +24,7 @@ class Config:
     test_batch_size: int = 32
 
     lr: float = 2e-5
-    lr_head: float = 1e-4
+    lr_head: float = 1e-4 
     weight_decay: float = 0.01
     warmup_ratio: float = 0.1
     dropout: float = 0.1
