@@ -123,6 +123,7 @@ def maybe_freeze_encoder(cfg, model: nn.Module, *, epoch_idx_0based: int) -> boo
 
 def train_one_epoch(
     *,
+    cfg=None,
     model: nn.Module,
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -153,6 +154,17 @@ def train_one_epoch(
     )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
+    hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
+    hag_log_sums = {
+        "loss": 0.0,
+        "loss_main": 0.0,
+        "aux_loss": 0.0,
+        "loss_group": 0.0,
+        "loss_balance": 0.0,
+        "loss_diversity": 0.0,
+    }
+    hag_log_counts = {k: 0 for k in hag_log_sums}
+
     for step, batch in enumerate(dataloader):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
@@ -179,6 +191,14 @@ def train_one_epoch(
             loss_main = outputs.get("loss_main", None)
             loss_lambda = outputs.get("loss_lambda", None)
             loss_aux = outputs.get("aux_loss", None)
+
+        if hag_mode:
+            if step == 0:
+                print(f"[HAGMoE] output keys: {sorted(list(outputs.keys()))}")
+            for key in hag_log_sums:
+                if key in outputs and outputs.get(key) is not None:
+                    hag_log_sums[key] += safe_float(outputs.get(key))
+                    hag_log_counts[key] += 1
 
         # backward + step
         if use_amp:
@@ -213,7 +233,7 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
-        if step_print_i and (step > 0) and (step % step_print_i == 0):
+        if (not hag_mode) and step_print_i and (step > 0) and (step % step_print_i == 0):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
                     model.print_moe_debug(topn=3)
@@ -223,6 +243,19 @@ def train_one_epoch(
     denom = max(1, n_steps)
     acc = float(accuracy_score(all_labels, all_preds))
     f1 = float(f1_score(all_labels, all_preds, average=f1_average))
+
+    if hag_mode:
+        parts = ["epoch_summary"]
+        for key, total in hag_log_sums.items():
+            cnt = max(1, hag_log_counts[key])
+            if hag_log_counts[key] > 0:
+                parts.append(f"{key}={total / cnt:.6f}")
+        print("[HAGMoE] " + " ".join(parts))
+        if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
+            try:
+                model.print_moe_debug(topn=3)
+            except Exception as e:
+                print("Cannot print_moe_debug:", e)
 
     if moe:
         return {
@@ -427,6 +460,7 @@ def run_training_loop(
 
         # Training
         train_metrics = train_one_epoch(
+            cfg=cfg,
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,

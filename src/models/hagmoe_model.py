@@ -328,6 +328,8 @@ class HAGMoE(nn.Module):
         h_moe, group_logits, p_expert_list, expert_outs_list = self.apply_grouped_experts(
             h_fused, h_aspect
         )
+        self._last_group_probs = torch.softmax(group_logits, dim=-1).detach()
+        self._last_expert_probs = [p.detach() for p in p_expert_list]
         if self.hag_merge == "moe_only":
             h_final = h_moe
         else:
@@ -441,3 +443,40 @@ class HAGMoE(nn.Module):
 
     def _collect_aux_loss(self):
         return torch.zeros((), device=next(self.parameters()).device)
+
+    @torch.no_grad()
+    def print_moe_debug(self, topn: int = 3, eps_dead: float = 1e-6):
+        if not hasattr(self, "_last_group_probs") or not hasattr(self, "_last_expert_probs"):
+            print("[HAGMoE] No routing stats yet.")
+            return
+
+        group_probs = getattr(self, "_last_group_probs", None)
+        expert_probs = getattr(self, "_last_expert_probs", None)
+        if group_probs is None or expert_probs is None:
+            print("[HAGMoE] No routing stats yet.")
+            return
+
+        group_mean = group_probs.mean(dim=0).detach().cpu()
+        group_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(group_mean)])
+        print("\n[HAGMoE Debug - Grouped Router]")
+        print(f"  group_mean: {group_pairs}")
+
+        for g, p_expert in enumerate(expert_probs):
+            if p_expert is None or p_expert.numel() == 0:
+                print(f"  group{g}: no expert stats")
+                continue
+
+            usage = p_expert.mean(dim=0).detach().cpu()
+            dead = int((usage < eps_dead).sum().item())
+            topk = min(topn, usage.numel())
+            botk = min(topn, usage.numel())
+            topv, topi = torch.topk(usage, k=topk, largest=True)
+            botv, boti = torch.topk(usage, k=botk, largest=False)
+            top_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv, topi)])
+            bot_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv, boti)])
+
+            print(
+                f"  group{g}: min={float(usage.min()):.6f} max={float(usage.max()):.6f} dead(<{eps_dead:g})={dead}"
+            )
+            print(f"    top: {top_pairs}")
+            print(f"    bot: {bot_pairs}")
