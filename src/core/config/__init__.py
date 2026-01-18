@@ -106,9 +106,9 @@ class Config:
     hag_router_temperature: float = 1.0
     hag_merge: str = "residual"  # "residual" | "moe_only"
     hag_fusion_method: str = "concat"
-    hag_use_group_loss: bool = False
-    hag_use_balance_loss: bool = False
-    hag_use_diversity_loss: bool = False
+    hag_use_group_loss: bool = True
+    hag_use_balance_loss: bool = True
+    hag_use_diversity_loss: bool = True
     hag_lambda_group: float = 0.5
     hag_lambda_balance: float = 0.01
     hag_lambda_diversity: float = 0.1
