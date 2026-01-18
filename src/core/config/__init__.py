@@ -100,6 +100,19 @@ class Config:
     beta_end: float = 1.0
     beta_warmup_steps: int = 0
 
+    # ====== HAG-MoE ======
+    hag_num_groups: int = 3
+    hag_experts_per_group: int = 8
+    hag_router_temperature: float = 1.0
+    hag_merge: str = "residual"  # "residual" | "moe_only"
+    hag_fusion_method: str = "concat"
+    hag_use_group_loss: bool = False
+    hag_use_balance_loss: bool = False
+    hag_use_diversity_loss: bool = False
+    hag_lambda_group: float = 0.5
+    hag_lambda_balance: float = 0.01
+    hag_lambda_diversity: float = 0.1
+
     # Mixture of Fusion
     mof_experts: Optional[list[str]] = field(
         default_factory=lambda: 

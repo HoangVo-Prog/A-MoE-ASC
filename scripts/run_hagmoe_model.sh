@@ -68,6 +68,14 @@ if [[ -n "${benchmark_methods:-}" ]]; then
   METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
 fi
 
+if [[ -n "${METHOD_FLAGS}" ]]; then
+  if [[ "${benchmark_methods}" == *"sent"* || "${benchmark_methods}" == *"term"* ]]; then
+    echo "❌ HAGMoE does not support fusion_method 'sent' or 'term'."
+    echo "Use one of: concat, add, mul, cross, gated_concat, bilinear, coattn, late_interaction."
+    exit 1
+  fi
+fi
+
 echo "▶ Running HAGMoE model with:"
 echo "  dataset_type   = ${DATASET_TYPE}"
 echo "  loss_type      = ${LOSS_TYPE}"
