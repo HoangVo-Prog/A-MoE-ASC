@@ -319,7 +319,7 @@ class AspectSentimentDataset(Dataset):
                 and self._debug_split in {"val", "test"}
                 and self._debug_batch_idx == 0
                 and sample_idx < 10
-                and fail_reason == "TOKEN_MISMATCH"
+                and fail_reason != "OK"
             ):
                 sentence_norm = diag.get("sentence_norm", "")
                 term_norm = diag.get("term_norm", "")
@@ -393,6 +393,7 @@ class AspectSentimentDataset(Dataset):
                     f"  aspect_raw: {term}",
                     f"  sentence_norm: {sentence_norm}",
                     f"  aspect_norm: {term_norm}",
+                    f"  fail_reason: {fail_reason}",
                     f"  sent_piece_tokens: {sent_piece_tokens_view}",
                     f"  term_piece_tokens: {term_piece_tokens}",
                     f"  sent_piece_ids: {content_ids_view}",
@@ -584,7 +585,7 @@ class _SubsetAspectSentimentDataset(Dataset):
                 and self._debug_split in {"val", "test"}
                 and self._debug_batch_idx == 0
                 and sample_idx < 10
-                and fail_reason == "TOKEN_MISMATCH"
+                and fail_reason != "OK"
             ):
                 sentence_norm = diag.get("sentence_norm", "")
                 term_norm = diag.get("term_norm", "")
@@ -658,6 +659,7 @@ class _SubsetAspectSentimentDataset(Dataset):
                     f"  aspect_raw: {term}",
                     f"  sentence_norm: {sentence_norm}",
                     f"  aspect_norm: {term_norm}",
+                    f"  fail_reason: {fail_reason}",
                     f"  sent_piece_tokens: {sent_piece_tokens_view}",
                     f"  term_piece_tokens: {term_piece_tokens}",
                     f"  sent_piece_ids: {content_ids_view}",
@@ -874,7 +876,7 @@ class AspectSentimentDatasetKFold(Dataset):
                 and self._debug_split in {"val", "test"}
                 and self._debug_batch_idx == 0
                 and sample_idx < 10
-                and fail_reason == "TOKEN_MISMATCH"
+                and fail_reason != "OK"
             ):
                 sentence_norm = diag.get("sentence_norm", "")
                 term_norm = diag.get("term_norm", "")
@@ -948,6 +950,7 @@ class AspectSentimentDatasetKFold(Dataset):
                     f"  aspect_raw: {term}",
                     f"  sentence_norm: {sentence_norm}",
                     f"  aspect_norm: {term_norm}",
+                    f"  fail_reason: {fail_reason}",
                     f"  sent_piece_tokens: {sent_piece_tokens_view}",
                     f"  term_piece_tokens: {term_piece_tokens}",
                     f"  sent_piece_ids: {content_ids_view}",
