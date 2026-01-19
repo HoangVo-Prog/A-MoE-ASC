@@ -39,6 +39,7 @@ def _compute_aspect_span(
 ):
     sentence_norm = _normalize_text(sentence)
     term_norm = _normalize_text(term)
+    term_raw = (term or "").lower()
 
     term_enc = tokenizer(
         term_norm,
@@ -68,6 +69,9 @@ def _compute_aspect_span(
                 "term_norm": term_norm,
                 "content_ids": [],
                 "term_ids": [],
+                "sent_tokens": [],
+                "term_tokens": [],
+                "token_match_idx": -1,
                 "valid_len": valid_len,
                 "sep_idx": -1,
             },
@@ -88,6 +92,62 @@ def _compute_aspect_span(
     content_end = max(content_start, sep_idx)
 
     content_ids = sent_ids[content_start:content_end]
+    sent_tokens = tokenizer.convert_ids_to_tokens(content_ids)
+    term_tokens = tokenizer.tokenize(term_raw)
+
+    token_match_idx = _find_subsequence(sent_tokens, term_tokens)
+    if token_match_idx >= 0 and len(term_tokens) > 0:
+        aspect_start = content_start + token_match_idx
+        aspect_end = aspect_start + len(term_tokens)
+        if aspect_start >= max_len_sent:
+            aspect_start = 0
+            aspect_end = 0
+            aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+            return (
+                aspect_start,
+                aspect_end,
+                aspect_mask,
+                [],
+                "TRUNCATED",
+                False,
+                {
+                    "sentence_norm": sentence_norm,
+                    "term_norm": term_norm,
+                    "content_ids": content_ids,
+                    "term_ids": [],
+                    "sent_tokens": sent_tokens,
+                    "term_tokens": term_tokens,
+                    "token_match_idx": token_match_idx,
+                    "valid_len": valid_len,
+                    "sep_idx": sep_idx,
+                },
+            )
+
+        aspect_end = min(aspect_end, max_len_sent)
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        if aspect_end > aspect_start:
+            aspect_mask[aspect_start:aspect_end] = 1
+
+        matched_tokens = sent_tokens[token_match_idx : token_match_idx + len(term_tokens)]
+        return (
+            aspect_start,
+            aspect_end,
+            aspect_mask,
+            matched_tokens,
+            "OK",
+            True,
+            {
+                "sentence_norm": sentence_norm,
+                "term_norm": term_norm,
+                "content_ids": content_ids,
+                "term_ids": [],
+                "sent_tokens": sent_tokens,
+                "term_tokens": term_tokens,
+                "token_match_idx": token_match_idx,
+                "valid_len": valid_len,
+                "sep_idx": sep_idx,
+            },
+        )
 
     term_ids = term_enc["input_ids"].squeeze(0).tolist()
     term_mask = term_enc["attention_mask"].squeeze(0).tolist()
@@ -119,6 +179,9 @@ def _compute_aspect_span(
                 "term_norm": term_norm,
                 "content_ids": content_ids,
                 "term_ids": term_ids,
+                "sent_tokens": sent_tokens,
+                "term_tokens": term_tokens,
+                "token_match_idx": token_match_idx,
                 "valid_len": valid_len,
                 "sep_idx": sep_idx,
             },
@@ -142,6 +205,9 @@ def _compute_aspect_span(
                 "term_norm": term_norm,
                 "content_ids": content_ids,
                 "term_ids": term_ids,
+                "sent_tokens": sent_tokens,
+                "term_tokens": term_tokens,
+                "token_match_idx": token_match_idx,
                 "valid_len": valid_len,
                 "sep_idx": sep_idx,
             },
@@ -165,6 +231,9 @@ def _compute_aspect_span(
             "term_norm": term_norm,
             "content_ids": content_ids,
             "term_ids": term_ids,
+            "sent_tokens": sent_tokens,
+            "term_tokens": term_tokens,
+            "token_match_idx": token_match_idx,
             "valid_len": valid_len,
             "sep_idx": sep_idx,
         },
@@ -328,10 +397,12 @@ class AspectSentimentDataset(Dataset):
                 valid_len = diag.get("valid_len", 0)
                 sep_idx = diag.get("sep_idx", -1)
 
-                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
-                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+                sent_piece_tokens = diag.get("sent_tokens") or self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = diag.get("term_tokens") or self.tokenizer.tokenize(term_norm or term)
 
-                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                token_match_idx = int(diag.get("token_match_idx", -1))
+                if token_match_idx < 0:
+                    token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
                 id_match_idx = _find_subsequence(content_ids, term_ids)
 
                 sent_piece_tokens_view = (
@@ -594,10 +665,12 @@ class _SubsetAspectSentimentDataset(Dataset):
                 valid_len = diag.get("valid_len", 0)
                 sep_idx = diag.get("sep_idx", -1)
 
-                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
-                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+                sent_piece_tokens = diag.get("sent_tokens") or self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = diag.get("term_tokens") or self.tokenizer.tokenize(term_norm or term)
 
-                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                token_match_idx = int(diag.get("token_match_idx", -1))
+                if token_match_idx < 0:
+                    token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
                 id_match_idx = _find_subsequence(content_ids, term_ids)
 
                 sent_piece_tokens_view = (
@@ -885,10 +958,12 @@ class AspectSentimentDatasetKFold(Dataset):
                 valid_len = diag.get("valid_len", 0)
                 sep_idx = diag.get("sep_idx", -1)
 
-                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
-                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+                sent_piece_tokens = diag.get("sent_tokens") or self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = diag.get("term_tokens") or self.tokenizer.tokenize(term_norm or term)
 
-                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                token_match_idx = int(diag.get("token_match_idx", -1))
+                if token_match_idx < 0:
+                    token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
                 id_match_idx = _find_subsequence(content_ids, term_ids)
 
                 sent_piece_tokens_view = (
