@@ -64,6 +64,9 @@ class Config:
     adamw_foreach: bool = False
     adamw_fused: bool = False
 
+    # ====== Debug ======
+    debug_aspect_span: bool = False
+
     # ====== MoE toggles ======
     freeze_moe: bool = False
     aux_loss_weight: float = 0.01

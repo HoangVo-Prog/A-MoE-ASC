@@ -45,7 +45,8 @@ def get_kfold_dataset(cfg, tokenizer):
             max_len_term=cfg.max_len_term,
             k_folds=cfg.k_folds,
             seed=cfg.seed,
-            shuffle=cfg.shuffle
+            shuffle=cfg.shuffle,
+            debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
             
         )
 
@@ -55,6 +56,7 @@ def get_dataset(cfg, tokenizer):
         tokenizer=tokenizer,
         max_len_sent=cfg.max_len_sent,
         max_len_term=cfg.max_len_term,
+        debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
     )
     
     test_set = AspectSentimentDataset(
@@ -62,6 +64,7 @@ def get_dataset(cfg, tokenizer):
         tokenizer=tokenizer,
         max_len_sent=cfg.max_len_sent,
         max_len_term=cfg.max_len_term,
+        debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
     )  
 
     return train_set, test_set 
