@@ -135,10 +135,18 @@ def train_one_epoch(
     amp_dtype: str = "fp16",
     scaler: Optional[GradScaler] = None,
     max_grad_norm: Optional[float] = None,
+    epoch_idx: Optional[int] = None,
 ) -> Dict[str, float]:
     model.train()
 
     moe = bool(getattr(model, "_collect_aux_loss", False))
+    hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
+
+    dataset = getattr(dataloader, "dataset", None)
+    if dataset is not None and hasattr(dataset, "reset_match_stats"):
+        dataset.reset_match_stats()
+        if hag_mode and epoch_idx is not None and hasattr(dataset, "begin_debug"):
+            dataset.begin_debug(epoch=epoch_idx, split="train", batch_idx=0, max_samples=5)
 
     total_loss_sum = 0.0
     main_loss_sum = 0.0
@@ -154,7 +162,6 @@ def train_one_epoch(
     )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
-    hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
     hag_log_sums = {
         "loss": 0.0,
         "loss_main": 0.0,
@@ -164,6 +171,10 @@ def train_one_epoch(
         "loss_diversity": 0.0,
     }
     hag_log_counts = {k: 0 for k in hag_log_sums}
+
+    match_total = 0
+    match_matched = 0
+    match_mask_sum = 0.0
 
     for step, batch in enumerate(dataloader):
         batch = {k: v.to(DEVICE) for k, v in batch.items()}
@@ -246,6 +257,13 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
+        if "aspect_mask_sent" in batch:
+            mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
+            matched = mask_sum > 0
+            match_total += int(mask_sum.numel())
+            match_matched += int(matched.sum().item())
+            match_mask_sum += float(mask_sum[matched].sum().item())
+
         if (not hag_mode) and step_print_i and (step > 0) and (step % step_print_i == 0):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
                 try:
@@ -269,6 +287,19 @@ def train_one_epoch(
                 model.print_moe_debug(topn=3)
             except Exception as e:
                 print("Cannot print_moe_debug:", e)
+
+    if dataset is not None and hasattr(dataset, "update_match_stats"):
+        dataset.update_match_stats(
+            total=match_total,
+            matched=match_matched,
+            matched_mask_sum=match_mask_sum,
+        )
+        stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
+        if stats is not None:
+            print(
+                f"[AspectSpan] split=train match_rate={stats['match_rate'] * 100:.2f}% "
+                f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
+            )
 
     if moe:
         return {
@@ -296,11 +327,23 @@ def eval_model(
     fusion_method: str = "concat",
     f1_average: str = "macro",
     return_confusion: bool = False,
+    epoch_idx: Optional[int] = None,
+    split: str = "eval",
 ) -> Dict[str, Any]:
     model.eval()
     total_loss = 0.0
     all_preds: list[int] = []
     all_labels: list[int] = []
+
+    dataset = getattr(dataloader, "dataset", None)
+    if dataset is not None and hasattr(dataset, "reset_match_stats"):
+        dataset.reset_match_stats()
+        if model.__class__.__name__ == "HAGMoE" and epoch_idx is not None and hasattr(dataset, "begin_debug"):
+            dataset.begin_debug(epoch=epoch_idx, split=split, batch_idx=0, max_samples=5)
+
+    match_total = 0
+    match_matched = 0
+    match_mask_sum = 0.0
 
     with torch.no_grad():
         for batch in dataloader:
@@ -338,6 +381,13 @@ def eval_model(
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
 
+            if "aspect_mask_sent" in batch:
+                mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
+                matched = mask_sum > 0
+                match_total += int(mask_sum.numel())
+                match_matched += int(matched.sum().item())
+                match_mask_sum += float(mask_sum[matched].sum().item())
+
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average=f1_average)
@@ -361,6 +411,19 @@ def eval_model(
     out: Dict[str, Any] = {"loss": avg_loss, "acc": acc, "f1": f1, "f1_per_class": f1_per_class}
     if return_confusion:
         out["confusion"] = cm  # raw counts [C, C]
+
+    if dataset is not None and hasattr(dataset, "update_match_stats"):
+        dataset.update_match_stats(
+            total=match_total,
+            matched=match_matched,
+            matched_mask_sum=match_mask_sum,
+        )
+        stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
+        if stats is not None:
+            print(
+                f"[AspectSpan] split={split} match_rate={stats['match_rate'] * 100:.2f}% "
+                f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
+            )
     return out
 
 
@@ -498,6 +561,7 @@ def run_training_loop(
             amp_dtype=cfg.amp_dtype,
             scaler=scaler,
             max_grad_norm=cfg.max_grad_norm,
+            epoch_idx=epoch,
         )
 
         if moe:
@@ -536,6 +600,8 @@ def run_training_loop(
                 verbose_report=False,
                 fusion_method=method,
                 f1_average="macro",
+                epoch_idx=epoch,
+                split="val",
             )
             history["val_loss"].append(float(val_metrics["loss"]))
             history["val_f1"].append(float(val_metrics["f1"]))
@@ -578,6 +644,8 @@ def run_training_loop(
                 verbose_report=False,
                 fusion_method=method,
                 f1_average="macro",
+                epoch_idx=epoch,
+                split="test",
             )
             log += (
                 f"\nTest loss {test_metrics['loss']:.4f} "

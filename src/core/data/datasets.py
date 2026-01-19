@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import random
+import re
+import string
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -18,11 +20,20 @@ def _find_subsequence(haystack: List[int], needle: List[int]) -> int:
     return -1
 
 
+def _normalize_text(s: str) -> str:
+    s = (s or "").lower()
+    s = s.replace("-", " ")
+    s = s.strip(string.punctuation)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _compute_aspect_span(
     *,
     tokenizer,
     sent_enc,
     term: str,
+    sentence: str,
     max_len_sent: int,
     max_len_term: int,
 ):
@@ -42,17 +53,34 @@ def _compute_aspect_span(
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, []
+        return aspect_start, aspect_end, aspect_mask, [], "NOT_FOUND_RAW", False
+
+    # Match aspect token IDs inside the sentence content region [CLS] ... [SEP].
+    sep_id = getattr(tokenizer, "sep_token_id", None)
+    sep_idx = None
+    if sep_id is not None:
+        try:
+            sep_idx = sent_ids.index(sep_id)
+        except ValueError:
+            sep_idx = None
+    if sep_idx is None:
+        sep_idx = min(valid_len - 1, max_len_sent - 1)
 
     content_start = 1
-    content_end = valid_len
-    sep_id = getattr(tokenizer, "sep_token_id", None)
-    if content_end > content_start and sep_id is not None and sent_ids[content_end - 1] == sep_id:
-        content_end -= 1
-    if content_end < content_start:
-        content_end = content_start
+    content_end = max(content_start, sep_idx)
 
     content_ids = sent_ids[content_start:content_end]
+
+    # Normalize aspect text to reduce hyphen/punctuation mismatches.
+    term_norm = _normalize_text(term)
+    term_enc = tokenizer(
+        term_norm,
+        truncation=True,
+        padding="max_length",
+        max_length=max_len_term,
+        return_tensors="pt",
+        add_special_tokens=False,
+    )
 
     term_ids = term_enc["input_ids"].squeeze(0).tolist()
     term_mask = term_enc["attention_mask"].squeeze(0).tolist()
@@ -61,10 +89,19 @@ def _compute_aspect_span(
 
     match_idx = _find_subsequence(content_ids, term_ids)
     if match_idx < 0 or term_len <= 0:
+        sent_norm = _normalize_text(sentence)
+        raw_found = term_norm != "" and term_norm in sent_norm
+        truncated = (valid_len >= max_len_sent) or (sep_idx >= max_len_sent - 1)
+        if not raw_found:
+            fail_reason = "NOT_FOUND_RAW"
+        elif truncated:
+            fail_reason = "TRUNCATED"
+        else:
+            fail_reason = "TOKEN_MISMATCH"
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, []
+        return aspect_start, aspect_end, aspect_mask, [], fail_reason, False
 
     aspect_start = content_start + match_idx
     aspect_end = aspect_start + term_len
@@ -72,7 +109,7 @@ def _compute_aspect_span(
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, []
+        return aspect_start, aspect_end, aspect_mask, [], "TRUNCATED", False
 
     aspect_end = min(aspect_end, max_len_sent)
     aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
@@ -80,7 +117,7 @@ def _compute_aspect_span(
         aspect_mask[aspect_start:aspect_end] = 1
 
     matched_tokens = tokenizer.convert_ids_to_tokens(sent_ids[aspect_start:aspect_end])
-    return aspect_start, aspect_end, aspect_mask, matched_tokens
+    return aspect_start, aspect_end, aspect_mask, matched_tokens, "OK", True
 
 
 class AspectSentimentDataset(Dataset):
@@ -108,10 +145,50 @@ class AspectSentimentDataset(Dataset):
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
+
         self._debug_span_prints = 0
+        self._debug_span_limit = 0
+        self._debug_epoch = None
+        self._debug_split = ""
+        self._debug_batch_idx = 0
+
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def begin_debug(self, *, epoch: int, split: str, batch_idx: int = 0, max_samples: int = 5) -> None:
+        self._debug_span_prints = 0
+        self._debug_span_limit = int(max_samples)
+        self._debug_epoch = int(epoch)
+        self._debug_split = str(split)
+        self._debug_batch_idx = int(batch_idx)
+
+    def reset_match_stats(self) -> None:
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
+
+    def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
+        self.total_samples += int(total)
+        self.matched_samples += int(matched)
+        self.matched_mask_sum += float(matched_mask_sum)
+
+    @property
+    def match_rate(self) -> float:
+        if self.total_samples <= 0:
+            return 0.0
+        return float(self.matched_samples) / float(self.total_samples)
+
+    def get_match_stats(self) -> Dict[str, float]:
+        avg_mask = (
+            float(self.matched_mask_sum) / float(self.matched_samples)
+            if self.matched_samples > 0
+            else 0.0
+        )
+        return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
@@ -135,22 +212,28 @@ class AspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
+            sentence=sentence,
             max_len_sent=self.max_len_sent,
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < 3:
+        if self._debug_span_prints < self._debug_span_limit:
             self._debug_span_prints += 1
-            print("[HAGMoE span debug]")
-            print(f"  sentence: {sentence}")
-            print(f"  aspect: {term}")
-            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
-            print(f"  matched_tokens: {matched_tokens}")
-            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+            block = [
+                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
+                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
+                f"  sentence: {sentence}",
+                f"  aspect: {term}",
+                f"  aspect_start/end: {aspect_start}/{aspect_end}",
+                f"  matched_tokens: {matched_tokens}",
+                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
+                f"  fail_reason: {fail_reason}",
+            ]
+            print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
@@ -204,10 +287,50 @@ class _SubsetAspectSentimentDataset(Dataset):
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.label2id = label2id
+
         self._debug_span_prints = 0
+        self._debug_span_limit = 0
+        self._debug_epoch = None
+        self._debug_split = ""
+        self._debug_batch_idx = 0
+
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
 
     def __len__(self) -> int:
         return len(self._indices)
+
+    def begin_debug(self, *, epoch: int, split: str, batch_idx: int = 0, max_samples: int = 5) -> None:
+        self._debug_span_prints = 0
+        self._debug_span_limit = int(max_samples)
+        self._debug_epoch = int(epoch)
+        self._debug_split = str(split)
+        self._debug_batch_idx = int(batch_idx)
+
+    def reset_match_stats(self) -> None:
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
+
+    def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
+        self.total_samples += int(total)
+        self.matched_samples += int(matched)
+        self.matched_mask_sum += float(matched_mask_sum)
+
+    @property
+    def match_rate(self) -> float:
+        if self.total_samples <= 0:
+            return 0.0
+        return float(self.matched_samples) / float(self.total_samples)
+
+    def get_match_stats(self) -> Dict[str, float]:
+        avg_mask = (
+            float(self.matched_mask_sum) / float(self.matched_samples)
+            if self.matched_samples > 0
+            else 0.0
+        )
+        return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         real_idx = self._indices[idx]
@@ -232,22 +355,28 @@ class _SubsetAspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
+            sentence=sentence,
             max_len_sent=self.max_len_sent,
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < 3:
+        if self._debug_span_prints < self._debug_span_limit:
             self._debug_span_prints += 1
-            print("[HAGMoE span debug]")
-            print(f"  sentence: {sentence}")
-            print(f"  aspect: {term}")
-            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
-            print(f"  matched_tokens: {matched_tokens}")
-            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+            block = [
+                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
+                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
+                f"  sentence: {sentence}",
+                f"  aspect: {term}",
+                f"  aspect_start/end: {aspect_start}/{aspect_end}",
+                f"  matched_tokens: {matched_tokens}",
+                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
+                f"  fail_reason: {fail_reason}",
+            ]
+            print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
@@ -314,7 +443,16 @@ class AspectSentimentDatasetKFold(Dataset):
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
+
         self._debug_span_prints = 0
+        self._debug_span_limit = 0
+        self._debug_epoch = None
+        self._debug_split = ""
+        self._debug_batch_idx = 0
+
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
 
         (
             self._sent_list,
@@ -332,6 +470,37 @@ class AspectSentimentDatasetKFold(Dataset):
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def begin_debug(self, *, epoch: int, split: str, batch_idx: int = 0, max_samples: int = 5) -> None:
+        self._debug_span_prints = 0
+        self._debug_span_limit = int(max_samples)
+        self._debug_epoch = int(epoch)
+        self._debug_split = str(split)
+        self._debug_batch_idx = int(batch_idx)
+
+    def reset_match_stats(self) -> None:
+        self.total_samples = 0
+        self.matched_samples = 0
+        self.matched_mask_sum = 0.0
+
+    def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
+        self.total_samples += int(total)
+        self.matched_samples += int(matched)
+        self.matched_mask_sum += float(matched_mask_sum)
+
+    @property
+    def match_rate(self) -> float:
+        if self.total_samples <= 0:
+            return 0.0
+        return float(self.matched_samples) / float(self.total_samples)
+
+    def get_match_stats(self) -> Dict[str, float]:
+        avg_mask = (
+            float(self.matched_mask_sum) / float(self.matched_samples)
+            if self.matched_samples > 0
+            else 0.0
+        )
+        return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
@@ -354,22 +523,28 @@ class AspectSentimentDatasetKFold(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
+            sentence=sentence,
             max_len_sent=self.max_len_sent,
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < 3:
+        if self._debug_span_prints < self._debug_span_limit:
             self._debug_span_prints += 1
-            print("[HAGMoE span debug]")
-            print(f"  sentence: {sentence}")
-            print(f"  aspect: {term}")
-            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
-            print(f"  matched_tokens: {matched_tokens}")
-            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+            block = [
+                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
+                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
+                f"  sentence: {sentence}",
+                f"  aspect: {term}",
+                f"  aspect_start/end: {aspect_start}/{aspect_end}",
+                f"  matched_tokens: {matched_tokens}",
+                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
+                f"  fail_reason: {fail_reason}",
+            ]
+            print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
