@@ -243,6 +243,16 @@ def train_one_epoch(
         if hag_mode:
             if step == 0:
                 print(f"[HAGMoE] output keys: {sorted(list(outputs.keys()))}")
+                effective = getattr(model, "_last_fusion_method", None)
+                model_cfg_fusion = str(getattr(cfg, "hag_fusion_method", "")).strip()
+                model_attr_fusion = str(getattr(model, "hag_fusion_method", "")).strip()
+                print(
+                    "[HAGMoE] "
+                    f"benchmark_method={fusion_method} "
+                    f"cfg.hag_fusion_method={model_cfg_fusion or '""'} "
+                    f"model.hag_fusion_method={model_attr_fusion or '""'} "
+                    f"effective_fusion={effective}"
+                )
             for key in hag_log_sums:
                 if key in outputs and outputs.get(key) is not None:
                     hag_log_sums[key] += safe_float(outputs.get(key))
@@ -364,6 +374,7 @@ def train_one_epoch(
         "f1": f1,
     }
 
+
 def eval_model(
     *,
     cfg=None,
@@ -441,6 +452,18 @@ def eval_model(
 
             loss = outputs.get("loss", None)
             logits = outputs["logits"]
+
+            if hag_mode and batch_idx == 0:
+                effective = getattr(model, "_last_fusion_method", None)
+                model_cfg_fusion = str(getattr(cfg, "hag_fusion_method", "")).strip()
+                model_attr_fusion = str(getattr(model, "hag_fusion_method", "")).strip()
+                print(
+                    "[HAGMoE] "
+                    f"benchmark_method={fusion_method} "
+                    f"cfg.hag_fusion_method={model_cfg_fusion or '""'} "
+                    f"model.hag_fusion_method={model_attr_fusion or '""'} "
+                    f"effective_fusion={effective}"
+                )
 
             if loss is not None:
                 total_loss += float(loss.item())
@@ -778,7 +801,7 @@ def run_training_loop(
                 best_epoch = epoch
                 epochs_no_improve = 0
                 print()
-                print("*************************************************************")
+                print("*"*100)
                 print("[MODEL] New best model on macro_f1 with neutral_f1 constraint")
                 print()
             else:

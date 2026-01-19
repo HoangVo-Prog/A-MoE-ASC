@@ -86,12 +86,12 @@ class HAGMoE(nn.Module):
         self.opinion_q = nn.Linear(hidden_size, hidden_size, bias=False)
 
         self.fusion_concat = nn.Sequential(
-            nn.LayerNorm(2 * hidden_size),
+            nn.LayerNorm(3 * hidden_size),
             nn.Dropout(dropout),
-            nn.Linear(2 * hidden_size, hidden_size),
+            nn.Linear(3 * hidden_size, hidden_size),
         )
 
-        self.gate = nn.Linear(2 * hidden_size, hidden_size)
+        self.gate = nn.Linear(3 * hidden_size, hidden_size)
 
         bilinear_rank = max(32, min(256, hidden_size // 4))
         self.bilinear_proj_sent = nn.Linear(hidden_size, bilinear_rank)
@@ -282,7 +282,7 @@ class HAGMoE(nn.Module):
         fusion_method: str,
     ) -> torch.Tensor:
         fusion_method = fusion_method.lower().strip()
-        rep_sent = h_opinion
+        rep_sent = h_sent
 
         if fusion_method == "sent":
             raise ValueError(
@@ -295,39 +295,57 @@ class HAGMoE(nn.Module):
                 "Use one of: concat, add, mul, cross, gated_concat, bilinear, coattn, late_interaction."
             )
         elif fusion_method == "concat":
-            h_fused = self.fusion_concat(torch.cat([rep_sent, h_aspect], dim=-1))
+            fusion_in = torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)
+            if not hasattr(self, "_fusion_debug_printed"):
+                self._fusion_debug_printed = True
+                print(f"[HAGMoE] fusion=concat input={tuple(fusion_in.shape)}")
+            h_fused = self.fusion_concat(fusion_in)
         elif fusion_method == "add":
-            h_fused = rep_sent + h_aspect
+            h_fused = rep_sent + h_aspect + h_opinion
         elif fusion_method == "mul":
-            h_fused = rep_sent * h_aspect
+            h_fused = rep_sent * h_aspect * h_opinion
         elif fusion_method == "cross":
             q = h_aspect.unsqueeze(1)
             kpm = attention_mask_sent.eq(0)
             attn_out, _ = self.cross_attn(
                 q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
             )
-            h_fused = attn_out.squeeze(1)
+            q_o = h_opinion.unsqueeze(1)
+            attn_out_o, _ = self.cross_attn(
+                q_o, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
+            )
+            h_fused = attn_out.squeeze(1) + attn_out_o.squeeze(1)
         elif fusion_method == "gated_concat":
-            g = torch.sigmoid(self.gate(torch.cat([rep_sent, h_aspect], dim=-1)))
-            h_fused = g * rep_sent + (1 - g) * h_aspect
+            g = torch.sigmoid(self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)))
+            h_fused = g * rep_sent + (1 - g) * (0.5 * (h_aspect + h_opinion))
         elif fusion_method == "bilinear":
             h_fused = self.bilinear_out(
-                self.bilinear_proj_sent(rep_sent) * self.bilinear_proj_term(h_aspect)
+                self.bilinear_proj_sent(rep_sent)
+                * self.bilinear_proj_term(h_aspect)
+                * self.bilinear_proj_term(h_opinion)
             )
         elif fusion_method == "coattn":
-            # Co-attention variant: CLS attends to aspect-span tokens within the sentence embeddings.
-            q_term = h_aspect.unsqueeze(1)
-            q_sent = out_sent.last_hidden_state[:, 0:1, :]
+            sent_tok = out_sent.last_hidden_state
+            term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
+
+            q_sent = sent_tok[:, 0:1, :]
             kpm_sent = attention_mask_sent.eq(0)
-            kpm_term = aspect_mask_sent.eq(0) if aspect_mask_sent is not None else None
+            kpm_term = term_attn_mask.eq(0) if term_attn_mask is not None else None
 
             term_ctx, _ = self.coattn_term_to_sent(
-                q_term, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_sent
+                term_tok, sent_tok, sent_tok, key_padding_mask=kpm_sent
             )
+            if term_attn_mask is not None:
+                term_valid = term_attn_mask.float()
+                denom = term_valid.sum(dim=1, keepdim=True).clamp_min(1.0)
+                term_ctx = (term_ctx * term_valid.unsqueeze(-1)).sum(dim=1) / denom
+            else:
+                term_ctx = term_ctx.mean(dim=1)
+
             sent_ctx, _ = self.coattn_sent_to_term(
-                q_sent, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_term
+                q_sent, term_tok, term_tok, key_padding_mask=kpm_term
             )
-            h_fused = term_ctx.squeeze(1) + sent_ctx.squeeze(1)
+            h_fused = term_ctx + sent_ctx.squeeze(1)
         elif fusion_method == "late_interaction":
             sent_tok = out_sent.last_hidden_state
             term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
@@ -354,7 +372,8 @@ class HAGMoE(nn.Module):
             else:
                 pooled = max_sim.mean(dim=1)
 
-            cond = self.gate(torch.cat([rep_sent, h_aspect], dim=-1))
+            # TODO: consider a better calibrated fusion for late_interaction beyond scalar gating.
+            cond = self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1))
             h_fused = cond * pooled.unsqueeze(-1)
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
@@ -519,6 +538,12 @@ class HAGMoE(nn.Module):
             out_sent.last_hidden_state, attention_mask_sent, h_aspect, aspect_mask
         )
 
+        fusion_arg = str(fusion_method).strip() if fusion_method is not None else ""
+        effective_fusion = fusion_arg if fusion_arg else str(self.hag_fusion_method or "").strip()
+        if not effective_fusion:
+            effective_fusion = "concat"
+        self._last_fusion_method = effective_fusion
+
         h_fused = self.build_fusion(
             h_sent=h_sent,
             h_aspect=h_aspect,
@@ -526,7 +551,7 @@ class HAGMoE(nn.Module):
             out_sent=out_sent,
             attention_mask_sent=attention_mask_sent,
             aspect_mask_sent=aspect_mask,
-            fusion_method=self.hag_fusion_method or fusion_method,
+            fusion_method=effective_fusion,
         )
 
         h_moe, group_logits, p_expert_list, expert_outs_list = self.apply_grouped_experts(

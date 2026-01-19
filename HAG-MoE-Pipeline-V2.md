@@ -1,98 +1,132 @@
-# HAG-MoE-Pipeline-V2.md
-
-## (Codex-Oriented Design Specification)
 
 ---
 
-## 0. Purpose of This Document
+# Polarity-aware Grouped Mixture of Experts for ATSE
 
-This document defines the **exact architectural intent** of the HAG-MoE pipeline.
+## 1. Pipeline Overview
 
-It is written for:
-
-* Code agents (Codex)
-* Contributors implementing new model variants
-
-It is **not** a tutorial or a paper draft.
-
-Any implementation MUST follow the constraints below.
-
----
-
-## 1. Task Definition
-
-**Task**: Aspect Term Sentiment Analysis (ATSA / ATSE)
-
-**Input**:
-
-* Sentence tokens `S = {w₁ … wₙ}`
-* Aspect span `A = {wᵢ … wⱼ}`
-
-**Output**:
-
-* Sentiment label ∈ {Positive, Negative, Neutral}
-
----
-
-## 2. High-level Pipeline (Invariant)
+The overall pipeline for **Aspect Term Sentiment Extraction (ATSE)** is designed as the following sequence:
 
 ```text
-Sentence + Aspect
+Sentence (S) + Aspect (A)
         ↓
-Semantic Extractor (BERT)
+     Fusion
         ↓
-Aspect / Opinion / Sentence representations
+   Polarity-aware MoE
         ↓
-Fusion Module
+      Merge
         ↓
-Polarity-aware Grouped MoE
-        ↓
-Merge
-        ↓
-Sentiment Classifier
+   Sentiment Classifier
 ```
 
-**Invariant**:
-
-* MoE is a **semantic deformation module**
-* MoE is **NOT** a generic stacked neural layer
+Core objective:
+Use a **polarity grouped Mixture of Experts** to **conditionally modulate semantic embeddings**, rather than treating MoE as a purely feedforward layer.
 
 ---
 
-## 3. Layer 1: Semantic Extractor
+## 2. Layer-wise Architecture
 
-### Backbone
+---
 
-* Pretrained BERT (or equivalent)
-* Encoder structure MUST NOT be modified
+## Layer 1: Semantic Extractor
 
-### Outputs
+### Input
 
-Let `H ∈ R^{n × d}` be token embeddings.
+* Sentence tokens: `S = {w1, ..., wL}`
+* Aspect span: `A = {wi, ..., w(i+m)}`
 
-* Sentence representation
-  `h_sent = H[CLS]`
+Backbone encoder: BERT or an equivalent pretrained transformer.
 
-* Aspect representation
-  `h_aspect = mean(H[i:j])`
+### Output Representations
 
-* Opinion representation (latent, no labels)
+> **Note**
+> $$\mathbf{H} = \text{Encoder}(\text{input_ids}, \text{attention_mask}) \in \mathbb{R}^{n \times d}$$
 
-Opinion is inferred via **aspect-conditioned attention**:
+#### 1.1 Sentence Representation
 
-```math
-α_k = (Q_k · h_aspect) / sqrt(d)
+```text
+h_sent = H_[CLS] ∈ R^d
 ```
 
-* Aspect tokens MUST be masked
-* Softmax over non-aspect tokens
-* Opinion embedding:
+* The CLS token represents the global sentence semantics.
 
-```math
-h_opinion = Σ α_k · H_k
+---
+
+#### 1.2 Aspect Representation
+
+```text
+h_aspect = (1/m) * Σ H_k , k = i → i+m
 ```
 
-**Output of Layer 1**:
+* Mean pooling over embeddings of tokens within the aspect span.
+* Represents the local semantics of the aspect.
+
+---
+
+#### 1.3 Latent Opinion Representation
+
+Opinion terms are not explicitly labeled. They are inferred **latently** through aspect conditioned attention.
+
+**Query generation**
+
+> **Note**
+> $$\mathbf{Q} = \text{MLP}(\mathbf{H}) = \mathbf{W}_q \mathbf{H} + \mathbf{b}_q \in \mathbb{R}^{n \times d}$$
+
+```math
+Q = MLP(H)
+```
+
+**Aspect conditioned attention**
+
+> **Note**
+> $$\alpha_k = \frac{\mathbf{Q}*k \cdot \mathbf{h}*{aspect}^T}{\sqrt{d}}, \quad \forall k \in {1, ..., n}$$
+
+```math
+α_k = Q_k · h_{aspect}^T
+```
+
+> **Note**
+> A masking operation is applied to prevent aspect tokens from attending to themselves. This forces the model to search for opinion words outside the aspect span.
+
+$$
+\tilde{\alpha}_k =
+\begin{cases}
+-\infty & \text{if } k \in [i, j] \text{ (aspect tokens)} \
+\alpha_k & \text{otherwise}
+\end{cases}
+$$
+
+Normalization:
+
+$$
+\boldsymbol{\beta} = \text{softmax}(\tilde{\boldsymbol{\alpha}}) \in \mathbb{R}^n
+$$
+
+$$
+\beta_k = \frac{\exp(\tilde{\alpha}*k)}{\sum*{m=1}^{n} \exp(\tilde{\alpha}_m)}
+$$
+
+This can be interpreted as:
+
+$$
+\beta_k = P(\text{token } k \text{ is an opinion} \mid \text{Aspect}, S)
+$$
+
+**Opinion embedding**
+
+$$
+\mathbf{h}*{opinion} = \sum*{k=1}^{n} \beta_k \cdot \mathbf{H}_k \in \mathbb{R}^d
+$$
+
+```text
+h_opinion = Σ α_k H_k
+```
+
+Intuition: the model learns which tokens express sentiment toward the given aspect.
+
+---
+
+### Layer 1 Output
 
 ```text
 { h_sent, h_aspect, h_opinion }
@@ -100,128 +134,216 @@ h_opinion = Σ α_k · H_k
 
 ---
 
-## 4. Layer 2: Fusion Module
+## Layer 2: Fusion Layer
 
-### Input
+The representations are fused as:
 
 ```text
-S = h_sent
-A = h_aspect
-O = h_opinion
+h_fused = Fusion(S = h_sent, A = h_aspect, O = h_opinion)
 ```
 
-### Output
+Possible fusion strategies include:
+
+* **Concatenation**
+  $$
+  f_1 = \mathbf{W}_c[\mathbf{S}; \mathbf{A}; \mathbf{O}] + \mathbf{b}_c \in \mathbb{R}^d
+  $$
+
+* **Additive**
+  $$
+  f_2 = \mathbf{S} + \mathbf{A} + \mathbf{O}
+  $$
+
+* **Multiplicative**
+  $$
+  f_3 = \mathbf{S} \odot \mathbf{A} \odot \mathbf{O}
+  $$
+
+* **Cross Attention**
+  $$
+  f_4 = \text{CrossAttn}(\mathbf{A}, \mathbf{S}, \mathbf{S}) + \text{CrossAttn}(\mathbf{O}, \mathbf{S}, \mathbf{S})
+  $$
+
+  where
+  $$
+  \text{CrossAttn}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) =
+  \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^T}{\sqrt{d}}\right)\mathbf{V}
+  $$
+
+* **Bilinear interaction**
+  $$
+  f_5 = \mathbf{A}^T \mathbf{W}_b \mathbf{O}
+  $$
+
+* **Gated fusion**
+  $$
+  f_6 = g \cdot \mathbf{S} + (1 - g) \cdot \frac{\mathbf{A} + \mathbf{O}}{2}
+  $$
+
+  where
+  $$
+  g = \sigma(\mathbf{W}_g[\mathbf{A}; \mathbf{O}] + b_g)
+  $$
+
+Let $\mathbf{S} = \mathbf{h}*{sent}$, $\mathbf{A} = \mathbf{h}*{aspect}$, $\mathbf{O} = \mathbf{h}_{opinion}$.
+
+| Strategy        | Formula | Parameters       |
+| --------------- | ------- | ---------------- |
+| Concatenation   | $f_1$   | $O(3d \times d)$ |
+| Additive        | $f_2$   | $O(0)$           |
+| Multiplicative  | $f_3$   | $O(0)$           |
+| Cross Attention | $f_4$   | $O(d^2)$         |
+| Bilinear        | $f_5$   | $O(d^2)$         |
+| Gated           | $f_6$   | $O(2d)$          |
+
+Constraint:
 
 ```text
 h_fused ∈ R^d
 ```
 
-### Allowed fusion strategies
+### Extension: Fusion Selector
 
-* Concatenation + Linear
-* Additive
-* Multiplicative
-* Cross-attention
-* Bilinear
-* Gated fusion
+Different samples may benefit from different fusion strategies:
 
-### Optional: Fusion Selector
+* Explicit sentiment: simple additive fusion
+* Implicit sentiment: cross attention
+* Comparative sentiment: bilinear interaction
 
-A lightweight selector MAY be used to weight multiple fusion strategies.
+Let:
 
-Constraint:
+$$
+\mathbf{z} = [\mathbf{h}*{aspect}; \mathbf{h}*{opinion}] \in \mathbb{R}^{2d}
+$$
 
-* Fusion output dimensionality MUST remain `d`
-* Fusion module MUST be swappable
+Strategy selection:
+
+$$
+\boldsymbol{\pi} = \text{softmax}\left(\frac{\mathbf{W}_{sel}\mathbf{z}}{\tau}\right) \in \mathbb{R}^6
+$$
+
+where:
+
+* $\mathbf{W}_{sel} \in \mathbb{R}^{6 \times 2d}$
+* $\tau$ is a temperature parameter
+
+Weighted aggregation:
+
+$$
+\mathbf{h}*{fused} = \sum*{i=1}^{6} \pi_i \cdot f_i
+$$
 
 ---
 
-## 5. Layer 3: Polarity-aware Grouped MoE (Core Contribution)
+## Layer 3: Polarity-aware Grouped MoE
 
-### 5.1 Design Principle
+### 3.1 Probabilistic Motivation
 
-* Experts are **grouped by polarity**
-* Routing is **hierarchical**
-* Expert specialization happens **inside polarity manifolds**
+The output distribution is modeled as:
+
+$$
+P(y \mid x) = \sum_g P(g \mid x) \sum_{e \in g} P(e \mid g, x) P(y \mid e, x)
+$$
+
+where:
+
+* $g$ is a polarity group (positive, negative, neutral)
+* $e$ is an expert within group $g$
 
 ---
 
-### 5.2 Polarity Group Router
+### 3.2 Polarity Group Router
 
-Input:
+$$
+\mathbf{g} = \text{softmax}(\mathbf{W}*g \mathbf{h}*{fused} + \mathbf{b}_g)
+$$
 
 ```text
-h_fused
+g = [P_pos, P_neg, P_neu]
 ```
 
-Compute group probabilities:
+Expert assignment:
 
-```math
-P(g | x) = softmax(W_g h_fused)
-```
-
-Groups:
-
-* Positive
-* Negative
-* Neutral
-
-Each group owns a **disjoint expert set**.
+* Positive: E1, E2, E3
+* Negative: E4, E5, E6
+* Neutral: E7, E8, E9
 
 ---
 
-### 5.3 Aspect-conditioned Expert Router
+### 3.3 Aspect-conditioned Expert Router
 
-Conditioned input:
+Conditioned representation:
 
-```math
-h_cond = W_cond [h_fused ; h_aspect]
-```
+$$
+\mathbf{h}*{cond} =
+\mathbf{W}*{cond}[\mathbf{h}*{fused}; \mathbf{h}*{aspect}] + \mathbf{b}_{cond}
+$$
 
-For group `g`:
+For each group $g$:
 
-```math
-P(e | g, x) = softmax(W_expert^g h_cond / τ)
-```
+$$
+\mathbf{e}*g =
+\text{softmax}\left(\frac{\mathbf{W}*{expert}^{(g)} \mathbf{h}_{cond}}{\tau}\right)
+\in \mathbb{R}^{E_g}
+$$
 
-Constraints:
+where $\mathbf{W}_{expert}^{(g)}$ is group specific.
 
-* Routing is ONLY inside selected group
-* Temperature `τ` controls sharpness
-
----
-
-### 5.4 Expert Computation
-
-Each expert produces a **semantic deformation**:
-
-Allowed expert forms:
-
-* FFN
-* Low-rank parameter delta
-* Additive embedding shift
-
-Example FFN expert:
-
-```math
-Expert(x) = W₂ GELU(W₁ x)
-```
-
-Within-group aggregation:
-
-```math
-h_g = Σ P(e | g, x) · Expert_e(h_fused)
-```
-
-Cross-group aggregation:
-
-```math
-h_moe = Σ P(g | x) · h_g
-```
+Routing occurs **only within the selected group**.
 
 ---
 
-## 6. Layer 4: Merge & Classification
+### 3.4 Group-wise MoE Aggregation
+
+**Within group**
+
+$$
+\mathbf{h}*g = \sum*{i=1}^{E_g} e_{g,i} \cdot \text{Expert}*{g,i}(\mathbf{h}*{fused})
+$$
+
+Each expert is an FFN:
+
+$$
+\text{Expert}_i(\mathbf{x}) =
+\mathbf{W}_2^{(i)} \cdot \text{GELU}(\mathbf{W}_1^{(i)} \mathbf{x} + \mathbf{b}_1^{(i)}) + \mathbf{b}_2^{(i)}
+$$
+
+**Across groups**
+
+$$
+\mathbf{h}*{moe} = \sum*{g=1}^{3} P(g \mid x) \cdot \mathbf{h}_g
+$$
+
+Final form:
+
+```text
+h_moe = Σ_g P(g|x) Σ_{e∈g} P(e|g,x) · Expert_e(h_cond)
+```
+
+This is a **grouped MoE**, not a flat MoE.
+
+---
+
+## Layer 4: Merge and Classification
+
+**Classification**
+
+$$
+\mathbf{logits} = \mathbf{W}*{cls} \mathbf{h}*{moe} + \mathbf{b}_{cls}
+$$
+
+**Prediction**
+
+$$
+\hat{y} = \arg\max(\text{softmax}(\mathbf{logits}))
+$$
+
+**Probability**
+
+$$
+P(Y = c \mid x) =
+\frac{\exp(\text{logits}*c)}{\sum*{c'} \exp(\text{logits}_{c'})}
+$$
 
 Final representation:
 
@@ -231,238 +353,97 @@ h_final = Merge(h_fused, h_moe)
 
 Classifier:
 
-```math
-ŷ = softmax(W_cls h_final)
+$$
+\hat{y} = \text{softmax}(\mathbf{W}*{cls} \mathbf{h}*{final} + \mathbf{b}_{cls})
+$$
+
+---
+
+## 4. Loss Functions
+
+Overall loss:
+
+$$
+\mathcal{L}*{total}
+= \mathcal{L}*{cls}
+
+* \lambda_1 \mathcal{L}_{group}
+* \lambda_2 \mathcal{L}_{balance}
+* \lambda_3 \mathcal{L}_{diversity}
+  $$
+
+---
+
+### 4.1 Classification Loss
+
+$$
+\mathcal{L}_{cls} = \text{FocalLoss}(\hat{y}, y)
+$$
+
+---
+
+### 4.2 Group Supervision Loss
+
+If polarity priors or pseudo labels are available:
+
+$$
+\mathcal{L}*{group}
+= -\sum*{g=1}^{3} y_g \log P(g \mid x)
+$$
+
+where $y_g = 1$ if the true sentiment belongs to group $g$.
+
+---
+
+### 4.3 Expert Load Balancing Loss
+
+$$
+\mathcal{L}*{balance}
+= N \sum*{i=1}^{N} f_i P_i
+$$
+
+where:
+
+* $f_i$ is the routing frequency of expert $i$
+* $P_i$ is the mean routing probability
+* $N$ is the number of experts
+
+Purpose: prevent expert collapse.
+
+---
+
+### 4.4 Expert Diversity Loss
+
+$$
+\mathcal{L}_{diversity}
+= \left| \mathbf{W} \mathbf{W}^T - \mathbf{I} \right|_F^2
+$$
+
+Encourages experts within the same group to learn distinct subspaces.
+
+---
+
+### 4.5 Loss Weights
+
+$$
+\lambda_1 = 0.5,\quad
+\lambda_2 = 0.01,\quad
+\lambda_3 = 0.1
+$$
+
+```text
+a = 0.5
+b = 0.01
+c = 0.1
 ```
 
-Merge strategies:
-
-* Use `h_moe` only
-* Residual: `h_fused + h_moe`
-
 ---
 
-## 7. Loss Functions
+## 5. Core Novelty
 
-Total loss:
-
-```math
-L = L_cls + λ₁ L_group + λ₂ L_balance + λ₃ L_diversity
-```
-
-### 7.1 Classification Loss
-
-* Cross-entropy or Focal Loss
-
-### 7.2 Group Supervision Loss (Optional)
-
-* Align predicted polarity group with sentiment label
-
-### 7.3 Expert Load Balancing Loss
-
-* Prevent expert collapse
-* Encourage uniform usage
-
-### 7.4 Expert Diversity Loss
-
-* Orthogonality constraint within group
+* MoE is treated as a **semantic deformation module**, not a standard layer
+* Routing is structured using **polarity priors**
+* Opinion representation is **latent** and does not require annotation
+* Expert specialization occurs **within polarity specific manifolds**
 
 ---
-
-## 8. Architectural Constraints (Hard Rules)
-
-Agents MUST NOT:
-
-* Treat MoE as a generic layer
-* Add MoE blocks inside BERT
-* Modify dataset formats
-* Modify training loops unless explicitly instructed
-
-Agents MUST:
-
-* Keep forward interfaces consistent
-* Add new variants as new model files
-* Follow this document when implementing grouped MoE
-
----
-
-## 9. What This Document Is For
-
-This document is used to:
-
-* Guide Codex when implementing new models
-* Enforce architectural intent
-* Prevent hallucinated MoE designs
-
-If any instruction conflicts with this document,
-**this document takes priority**.
-
-
-## Implementation Mapping (Spec → Code)
-
-This section maps each conceptual component of the HAG-MoE pipeline
-to its expected implementation location in the codebase.
-
-This mapping is **binding for agents**.
-
----
-
-### Layer 1: Semantic Extractor
-
-**Spec concepts**:
-
-* Sentence representation `h_sent`
-* Aspect representation `h_aspect`
-* Latent opinion representation `h_opinion`
-
-**Code location**:
-
-* `HAGMoEModel.forward(...)`
-* Helper method: `compute_opinion(H, aspect_mask, h_aspect)`
-
-**Constraints**:
-
-* Aspect tokens MUST be masked during opinion attention
-* No supervision labels for opinion tokens
-
----
-
-### Layer 2: Fusion Module
-
-**Spec concepts**:
-
-* Fusion of `{h_sent, h_aspect, h_opinion}`
-* Output `h_fused ∈ R^d`
-
-**Code location**:
-
-* `HAGMoEModel.build_fusion(...)`
-* or reuse fusion logic from `base_model.py` / `moehead_model.py`
-
-**Constraints**:
-
-* Fusion output dimensionality MUST remain `d`
-* Fusion strategy MUST be swappable
-
----
-
-### Layer 3.1: Polarity Group Router
-
-**Spec concepts**:
-
-* Polarity groups: Positive, Negative, Neutral
-* Group probability `P(g | x)`
-
-**Code location**:
-
-* `HAGMoEModel.route_group(h_fused)`
-* or class `PolarityGroupRouter`
-
-**Constraints**:
-
-* Exactly 3 groups
-* Softmax over groups
-
----
-
-### Layer 3.2: Aspect-conditioned Expert Router
-
-**Spec concepts**:
-
-* Conditioned input `h_cond = [h_fused ; h_aspect]`
-* Expert probability `P(e | g, x)`
-
-**Code location**:
-
-* `HAGMoEModel.route_expert(h_cond, group_id)`
-* or class `GroupExpertRouter`
-
-**Constraints**:
-
-* Routing is restricted to experts within the selected group
-* Temperature `τ` must be configurable
-
----
-
-### Layer 3.3: Grouped Expert Computation
-
-**Spec concepts**:
-
-* Within-group aggregation
-* Cross-group aggregation
-* Semantic deformation via experts
-
-**Code location**:
-
-* `HAGMoEModel.apply_experts(...)`
-* or class `GroupedExperts`
-
-**Constraints**:
-
-* Experts MUST output representations in `R^d`
-* Experts MUST act as semantic deformation, not generic layers
-
----
-
-### Layer 4: Merge & Classification
-
-**Spec concepts**:
-
-* Merge `h_fused` and `h_moe`
-* Sentiment classifier
-
-**Code location**:
-
-* `HAGMoEModel.merge(h_fused, h_moe)`
-* `HAGMoEModel.classifier`
-
-**Constraints**:
-
-* Default merge SHOULD be residual
-* Output logits MUST match existing engine expectations
-
----
-
-### Loss Functions
-
-**Spec concepts**:
-
-* Classification loss
-* Group supervision loss
-* Expert balance loss
-* Expert diversity loss
-
-**Code location**:
-
-* `HAGMoEModel.compute_aux_losses(...)`
-
-**Constraints**:
-
-* Auxiliary losses MUST NOT break existing training loops
-* BaseModel and other modes MUST remain unaffected
-* Loss integration MUST respect mode-specific branching
-
----
-
-### Mode Compatibility Rule
-
-If any shared code path is modified to support HAG-MoE:
-
-* BaseModel MUST follow the original logic
-* Differences MUST be introduced via:
-
-  * explicit `mode` checks, or
-  * model-specific overrides
-
-Silent behavior changes are forbidden.
-
----
-
-## Priority Rule
-
-If there is a conflict between:
-
-* conceptual description above, and
-* any inferred implementation choice,
-
-this **Implementation Mapping takes priority**.
