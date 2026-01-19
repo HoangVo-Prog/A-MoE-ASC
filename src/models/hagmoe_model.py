@@ -603,6 +603,9 @@ class HAGMoE(nn.Module):
                 "loss_balance": None,
                 "loss_diversity": None,
                 "loss_lambda": None,
+                "lambda_group": float(self.hag_lambda_group),
+                "lambda_balance": float(self.hag_lambda_balance),
+                "lambda_diversity": float(self.hag_lambda_diversity),
             }
 
         if self.loss_type == "ce":
@@ -611,14 +614,14 @@ class HAGMoE(nn.Module):
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_main = F.cross_entropy(logits, labels, weight=w)
         elif self.loss_type == "focal":
-            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype) if self.class_weights is not None else None
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
             loss_main = loss_fn(logits, labels)
         else:
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
 
         loss_group = None
-        if self.hag_use_group_loss and group_logits is not None:
+        if group_logits is not None:
             if self.labelid_to_groupid is None:
                 raise RuntimeError(
                     "hag_use_group_loss=True but labelid_to_groupid is not set. "
@@ -628,45 +631,58 @@ class HAGMoE(nn.Module):
             loss_group = F.cross_entropy(group_logits, group_target)
 
         loss_balance = None
-        if self.hag_use_balance_loss and p_expert_list is not None and len(p_expert_list) > 0:
+        if p_expert_list is not None and len(p_expert_list) > 0:
+            # Switch-style load balance: N * sum_i f_i * P_i
             losses = []
             for p_expert in p_expert_list:
+                if p_expert.numel() == 0:
+                    continue
                 p_mean = p_expert.mean(dim=0)
-                uniform = torch.full_like(p_mean, 1.0 / max(1, p_mean.numel()))
-                losses.append(F.mse_loss(p_mean, uniform))
-            loss_balance = sum(losses) / max(1, len(losses))
+                assign = torch.argmax(p_expert, dim=-1)
+                f = F.one_hot(assign, num_classes=p_expert.size(1)).float().mean(dim=0)
+                n_experts = p_expert.size(1)
+                losses.append(n_experts * torch.sum(f * p_mean))
+            if losses:
+                loss_balance = sum(losses) / len(losses)
 
         loss_diversity = None
-        if (
-            self.hag_use_diversity_loss
-            and expert_outs_list is not None
-            and len(expert_outs_list) > 0
-        ):
-            losses = []
-            for expert_stack in expert_outs_list:
-                if expert_stack.numel() == 0:
-                    continue
-                means = expert_stack.mean(dim=0)
-                means = F.normalize(means, p=2, dim=-1)
-                sim = torch.matmul(means, means.transpose(0, 1))
-                eye = torch.eye(sim.size(0), device=sim.device, dtype=sim.dtype)
-                off_diag = sim * (1.0 - eye)
-                losses.append((off_diag ** 2).mean())
-            if losses:
-                loss_diversity = sum(losses) / len(losses)
+        # Expert diversity via weight orthogonality within each group.
+        losses = []
+        eps = 1e-8
+        for group in self.experts:
+            if group is None or len(group) == 0:
+                continue
+            weights = []
+            for expert in group:
+                w = expert.fc1.weight
+                weights.append(w.reshape(-1))
+            if len(weights) < 2:
+                continue
+            W = torch.stack(weights, dim=0)
+            W = W / (W.norm(dim=1, keepdim=True) + eps)
+            G = W @ W.t()
+            eye = torch.eye(G.size(0), device=G.device, dtype=G.dtype)
+            losses.append(((G - eye) ** 2).sum())
+        if losses:
+            loss_diversity = sum(losses) / len(losses)
+
+        lambda_group = float(self.hag_lambda_group) if self.hag_use_group_loss else 0.0
+        lambda_balance = float(self.hag_lambda_balance) if self.hag_use_balance_loss else 0.0
+        lambda_diversity = float(self.hag_lambda_diversity) if self.hag_use_diversity_loss else 0.0
 
         aux_loss = torch.zeros((), device=logits.device)
         if loss_group is not None:
-            aux_loss = aux_loss + self.hag_lambda_group * loss_group
+            aux_loss = aux_loss + lambda_group * loss_group
         if loss_balance is not None:
-            aux_loss = aux_loss + self.hag_lambda_balance * loss_balance
+            aux_loss = aux_loss + lambda_balance * loss_balance
         if loss_diversity is not None:
-            aux_loss = aux_loss + self.hag_lambda_diversity * loss_diversity
+            aux_loss = aux_loss + lambda_diversity * loss_diversity
 
         loss = loss_main + aux_loss
 
         return {
             "loss": loss,
+            "loss_total": loss.detach(),
             "logits": logits,
             "loss_main": loss_main.detach(),
             "aux_loss": aux_loss.detach(),
@@ -674,6 +690,9 @@ class HAGMoE(nn.Module):
             "loss_balance": loss_balance.detach() if loss_balance is not None else None,
             "loss_diversity": loss_diversity.detach() if loss_diversity is not None else None,
             "loss_lambda": aux_loss.detach(),
+            "lambda_group": lambda_group,
+            "lambda_balance": lambda_balance,
+            "lambda_diversity": lambda_diversity,
         }
 
     def _collect_aux_loss(self):
