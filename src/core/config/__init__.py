@@ -11,7 +11,7 @@ class Config:
     model_name: str = "bert-base-uncased"
     train_path: str = "dataset/atsa/laptop14/train.json"
     test_path: str = "dataset/atsa/laptop14/test.json"
-    max_len_sent: int = 24
+    max_len_sent: int = 64
     max_len_term: int = 4
     num_labels: int = 3
     num_workers: int = 4
