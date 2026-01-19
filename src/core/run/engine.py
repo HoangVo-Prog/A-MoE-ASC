@@ -1,4 +1,6 @@
 from collections import deque
+import re
+import string
 from typing import Dict, Optional, Any
 
 import numpy as np
@@ -13,6 +15,14 @@ from src.core.utils.const import DEVICE
 from src.core.utils.general import cleanup_cuda, safe_float
 from src.core.utils.optim import build_optimizer_and_scheduler
 from src.core.utils.plotting import print_confusion_matrix
+
+
+def _normalize_aspect_text(s: str) -> str:
+    s = (s or "").lower()
+    s = s.replace("-", " ")
+    s = s.strip(string.punctuation)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _set_encoder_requires_grad(
@@ -141,12 +151,12 @@ def train_one_epoch(
 
     moe = bool(getattr(model, "_collect_aux_loss", False))
     hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
+    # Debug in main process to avoid num_workers dataset isolation.
+    debug_aspect_span = bool(getattr(cfg, "debug_aspect_span", False))
 
     dataset = getattr(dataloader, "dataset", None)
     if dataset is not None and hasattr(dataset, "reset_match_stats"):
         dataset.reset_match_stats()
-        if hag_mode and epoch_idx is not None and hasattr(dataset, "begin_debug"):
-            dataset.begin_debug(epoch=epoch_idx, split="train", batch_idx=0, max_samples=5)
 
     total_loss_sum = 0.0
     main_loss_sum = 0.0
@@ -175,9 +185,23 @@ def train_one_epoch(
     match_total = 0
     match_matched = 0
     match_mask_sum = 0.0
+    match_zero = 0
+    token_mismatch_count = 0
+    truncated_count = 0
+    not_found_raw_count = 0
+    unknown_count = 0
+
+    def _move_batch_to_device(batch_dict):
+        out = {}
+        for k, v in batch_dict.items():
+            if torch.is_tensor(v):
+                out[k] = v.to(DEVICE)
+            else:
+                out[k] = v
+        return out
 
     for step, batch in enumerate(dataloader):
-        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        batch = _move_batch_to_device(batch)
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -257,12 +281,39 @@ def train_one_epoch(
         all_preds.extend(preds.detach().cpu().tolist())
         all_labels.extend(batch["label"].detach().cpu().tolist())
 
-        if "aspect_mask_sent" in batch:
+        if debug_aspect_span and "aspect_mask_sent" in batch:
             mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
             matched = mask_sum > 0
             match_total += int(mask_sum.numel())
             match_matched += int(matched.sum().item())
             match_mask_sum += float(mask_sum[matched].sum().item())
+            match_zero += int((~matched).sum().item())
+
+            if "sentence_raw" in batch and "aspect_raw" in batch and "valid_len" in batch and "sep_idx" in batch:
+                sentence_raw = batch["sentence_raw"]
+                aspect_raw = batch["aspect_raw"]
+                valid_len = batch["valid_len"].detach().cpu().tolist()
+                sep_idx = batch["sep_idx"].detach().cpu().tolist()
+                max_len_sent = int(getattr(cfg, "max_len_sent", 0) or 0)
+                for i in range(len(mask_sum)):
+                    if matched[i]:
+                        continue
+                    try:
+                        sent_norm = _normalize_aspect_text(sentence_raw[i])
+                        asp_norm = _normalize_aspect_text(aspect_raw[i])
+                    except Exception:
+                        unknown_count += 1
+                        continue
+                    raw_found = asp_norm != "" and asp_norm in sent_norm
+                    truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
+                    if raw_found and truncated:
+                        truncated_count += 1
+                    elif raw_found:
+                        token_mismatch_count += 1
+                    else:
+                        not_found_raw_count += 1
+            else:
+                unknown_count += int((~matched).sum().item())
 
         if (not hag_mode) and step_print_i and (step > 0) and (step % step_print_i == 0):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
@@ -288,21 +339,14 @@ def train_one_epoch(
             except Exception as e:
                 print("Cannot print_moe_debug:", e)
 
-    if dataset is not None and hasattr(dataset, "update_match_stats"):
-        dataset.update_match_stats(
-            total=match_total,
-            matched=match_matched,
-            matched_mask_sum=match_mask_sum,
+    if debug_aspect_span:
+        print(
+            f"[AspectSpanDiag] split=train total={match_total} matched={match_matched} "
+            f"match_rate={(match_matched / max(1, match_total)) * 100:.2f}% "
+            f"token_mismatch={token_mismatch_count} truncated={truncated_count} "
+            f"not_found_raw={not_found_raw_count} unknown={unknown_count} "
+            f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
         )
-        stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
-        diag = dataset.get_diag_stats() if hasattr(dataset, "get_diag_stats") else None
-        if stats is not None and diag is not None:
-            print(
-                f"[AspectSpanDiag] split=train total={int(diag['total'])} matched={int(diag['matched'])} "
-                f"match_rate={stats['match_rate'] * 100:.2f}% token_mismatch={int(diag['token_mismatch'])} "
-                f"truncated={int(diag['truncated'])} not_found_raw={int(diag['not_found_raw'])} "
-                f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
-            )
 
     if moe:
         return {
@@ -332,6 +376,7 @@ def eval_model(
     return_confusion: bool = False,
     epoch_idx: Optional[int] = None,
     split: str = "eval",
+    debug_aspect_span: bool = False,
 ) -> Dict[str, Any]:
     model.eval()
     total_loss = 0.0
@@ -341,16 +386,34 @@ def eval_model(
     dataset = getattr(dataloader, "dataset", None)
     if dataset is not None and hasattr(dataset, "reset_match_stats"):
         dataset.reset_match_stats()
-        if model.__class__.__name__ == "HAGMoE" and epoch_idx is not None and hasattr(dataset, "begin_debug"):
-            dataset.begin_debug(epoch=epoch_idx, split=split, batch_idx=0, max_samples=5)
 
     match_total = 0
     match_matched = 0
     match_mask_sum = 0.0
 
+    debug_aspect_span = bool(debug_aspect_span)
+
+    match_total = 0
+    match_matched = 0
+    match_mask_sum = 0.0
+    match_zero = 0
+    token_mismatch_count = 0
+    truncated_count = 0
+    not_found_raw_count = 0
+    unknown_count = 0
+
     with torch.no_grad():
-        for batch in dataloader:
-            batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        def _move_batch_to_device(batch_dict):
+            out = {}
+            for k, v in batch_dict.items():
+                if torch.is_tensor(v):
+                    out[k] = v.to(DEVICE)
+                else:
+                    out[k] = v
+            return out
+
+        for batch_idx, batch in enumerate(dataloader):
+            batch = _move_batch_to_device(batch)
 
             if model.__class__.__name__ == "HAGMoE":
                 outputs = model(
@@ -390,6 +453,94 @@ def eval_model(
                 match_total += int(mask_sum.numel())
                 match_matched += int(matched.sum().item())
                 match_mask_sum += float(mask_sum[matched].sum().item())
+                match_zero += int((~matched).sum().item())
+
+                if "sentence_raw" in batch and "aspect_raw" in batch and "valid_len" in batch and "sep_idx" in batch:
+                    sentence_raw = batch["sentence_raw"]
+                    aspect_raw = batch["aspect_raw"]
+                    valid_len = batch["valid_len"].detach().cpu().tolist()
+                    sep_idx = batch["sep_idx"].detach().cpu().tolist()
+                    max_len_sent = int(
+                        batch["max_len_sent"][0].item()
+                        if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
+                        else 0
+                    )
+                    for i in range(len(mask_sum)):
+                        if matched[i]:
+                            continue
+                        try:
+                            sent_norm = _normalize_aspect_text(sentence_raw[i])
+                            asp_norm = _normalize_aspect_text(aspect_raw[i])
+                        except Exception:
+                            unknown_count += 1
+                            continue
+                        raw_found = asp_norm != "" and asp_norm in sent_norm
+                        truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
+                        if raw_found and truncated:
+                            truncated_count += 1
+                        elif raw_found:
+                            token_mismatch_count += 1
+                        else:
+                            not_found_raw_count += 1
+                else:
+                    unknown_count += int((~matched).sum().item())
+
+                if (
+                    debug_aspect_span
+                    and epoch_idx == 0
+                    and split in {"val", "test"}
+                    and batch_idx == 0
+                ):
+                    sentence_raw = batch.get("sentence_raw", [])
+                    aspect_raw = batch.get("aspect_raw", [])
+                    valid_len = (
+                        batch["valid_len"].detach().cpu().tolist()
+                        if "valid_len" in batch
+                        else [0] * len(mask_sum)
+                    )
+                    sep_idx = (
+                        batch["sep_idx"].detach().cpu().tolist()
+                        if "sep_idx" in batch
+                        else [-1] * len(mask_sum)
+                    )
+                    max_len_sent = int(
+                        batch["max_len_sent"][0].item()
+                        if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
+                        else 0
+                    )
+
+                    for i in range(min(10, len(mask_sum))):
+                        if mask_sum[i].item() > 0:
+                            continue
+                        try:
+                            sent_norm = _normalize_aspect_text(sentence_raw[i])
+                            asp_norm = _normalize_aspect_text(aspect_raw[i])
+                        except Exception:
+                            sent_norm = ""
+                            asp_norm = ""
+                        raw_idx = sent_norm.find(asp_norm) if asp_norm else -1
+                        raw_found = raw_idx >= 0
+                        truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
+                        if raw_found and truncated:
+                            reason = "TRUNCATED"
+                        elif raw_found:
+                            reason = "TOKEN_MISMATCH"
+                        else:
+                            reason = "NOT_FOUND_RAW"
+
+                        block = [
+                            f"[AspectSpanDebug] epoch={epoch_idx} split={split} batch={batch_idx} sample={i}",
+                            f"  max_len_sent={max_len_sent} valid_len={valid_len[i]} sep_idx={sep_idx[i]}",
+                            f"  sentence_raw: {sentence_raw[i] if i < len(sentence_raw) else ''}",
+                            f"  aspect_raw: {aspect_raw[i] if i < len(aspect_raw) else ''}",
+                            f"  sentence_norm: {sent_norm}",
+                            f"  aspect_norm: {asp_norm}",
+                            f"  aspect_mask_sum: {int(mask_sum[i].item())}",
+                            f"  raw_found_substring: {raw_found} idx={raw_idx}",
+                            f"  truncated: {truncated}",
+                            f"  fail_reason: {reason}",
+                        ]
+                        print("\n".join(block))
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
@@ -415,21 +566,14 @@ def eval_model(
     if return_confusion:
         out["confusion"] = cm  # raw counts [C, C]
 
-    if dataset is not None and hasattr(dataset, "update_match_stats"):
-        dataset.update_match_stats(
-            total=match_total,
-            matched=match_matched,
-            matched_mask_sum=match_mask_sum,
+    if debug_aspect_span:
+        print(
+            f"[AspectSpanDiag] split={split} total={match_total} matched={match_matched} "
+            f"match_rate={(match_matched / max(1, match_total)) * 100:.2f}% "
+            f"token_mismatch={token_mismatch_count} truncated={truncated_count} "
+            f"not_found_raw={not_found_raw_count} unknown={unknown_count} "
+            f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
         )
-        stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
-        diag = dataset.get_diag_stats() if hasattr(dataset, "get_diag_stats") else None
-        if stats is not None and diag is not None:
-            print(
-                f"[AspectSpanDiag] split={split} total={int(diag['total'])} matched={int(diag['matched'])} "
-                f"match_rate={stats['match_rate'] * 100:.2f}% token_mismatch={int(diag['token_mismatch'])} "
-                f"truncated={int(diag['truncated'])} not_found_raw={int(diag['not_found_raw'])} "
-                f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
-            )
     return out
 
 
@@ -608,6 +752,7 @@ def run_training_loop(
                 f1_average="macro",
                 epoch_idx=epoch,
                 split="val",
+                debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
             )
             history["val_loss"].append(float(val_metrics["loss"]))
             history["val_f1"].append(float(val_metrics["f1"]))
@@ -652,6 +797,7 @@ def run_training_loop(
                 f1_average="macro",
                 epoch_idx=epoch,
                 split="test",
+                debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
             )
             log += (
                 f"\nTest loss {test_metrics['loss']:.4f} "

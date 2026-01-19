@@ -248,10 +248,12 @@ class AspectSentimentDataset(Dataset):
         max_len_sent: int,
         max_len_term: int,
         label2id: Optional[Dict[str, int]] = None,
+        debug_aspect_span: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
+        self.debug_aspect_span = bool(debug_aspect_span)
 
         with open(json_path, "r", encoding="utf-8") as f:
             self.samples = json.load(f)
@@ -480,7 +482,7 @@ class AspectSentimentDataset(Dataset):
                 ]
                 print("\n".join(block))
 
-        return {
+        item_out = {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
@@ -490,6 +492,29 @@ class AspectSentimentDataset(Dataset):
             "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
+
+        if self.debug_aspect_span:
+            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sep_id = getattr(self.tokenizer, "sep_token_id", None)
+            sep_idx = -1
+            if sep_id is not None:
+                try:
+                    sep_idx = sent_ids.index(sep_id)
+                except ValueError:
+                    sep_idx = -1
+            valid_len = int(sent_enc["attention_mask"].sum().item())
+
+            item_out.update(
+                {
+                    "sentence_raw": sentence,
+                    "aspect_raw": term,
+                    "valid_len": torch.tensor(valid_len, dtype=torch.long),
+                    "sep_idx": torch.tensor(sep_idx, dtype=torch.long),
+                    "max_len_sent": torch.tensor(self.max_len_sent, dtype=torch.long),
+                }
+            )
+
+        return item_out
 
 
 def _majority_with_tiebreak(
@@ -525,6 +550,7 @@ class _SubsetAspectSentimentDataset(Dataset):
         max_len_sent: int,
         max_len_term: int,
         label2id: Dict[str, int],
+        debug_aspect_span: bool = False,
     ) -> None:
         self._base_samples = base_samples
         self._indices = indices
@@ -532,6 +558,7 @@ class _SubsetAspectSentimentDataset(Dataset):
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.label2id = label2id
+        self.debug_aspect_span = bool(debug_aspect_span)
 
         self._debug_span_prints = 0
         self._debug_span_limit = 0
@@ -748,7 +775,7 @@ class _SubsetAspectSentimentDataset(Dataset):
                 ]
                 print("\n".join(block))
 
-        return {
+        item_out = {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
@@ -758,6 +785,29 @@ class _SubsetAspectSentimentDataset(Dataset):
             "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
+
+        if self.debug_aspect_span:
+            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sep_id = getattr(self.tokenizer, "sep_token_id", None)
+            sep_idx = -1
+            if sep_id is not None:
+                try:
+                    sep_idx = sent_ids.index(sep_id)
+                except ValueError:
+                    sep_idx = -1
+            valid_len = int(sent_enc["attention_mask"].sum().item())
+
+            item_out.update(
+                {
+                    "sentence_raw": sentence,
+                    "aspect_raw": term,
+                    "valid_len": torch.tensor(valid_len, dtype=torch.long),
+                    "sep_idx": torch.tensor(sep_idx, dtype=torch.long),
+                    "max_len_sent": torch.tensor(self.max_len_sent, dtype=torch.long),
+                }
+            )
+
+        return item_out
 
     @property
     def base_indices(self) -> List[int]:
@@ -796,10 +846,12 @@ class AspectSentimentDatasetKFold(Dataset):
         seed: int,
         shuffle: bool = True,
         label2id: Optional[Dict[str, int]] = None,
+        debug_aspect_span: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
+        self.debug_aspect_span = bool(debug_aspect_span)
 
         self.k_folds = int(k_folds)
         self.seed = int(seed)
@@ -1041,7 +1093,7 @@ class AspectSentimentDatasetKFold(Dataset):
                 ]
                 print("\n".join(block))
 
-        return {
+        item_out = {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
@@ -1051,6 +1103,29 @@ class AspectSentimentDatasetKFold(Dataset):
             "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
+
+        if self.debug_aspect_span:
+            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sep_id = getattr(self.tokenizer, "sep_token_id", None)
+            sep_idx = -1
+            if sep_id is not None:
+                try:
+                    sep_idx = sent_ids.index(sep_id)
+                except ValueError:
+                    sep_idx = -1
+            valid_len = int(sent_enc["attention_mask"].sum().item())
+
+            item_out.update(
+                {
+                    "sentence_raw": sentence,
+                    "aspect_raw": term,
+                    "valid_len": torch.tensor(valid_len, dtype=torch.long),
+                    "sep_idx": torch.tensor(sep_idx, dtype=torch.long),
+                    "max_len_sent": torch.tensor(self.max_len_sent, dtype=torch.long),
+                }
+            )
+
+        return item_out
 
     def num_folds(self) -> int:
         return len(self._folds)
@@ -1072,6 +1147,7 @@ class AspectSentimentDatasetKFold(Dataset):
             max_len_sent=self.max_len_sent,
             max_len_term=self.max_len_term,
             label2id=self.label2id,
+            debug_aspect_span=self.debug_aspect_span,
         )
         val_ds = _SubsetAspectSentimentDataset(
             base_samples=self.samples,
@@ -1080,6 +1156,7 @@ class AspectSentimentDatasetKFold(Dataset):
             max_len_sent=self.max_len_sent,
             max_len_term=self.max_len_term,
             label2id=self.label2id,
+            debug_aspect_span=self.debug_aspect_span,
         )
         return train_ds, val_ds
 
