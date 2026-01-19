@@ -614,7 +614,7 @@ class HAGMoE(nn.Module):
             w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_main = F.cross_entropy(logits, labels, weight=w)
         elif self.loss_type == "focal":
-            w = self.class_weights.to(device=logits.device, dtype=logits.dtype) if self.class_weights is not None else None
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
             loss_main = loss_fn(logits, labels)
         else:
