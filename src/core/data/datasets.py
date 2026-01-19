@@ -37,8 +37,11 @@ def _compute_aspect_span(
     max_len_sent: int,
     max_len_term: int,
 ):
+    sentence_norm = _normalize_text(sentence)
+    term_norm = _normalize_text(term)
+
     term_enc = tokenizer(
-        term,
+        term_norm,
         truncation=True,
         padding="max_length",
         max_length=max_len_term,
@@ -53,7 +56,22 @@ def _compute_aspect_span(
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, [], "NOT_FOUND_RAW", False
+        return (
+            aspect_start,
+            aspect_end,
+            aspect_mask,
+            [],
+            "NOT_FOUND_RAW",
+            False,
+            {
+                "sentence_norm": sentence_norm,
+                "term_norm": term_norm,
+                "content_ids": [],
+                "term_ids": [],
+                "valid_len": valid_len,
+                "sep_idx": -1,
+            },
+        )
 
     # Match aspect token IDs inside the sentence content region [CLS] ... [SEP].
     sep_id = getattr(tokenizer, "sep_token_id", None)
@@ -71,17 +89,6 @@ def _compute_aspect_span(
 
     content_ids = sent_ids[content_start:content_end]
 
-    # Normalize aspect text to reduce hyphen/punctuation mismatches.
-    term_norm = _normalize_text(term)
-    term_enc = tokenizer(
-        term_norm,
-        truncation=True,
-        padding="max_length",
-        max_length=max_len_term,
-        return_tensors="pt",
-        add_special_tokens=False,
-    )
-
     term_ids = term_enc["input_ids"].squeeze(0).tolist()
     term_mask = term_enc["attention_mask"].squeeze(0).tolist()
     term_len = int(sum(term_mask))
@@ -89,8 +96,7 @@ def _compute_aspect_span(
 
     match_idx = _find_subsequence(content_ids, term_ids)
     if match_idx < 0 or term_len <= 0:
-        sent_norm = _normalize_text(sentence)
-        raw_found = term_norm != "" and term_norm in sent_norm
+        raw_found = term_norm != "" and term_norm in sentence_norm
         truncated = (valid_len >= max_len_sent) or (sep_idx >= max_len_sent - 1)
         if not raw_found:
             fail_reason = "NOT_FOUND_RAW"
@@ -101,7 +107,22 @@ def _compute_aspect_span(
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, [], fail_reason, False
+        return (
+            aspect_start,
+            aspect_end,
+            aspect_mask,
+            [],
+            fail_reason,
+            False,
+            {
+                "sentence_norm": sentence_norm,
+                "term_norm": term_norm,
+                "content_ids": content_ids,
+                "term_ids": term_ids,
+                "valid_len": valid_len,
+                "sep_idx": sep_idx,
+            },
+        )
 
     aspect_start = content_start + match_idx
     aspect_end = aspect_start + term_len
@@ -109,7 +130,22 @@ def _compute_aspect_span(
         aspect_start = 0
         aspect_end = 0
         aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return aspect_start, aspect_end, aspect_mask, [], "TRUNCATED", False
+        return (
+            aspect_start,
+            aspect_end,
+            aspect_mask,
+            [],
+            "TRUNCATED",
+            False,
+            {
+                "sentence_norm": sentence_norm,
+                "term_norm": term_norm,
+                "content_ids": content_ids,
+                "term_ids": term_ids,
+                "valid_len": valid_len,
+                "sep_idx": sep_idx,
+            },
+        )
 
     aspect_end = min(aspect_end, max_len_sent)
     aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
@@ -117,7 +153,22 @@ def _compute_aspect_span(
         aspect_mask[aspect_start:aspect_end] = 1
 
     matched_tokens = tokenizer.convert_ids_to_tokens(sent_ids[aspect_start:aspect_end])
-    return aspect_start, aspect_end, aspect_mask, matched_tokens, "OK", True
+    return (
+        aspect_start,
+        aspect_end,
+        aspect_mask,
+        matched_tokens,
+        "OK",
+        True,
+        {
+            "sentence_norm": sentence_norm,
+            "term_norm": term_norm,
+            "content_ids": content_ids,
+            "term_ids": term_ids,
+            "valid_len": valid_len,
+            "sep_idx": sep_idx,
+        },
+    )
 
 
 class AspectSentimentDataset(Dataset):
@@ -151,10 +202,14 @@ class AspectSentimentDataset(Dataset):
         self._debug_epoch = None
         self._debug_split = ""
         self._debug_batch_idx = 0
+        self._debug_seen = 0
 
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -165,11 +220,15 @@ class AspectSentimentDataset(Dataset):
         self._debug_epoch = int(epoch)
         self._debug_split = str(split)
         self._debug_batch_idx = int(batch_idx)
+        self._debug_seen = 0
 
     def reset_match_stats(self) -> None:
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
     def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
         self.total_samples += int(total)
@@ -189,6 +248,16 @@ class AspectSentimentDataset(Dataset):
             else 0.0
         )
         return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
+
+    def get_diag_stats(self) -> Dict[str, float]:
+        return {
+            "total": float(self.total_samples),
+            "matched": float(self.matched_samples),
+            "match_rate": self.match_rate,
+            "token_mismatch": float(self.token_mismatch_count),
+            "truncated": float(self.truncated_count),
+            "not_found_raw": float(self.not_found_raw_count),
+        }
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
@@ -212,7 +281,15 @@ class AspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
+        (
+            aspect_start,
+            aspect_end,
+            aspect_mask_sent,
+            matched_tokens,
+            fail_reason,
+            matched,
+            diag,
+        ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
@@ -221,19 +298,115 @@ class AspectSentimentDataset(Dataset):
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < self._debug_span_limit:
-            self._debug_span_prints += 1
-            block = [
-                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
-                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
-                f"  sentence: {sentence}",
-                f"  aspect: {term}",
-                f"  aspect_start/end: {aspect_start}/{aspect_end}",
-                f"  matched_tokens: {matched_tokens}",
-                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
-                f"  fail_reason: {fail_reason}",
-            ]
-            print("\n".join(block))
+        self.total_samples += 1
+        if matched:
+            self.matched_samples += 1
+            self.matched_mask_sum += float(aspect_mask_sent.sum().item())
+        else:
+            if fail_reason == "TOKEN_MISMATCH":
+                self.token_mismatch_count += 1
+            elif fail_reason == "TRUNCATED":
+                self.truncated_count += 1
+            elif fail_reason == "NOT_FOUND_RAW":
+                self.not_found_raw_count += 1
+
+        if self._debug_epoch is not None:
+            sample_idx = self._debug_seen
+            self._debug_seen += 1
+
+            if (
+                self._debug_epoch == 0
+                and self._debug_split in {"val", "test"}
+                and self._debug_batch_idx == 0
+                and sample_idx < 10
+                and fail_reason == "TOKEN_MISMATCH"
+            ):
+                sentence_norm = diag.get("sentence_norm", "")
+                term_norm = diag.get("term_norm", "")
+                content_ids = diag.get("content_ids", [])
+                term_ids = diag.get("term_ids", [])
+                valid_len = diag.get("valid_len", 0)
+                sep_idx = diag.get("sep_idx", -1)
+
+                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+
+                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                id_match_idx = _find_subsequence(content_ids, term_ids)
+
+                sent_piece_tokens_view = (
+                    sent_piece_tokens
+                    if len(sent_piece_tokens) <= 40
+                    else (sent_piece_tokens[:40] + ["..."] + sent_piece_tokens[-10:])
+                )
+                content_ids_view = (
+                    content_ids
+                    if len(content_ids) <= 80
+                    else (content_ids[:60] + ["..."] + content_ids[-20:])
+                )
+                decoded_content = self.tokenizer.decode(content_ids)[:200]
+                decoded_term = self.tokenizer.decode(term_ids)
+
+                raw_found_idx = -1
+                raw_found = False
+                if term_norm:
+                    raw_found_idx = sentence_norm.find(term_norm)
+                    raw_found = raw_found_idx >= 0
+
+                token_found = token_match_idx >= 0
+                reason = ""
+                if raw_found and token_found and id_match_idx < 0:
+                    reason = "ID_MAPPING_OR_SPECIAL_TOKENS"
+                elif raw_found and not token_found:
+                    reason = "TOKENIZATION_SPLIT_DIFF"
+                elif not raw_found:
+                    reason = "NORM_MISMATCH_OR_TEXT_DIFF"
+
+                if valid_len >= self.max_len_sent and raw_found:
+                    reason = reason + "+POSSIBLE_TRUNCATION" if reason else "POSSIBLE_TRUNCATION"
+
+                def _special_chars_view(s: str) -> str:
+                    out = []
+                    for ch in s:
+                        if not (ch.isalnum() or ch.isspace()):
+                            out.append(f"{ch}->U+{ord(ch):04X}")
+                    return " ".join(out)
+
+                sentence_raw_lower = sentence.lower()
+                aspect_raw_lower = term.lower()
+                raw_idx_in_sentence = sentence_raw_lower.find(aspect_raw_lower)
+                raw_substring = (
+                    sentence[raw_idx_in_sentence : raw_idx_in_sentence + len(term)]
+                    if raw_idx_in_sentence >= 0
+                    else ""
+                )
+
+                token_span = ""
+                if token_found:
+                    token_span = sent_piece_tokens[token_match_idx : token_match_idx + len(term_piece_tokens)]
+
+                block = [
+                    f"[HAGMoE span diag] epoch={self._debug_epoch} split={self._debug_split} "
+                    f"batch={self._debug_batch_idx} sample={sample_idx}",
+                    f"  max_len_sent={self.max_len_sent} valid_len={valid_len} sep_idx={sep_idx}",
+                    f"  sentence_raw: {sentence}",
+                    f"  aspect_raw: {term}",
+                    f"  sentence_norm: {sentence_norm}",
+                    f"  aspect_norm: {term_norm}",
+                    f"  sent_piece_tokens: {sent_piece_tokens_view}",
+                    f"  term_piece_tokens: {term_piece_tokens}",
+                    f"  sent_piece_ids: {content_ids_view}",
+                    f"  term_piece_ids: {term_ids}",
+                    f"  decoded_content_snippet: {decoded_content}",
+                    f"  decoded_term: {decoded_term}",
+                    f"  raw_found_substring: {raw_found} idx={raw_found_idx}",
+                    f"  token_found_subsequence: {token_found} idx={token_match_idx} span={token_span}",
+                    f"  id_found_subsequence: {id_match_idx}",
+                    f"  aspect_raw_specials: {_special_chars_view(term)}",
+                    f"  sentence_raw_specials: {_special_chars_view(raw_substring)}",
+                    f"  suggested_reason: {reason}",
+                ]
+                print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
@@ -293,10 +466,14 @@ class _SubsetAspectSentimentDataset(Dataset):
         self._debug_epoch = None
         self._debug_split = ""
         self._debug_batch_idx = 0
+        self._debug_seen = 0
 
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
     def __len__(self) -> int:
         return len(self._indices)
@@ -307,11 +484,15 @@ class _SubsetAspectSentimentDataset(Dataset):
         self._debug_epoch = int(epoch)
         self._debug_split = str(split)
         self._debug_batch_idx = int(batch_idx)
+        self._debug_seen = 0
 
     def reset_match_stats(self) -> None:
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
     def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
         self.total_samples += int(total)
@@ -331,6 +512,16 @@ class _SubsetAspectSentimentDataset(Dataset):
             else 0.0
         )
         return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
+
+    def get_diag_stats(self) -> Dict[str, float]:
+        return {
+            "total": float(self.total_samples),
+            "matched": float(self.matched_samples),
+            "match_rate": self.match_rate,
+            "token_mismatch": float(self.token_mismatch_count),
+            "truncated": float(self.truncated_count),
+            "not_found_raw": float(self.not_found_raw_count),
+        }
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         real_idx = self._indices[idx]
@@ -355,7 +546,15 @@ class _SubsetAspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
+        (
+            aspect_start,
+            aspect_end,
+            aspect_mask_sent,
+            matched_tokens,
+            fail_reason,
+            matched,
+            diag,
+        ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
@@ -364,19 +563,115 @@ class _SubsetAspectSentimentDataset(Dataset):
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < self._debug_span_limit:
-            self._debug_span_prints += 1
-            block = [
-                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
-                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
-                f"  sentence: {sentence}",
-                f"  aspect: {term}",
-                f"  aspect_start/end: {aspect_start}/{aspect_end}",
-                f"  matched_tokens: {matched_tokens}",
-                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
-                f"  fail_reason: {fail_reason}",
-            ]
-            print("\n".join(block))
+        self.total_samples += 1
+        if matched:
+            self.matched_samples += 1
+            self.matched_mask_sum += float(aspect_mask_sent.sum().item())
+        else:
+            if fail_reason == "TOKEN_MISMATCH":
+                self.token_mismatch_count += 1
+            elif fail_reason == "TRUNCATED":
+                self.truncated_count += 1
+            elif fail_reason == "NOT_FOUND_RAW":
+                self.not_found_raw_count += 1
+
+        if self._debug_epoch is not None:
+            sample_idx = self._debug_seen
+            self._debug_seen += 1
+
+            if (
+                self._debug_epoch == 0
+                and self._debug_split in {"val", "test"}
+                and self._debug_batch_idx == 0
+                and sample_idx < 10
+                and fail_reason == "TOKEN_MISMATCH"
+            ):
+                sentence_norm = diag.get("sentence_norm", "")
+                term_norm = diag.get("term_norm", "")
+                content_ids = diag.get("content_ids", [])
+                term_ids = diag.get("term_ids", [])
+                valid_len = diag.get("valid_len", 0)
+                sep_idx = diag.get("sep_idx", -1)
+
+                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+
+                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                id_match_idx = _find_subsequence(content_ids, term_ids)
+
+                sent_piece_tokens_view = (
+                    sent_piece_tokens
+                    if len(sent_piece_tokens) <= 40
+                    else (sent_piece_tokens[:40] + ["..."] + sent_piece_tokens[-10:])
+                )
+                content_ids_view = (
+                    content_ids
+                    if len(content_ids) <= 80
+                    else (content_ids[:60] + ["..."] + content_ids[-20:])
+                )
+                decoded_content = self.tokenizer.decode(content_ids)[:200]
+                decoded_term = self.tokenizer.decode(term_ids)
+
+                raw_found_idx = -1
+                raw_found = False
+                if term_norm:
+                    raw_found_idx = sentence_norm.find(term_norm)
+                    raw_found = raw_found_idx >= 0
+
+                token_found = token_match_idx >= 0
+                reason = ""
+                if raw_found and token_found and id_match_idx < 0:
+                    reason = "ID_MAPPING_OR_SPECIAL_TOKENS"
+                elif raw_found and not token_found:
+                    reason = "TOKENIZATION_SPLIT_DIFF"
+                elif not raw_found:
+                    reason = "NORM_MISMATCH_OR_TEXT_DIFF"
+
+                if valid_len >= self.max_len_sent and raw_found:
+                    reason = reason + "+POSSIBLE_TRUNCATION" if reason else "POSSIBLE_TRUNCATION"
+
+                def _special_chars_view(s: str) -> str:
+                    out = []
+                    for ch in s:
+                        if not (ch.isalnum() or ch.isspace()):
+                            out.append(f"{ch}->U+{ord(ch):04X}")
+                    return " ".join(out)
+
+                sentence_raw_lower = sentence.lower()
+                aspect_raw_lower = term.lower()
+                raw_idx_in_sentence = sentence_raw_lower.find(aspect_raw_lower)
+                raw_substring = (
+                    sentence[raw_idx_in_sentence : raw_idx_in_sentence + len(term)]
+                    if raw_idx_in_sentence >= 0
+                    else ""
+                )
+
+                token_span = ""
+                if token_found:
+                    token_span = sent_piece_tokens[token_match_idx : token_match_idx + len(term_piece_tokens)]
+
+                block = [
+                    f"[HAGMoE span diag] epoch={self._debug_epoch} split={self._debug_split} "
+                    f"batch={self._debug_batch_idx} sample={sample_idx}",
+                    f"  max_len_sent={self.max_len_sent} valid_len={valid_len} sep_idx={sep_idx}",
+                    f"  sentence_raw: {sentence}",
+                    f"  aspect_raw: {term}",
+                    f"  sentence_norm: {sentence_norm}",
+                    f"  aspect_norm: {term_norm}",
+                    f"  sent_piece_tokens: {sent_piece_tokens_view}",
+                    f"  term_piece_tokens: {term_piece_tokens}",
+                    f"  sent_piece_ids: {content_ids_view}",
+                    f"  term_piece_ids: {term_ids}",
+                    f"  decoded_content_snippet: {decoded_content}",
+                    f"  decoded_term: {decoded_term}",
+                    f"  raw_found_substring: {raw_found} idx={raw_found_idx}",
+                    f"  token_found_subsequence: {token_found} idx={token_match_idx} span={token_span}",
+                    f"  id_found_subsequence: {id_match_idx}",
+                    f"  aspect_raw_specials: {_special_chars_view(term)}",
+                    f"  sentence_raw_specials: {_special_chars_view(raw_substring)}",
+                    f"  suggested_reason: {reason}",
+                ]
+                print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
@@ -449,10 +744,14 @@ class AspectSentimentDatasetKFold(Dataset):
         self._debug_epoch = None
         self._debug_split = ""
         self._debug_batch_idx = 0
+        self._debug_seen = 0
 
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
         (
             self._sent_list,
@@ -477,11 +776,15 @@ class AspectSentimentDatasetKFold(Dataset):
         self._debug_epoch = int(epoch)
         self._debug_split = str(split)
         self._debug_batch_idx = int(batch_idx)
+        self._debug_seen = 0
 
     def reset_match_stats(self) -> None:
         self.total_samples = 0
         self.matched_samples = 0
         self.matched_mask_sum = 0.0
+        self.token_mismatch_count = 0
+        self.truncated_count = 0
+        self.not_found_raw_count = 0
 
     def update_match_stats(self, *, total: int, matched: int, matched_mask_sum: float) -> None:
         self.total_samples += int(total)
@@ -501,6 +804,16 @@ class AspectSentimentDatasetKFold(Dataset):
             else 0.0
         )
         return {"match_rate": self.match_rate, "avg_mask_sum": avg_mask}
+
+    def get_diag_stats(self) -> Dict[str, float]:
+        return {
+            "total": float(self.total_samples),
+            "matched": float(self.matched_samples),
+            "match_rate": self.match_rate,
+            "token_mismatch": float(self.token_mismatch_count),
+            "truncated": float(self.truncated_count),
+            "not_found_raw": float(self.not_found_raw_count),
+        }
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.samples[idx]
@@ -523,7 +836,15 @@ class AspectSentimentDatasetKFold(Dataset):
             return_tensors="pt",
         )
 
-        aspect_start, aspect_end, aspect_mask_sent, matched_tokens, fail_reason, matched = _compute_aspect_span(
+        (
+            aspect_start,
+            aspect_end,
+            aspect_mask_sent,
+            matched_tokens,
+            fail_reason,
+            matched,
+            diag,
+        ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
             sent_enc=sent_enc,
             term=term,
@@ -532,19 +853,115 @@ class AspectSentimentDatasetKFold(Dataset):
             max_len_term=self.max_len_term,
         )
 
-        if self._debug_span_prints < self._debug_span_limit:
-            self._debug_span_prints += 1
-            block = [
-                f"[HAGMoE span debug] epoch={self._debug_epoch} split={self._debug_split} "
-                f"batch={self._debug_batch_idx} sample={self._debug_span_prints - 1}",
-                f"  sentence: {sentence}",
-                f"  aspect: {term}",
-                f"  aspect_start/end: {aspect_start}/{aspect_end}",
-                f"  matched_tokens: {matched_tokens}",
-                f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}",
-                f"  fail_reason: {fail_reason}",
-            ]
-            print("\n".join(block))
+        self.total_samples += 1
+        if matched:
+            self.matched_samples += 1
+            self.matched_mask_sum += float(aspect_mask_sent.sum().item())
+        else:
+            if fail_reason == "TOKEN_MISMATCH":
+                self.token_mismatch_count += 1
+            elif fail_reason == "TRUNCATED":
+                self.truncated_count += 1
+            elif fail_reason == "NOT_FOUND_RAW":
+                self.not_found_raw_count += 1
+
+        if self._debug_epoch is not None:
+            sample_idx = self._debug_seen
+            self._debug_seen += 1
+
+            if (
+                self._debug_epoch == 0
+                and self._debug_split in {"val", "test"}
+                and self._debug_batch_idx == 0
+                and sample_idx < 10
+                and fail_reason == "TOKEN_MISMATCH"
+            ):
+                sentence_norm = diag.get("sentence_norm", "")
+                term_norm = diag.get("term_norm", "")
+                content_ids = diag.get("content_ids", [])
+                term_ids = diag.get("term_ids", [])
+                valid_len = diag.get("valid_len", 0)
+                sep_idx = diag.get("sep_idx", -1)
+
+                sent_piece_tokens = self.tokenizer.tokenize(sentence_norm or sentence)
+                term_piece_tokens = self.tokenizer.tokenize(term_norm or term)
+
+                token_match_idx = _find_subsequence(sent_piece_tokens, term_piece_tokens)
+                id_match_idx = _find_subsequence(content_ids, term_ids)
+
+                sent_piece_tokens_view = (
+                    sent_piece_tokens
+                    if len(sent_piece_tokens) <= 40
+                    else (sent_piece_tokens[:40] + ["..."] + sent_piece_tokens[-10:])
+                )
+                content_ids_view = (
+                    content_ids
+                    if len(content_ids) <= 80
+                    else (content_ids[:60] + ["..."] + content_ids[-20:])
+                )
+                decoded_content = self.tokenizer.decode(content_ids)[:200]
+                decoded_term = self.tokenizer.decode(term_ids)
+
+                raw_found_idx = -1
+                raw_found = False
+                if term_norm:
+                    raw_found_idx = sentence_norm.find(term_norm)
+                    raw_found = raw_found_idx >= 0
+
+                token_found = token_match_idx >= 0
+                reason = ""
+                if raw_found and token_found and id_match_idx < 0:
+                    reason = "ID_MAPPING_OR_SPECIAL_TOKENS"
+                elif raw_found and not token_found:
+                    reason = "TOKENIZATION_SPLIT_DIFF"
+                elif not raw_found:
+                    reason = "NORM_MISMATCH_OR_TEXT_DIFF"
+
+                if valid_len >= self.max_len_sent and raw_found:
+                    reason = reason + "+POSSIBLE_TRUNCATION" if reason else "POSSIBLE_TRUNCATION"
+
+                def _special_chars_view(s: str) -> str:
+                    out = []
+                    for ch in s:
+                        if not (ch.isalnum() or ch.isspace()):
+                            out.append(f"{ch}->U+{ord(ch):04X}")
+                    return " ".join(out)
+
+                sentence_raw_lower = sentence.lower()
+                aspect_raw_lower = term.lower()
+                raw_idx_in_sentence = sentence_raw_lower.find(aspect_raw_lower)
+                raw_substring = (
+                    sentence[raw_idx_in_sentence : raw_idx_in_sentence + len(term)]
+                    if raw_idx_in_sentence >= 0
+                    else ""
+                )
+
+                token_span = ""
+                if token_found:
+                    token_span = sent_piece_tokens[token_match_idx : token_match_idx + len(term_piece_tokens)]
+
+                block = [
+                    f"[HAGMoE span diag] epoch={self._debug_epoch} split={self._debug_split} "
+                    f"batch={self._debug_batch_idx} sample={sample_idx}",
+                    f"  max_len_sent={self.max_len_sent} valid_len={valid_len} sep_idx={sep_idx}",
+                    f"  sentence_raw: {sentence}",
+                    f"  aspect_raw: {term}",
+                    f"  sentence_norm: {sentence_norm}",
+                    f"  aspect_norm: {term_norm}",
+                    f"  sent_piece_tokens: {sent_piece_tokens_view}",
+                    f"  term_piece_tokens: {term_piece_tokens}",
+                    f"  sent_piece_ids: {content_ids_view}",
+                    f"  term_piece_ids: {term_ids}",
+                    f"  decoded_content_snippet: {decoded_content}",
+                    f"  decoded_term: {decoded_term}",
+                    f"  raw_found_substring: {raw_found} idx={raw_found_idx}",
+                    f"  token_found_subsequence: {token_found} idx={token_match_idx} span={token_span}",
+                    f"  id_found_subsequence: {id_match_idx}",
+                    f"  aspect_raw_specials: {_special_chars_view(term)}",
+                    f"  sentence_raw_specials: {_special_chars_view(raw_substring)}",
+                    f"  suggested_reason: {reason}",
+                ]
+                print("\n".join(block))
 
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),

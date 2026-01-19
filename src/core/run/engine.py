@@ -295,9 +295,12 @@ def train_one_epoch(
             matched_mask_sum=match_mask_sum,
         )
         stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
-        if stats is not None:
+        diag = dataset.get_diag_stats() if hasattr(dataset, "get_diag_stats") else None
+        if stats is not None and diag is not None:
             print(
-                f"[AspectSpan] split=train match_rate={stats['match_rate'] * 100:.2f}% "
+                f"[AspectSpanDiag] split=train total={int(diag['total'])} matched={int(diag['matched'])} "
+                f"match_rate={stats['match_rate'] * 100:.2f}% token_mismatch={int(diag['token_mismatch'])} "
+                f"truncated={int(diag['truncated'])} not_found_raw={int(diag['not_found_raw'])} "
                 f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
             )
 
@@ -419,9 +422,12 @@ def eval_model(
             matched_mask_sum=match_mask_sum,
         )
         stats = dataset.get_match_stats() if hasattr(dataset, "get_match_stats") else None
-        if stats is not None:
+        diag = dataset.get_diag_stats() if hasattr(dataset, "get_diag_stats") else None
+        if stats is not None and diag is not None:
             print(
-                f"[AspectSpan] split={split} match_rate={stats['match_rate'] * 100:.2f}% "
+                f"[AspectSpanDiag] split={split} total={int(diag['total'])} matched={int(diag['matched'])} "
+                f"match_rate={stats['match_rate'] * 100:.2f}% token_mismatch={int(diag['token_mismatch'])} "
+                f"truncated={int(diag['truncated'])} not_found_raw={int(diag['not_found_raw'])} "
                 f"avg_mask_sum={stats['avg_mask_sum']:.2f}"
             )
     return out
