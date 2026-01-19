@@ -170,6 +170,7 @@ class HAGMoE(nn.Module):
         h_sent_tokens: torch.Tensor,
         attention_mask_sent: torch.Tensor | None,
         h_aspect: torch.Tensor,
+        aspect_mask_sent: torch.Tensor | None,
     ) -> torch.Tensor:
         q = self.opinion_q(h_sent_tokens)
         scores = (q * h_aspect.unsqueeze(1)).sum(dim=-1) / math.sqrt(q.size(-1))
@@ -178,7 +179,10 @@ class HAGMoE(nn.Module):
             pad_mask = attention_mask_sent.eq(0)
             scores = scores.masked_fill(pad_mask, torch.finfo(scores.dtype).min)
 
-        # TODO: Aspect span positions are not available in the dataset; mask aspect tokens here when spans exist.
+        if aspect_mask_sent is not None:
+            aspect_mask = aspect_mask_sent.to(dtype=torch.bool)
+            scores = scores.masked_fill(aspect_mask, torch.finfo(scores.dtype).min)
+
         attn = torch.softmax(scores, dim=-1)
         h_opinion = torch.bmm(attn.unsqueeze(1), h_sent_tokens).squeeze(1)
         return h_opinion
@@ -190,9 +194,8 @@ class HAGMoE(nn.Module):
         h_aspect: torch.Tensor,
         h_opinion: torch.Tensor,
         out_sent,
-        out_term,
         attention_mask_sent: torch.Tensor,
-        attention_mask_term: torch.Tensor,
+        aspect_mask_sent: torch.Tensor | None,
         fusion_method: str,
     ) -> torch.Tensor:
         fusion_method = fusion_method.lower().strip()
@@ -215,7 +218,7 @@ class HAGMoE(nn.Module):
         elif fusion_method == "mul":
             h_fused = rep_sent * h_aspect
         elif fusion_method == "cross":
-            q = out_term.last_hidden_state[:, 0:1, :]
+            q = h_aspect.unsqueeze(1)
             kpm = attention_mask_sent.eq(0)
             attn_out, _ = self.cross_attn(
                 q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
@@ -229,21 +232,21 @@ class HAGMoE(nn.Module):
                 self.bilinear_proj_sent(rep_sent) * self.bilinear_proj_term(h_aspect)
             )
         elif fusion_method == "coattn":
-            q_term = out_term.last_hidden_state[:, 0:1, :]
+            q_term = h_aspect.unsqueeze(1)
             q_sent = out_sent.last_hidden_state[:, 0:1, :]
             kpm_sent = attention_mask_sent.eq(0)
-            kpm_term = attention_mask_term.eq(0)
+            kpm_term = aspect_mask_sent.eq(0) if aspect_mask_sent is not None else None
 
             term_ctx, _ = self.coattn_term_to_sent(
                 q_term, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_sent
             )
             sent_ctx, _ = self.coattn_sent_to_term(
-                q_sent, out_term.last_hidden_state, out_term.last_hidden_state, key_padding_mask=kpm_term
+                q_sent, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm_term
             )
             h_fused = term_ctx.squeeze(1) + sent_ctx.squeeze(1)
         elif fusion_method == "late_interaction":
             sent_tok = out_sent.last_hidden_state
-            term_tok = out_term.last_hidden_state
+            term_tok = out_sent.last_hidden_state
 
             sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
             term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
@@ -254,10 +257,13 @@ class HAGMoE(nn.Module):
                 sim = sim.masked_fill(mask.bool(), torch.finfo(sim.dtype).min)
 
             max_sim = sim.max(dim=-1).values
-            if attention_mask_term is not None:
-                term_valid = attention_mask_term.float()
+            if aspect_mask_sent is not None:
+                term_valid = aspect_mask_sent.float()
                 denom = term_valid.sum(dim=1).clamp_min(1.0)
                 pooled = (max_sim * term_valid).sum(dim=1) / denom
+                empty = term_valid.sum(dim=1).eq(0)
+                if torch.any(empty):
+                    pooled = torch.where(empty, torch.ones_like(pooled), pooled)
             else:
                 pooled = max_sim.mean(dim=1)
 
@@ -270,6 +276,106 @@ class HAGMoE(nn.Module):
 
     def route_group(self, h_fused: torch.Tensor) -> torch.Tensor:
         return self.group_router(h_fused)
+
+    def _pool_aspect(
+        self,
+        hidden_states: torch.Tensor,
+        aspect_mask: torch.Tensor | None,
+        h_sent: torch.Tensor,
+    ) -> torch.Tensor:
+        if aspect_mask is None:
+            return h_sent
+
+        mask = aspect_mask.to(dtype=hidden_states.dtype)
+        if mask.dim() == 1:
+            mask = mask.unsqueeze(0)
+        if mask.size(1) != hidden_states.size(1):
+            mask = mask[:, : hidden_states.size(1)]
+
+        denom = mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        pooled = (hidden_states * mask.unsqueeze(-1)).sum(dim=1) / denom
+
+        has_span = mask.sum(dim=1) > 0
+        if torch.any(~has_span):
+            pooled = torch.where(has_span.unsqueeze(-1), pooled, h_sent)
+
+        return pooled
+
+    def _build_aspect_mask(
+        self,
+        *,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        aspect_start: torch.Tensor | None,
+        aspect_end: torch.Tensor | None,
+        aspect_mask_sent: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if aspect_mask_sent is not None:
+            return aspect_mask_sent
+
+        if aspect_start is not None and aspect_end is not None:
+            start = aspect_start.to(device=input_ids_sent.device)
+            end = aspect_end.to(device=input_ids_sent.device)
+            if start.dim() == 0:
+                start = start.unsqueeze(0)
+            if end.dim() == 0:
+                end = end.unsqueeze(0)
+            L = input_ids_sent.size(1)
+            positions = torch.arange(L, device=input_ids_sent.device).unsqueeze(0)
+            mask = (positions >= start.unsqueeze(1)) & (positions < end.unsqueeze(1))
+            return mask.to(dtype=torch.long)
+
+        if input_ids_term is None:
+            return None
+
+        cls_id = getattr(self.encoder.config, "cls_token_id", None)
+        sep_id = getattr(self.encoder.config, "sep_token_id", None)
+        pad_id = getattr(self.encoder.config, "pad_token_id", None)
+        special_ids = {x for x in (cls_id, sep_id, pad_id) if x is not None}
+
+        bsz, L = input_ids_sent.shape
+        mask_out = torch.zeros((bsz, L), device=input_ids_sent.device, dtype=torch.long)
+
+        for i in range(bsz):
+            sent_ids = input_ids_sent[i].tolist()
+            sent_mask = attention_mask_sent[i].tolist()
+            valid_len = int(sum(sent_mask))
+            if valid_len <= 0:
+                continue
+            content_start = 1
+            content_end = valid_len
+            if (
+                content_end > content_start
+                and sep_id is not None
+                and sent_ids[content_end - 1] == sep_id
+            ):
+                content_end -= 1
+            if content_end < content_start:
+                content_end = content_start
+            content_ids = sent_ids[content_start:content_end]
+
+            term_ids_full = input_ids_term[i].tolist()
+            term_ids = [tid for tid in term_ids_full if tid not in special_ids]
+            if not term_ids:
+                continue
+
+            match_idx = -1
+            for j in range(len(content_ids) - len(term_ids) + 1):
+                if content_ids[j : j + len(term_ids)] == term_ids:
+                    match_idx = j
+                    break
+            if match_idx < 0:
+                continue
+
+            start = content_start + match_idx
+            end = start + len(term_ids)
+            if start >= L:
+                continue
+            end = min(end, L)
+            mask_out[i, start:end] = 1
+
+        return mask_out
 
     def apply_grouped_experts(
         self, h_fused: torch.Tensor, h_aspect: torch.Tensor
@@ -303,25 +409,36 @@ class HAGMoE(nn.Module):
         attention_mask_sent: torch.Tensor,
         input_ids_term: torch.Tensor,
         attention_mask_term: torch.Tensor,
+        aspect_start: torch.Tensor | None = None,
+        aspect_end: torch.Tensor | None = None,
+        aspect_mask_sent: torch.Tensor | None = None,
         labels=None,
         fusion_method: str = "concat",
     ):
         out_sent = self.encoder(input_ids=input_ids_sent, attention_mask=attention_mask_sent)
-        out_term = self.encoder(input_ids=input_ids_term, attention_mask=attention_mask_term)
 
         h_sent = out_sent.last_hidden_state[:, 0, :]
-        h_aspect = out_term.last_hidden_state[:, 0, :]
+        aspect_mask = self._build_aspect_mask(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            aspect_start=aspect_start,
+            aspect_end=aspect_end,
+            aspect_mask_sent=aspect_mask_sent,
+        )
+        h_aspect = self._pool_aspect(out_sent.last_hidden_state, aspect_mask, h_sent)
 
-        h_opinion = self.compute_opinion(out_sent.last_hidden_state, attention_mask_sent, h_aspect)
+        h_opinion = self.compute_opinion(
+            out_sent.last_hidden_state, attention_mask_sent, h_aspect, aspect_mask
+        )
 
         h_fused = self.build_fusion(
             h_sent=h_sent,
             h_aspect=h_aspect,
             h_opinion=h_opinion,
             out_sent=out_sent,
-            out_term=out_term,
             attention_mask_sent=attention_mask_sent,
-            attention_mask_term=attention_mask_term,
+            aspect_mask_sent=aspect_mask,
             fusion_method=self.hag_fusion_method or fusion_method,
         )
 

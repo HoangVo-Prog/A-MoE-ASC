@@ -175,14 +175,27 @@ def train_one_epoch(
             enabled=bool(use_amp),
             dtype=amp_dtype_torch,
         ):
-            outputs = model(
-                input_ids_sent=batch["input_ids_sent"],
-                attention_mask_sent=batch["attention_mask_sent"],
-                input_ids_term=batch["input_ids_term"],
-                attention_mask_term=batch["attention_mask_term"],
-                labels=batch["label"],
-                fusion_method=fusion_method,
-            )
+            if cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE":
+                outputs = model(
+                    input_ids_sent=batch["input_ids_sent"],
+                    attention_mask_sent=batch["attention_mask_sent"],
+                    input_ids_term=batch["input_ids_term"],
+                    attention_mask_term=batch["attention_mask_term"],
+                    aspect_start=batch.get("aspect_start"),
+                    aspect_end=batch.get("aspect_end"),
+                    aspect_mask_sent=batch.get("aspect_mask_sent"),
+                    labels=batch["label"],
+                    fusion_method=fusion_method,
+                )
+            else:
+                outputs = model(
+                    input_ids_sent=batch["input_ids_sent"],
+                    attention_mask_sent=batch["attention_mask_sent"],
+                    input_ids_term=batch["input_ids_term"],
+                    attention_mask_term=batch["attention_mask_term"],
+                    labels=batch["label"],
+                    fusion_method=fusion_method,
+                )
 
             loss_total = outputs["loss"]
             logits = outputs["logits"]
@@ -293,14 +306,27 @@ def eval_model(
         for batch in dataloader:
             batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
-            outputs = model(
-                input_ids_sent=batch["input_ids_sent"],
-                attention_mask_sent=batch["attention_mask_sent"],
-                input_ids_term=batch["input_ids_term"],
-                attention_mask_term=batch["attention_mask_term"],
-                labels=batch["label"],
-                fusion_method=fusion_method,
-            )
+            if model.__class__.__name__ == "HAGMoE":
+                outputs = model(
+                    input_ids_sent=batch["input_ids_sent"],
+                    attention_mask_sent=batch["attention_mask_sent"],
+                    input_ids_term=batch["input_ids_term"],
+                    attention_mask_term=batch["attention_mask_term"],
+                    aspect_start=batch.get("aspect_start"),
+                    aspect_end=batch.get("aspect_end"),
+                    aspect_mask_sent=batch.get("aspect_mask_sent"),
+                    labels=batch["label"],
+                    fusion_method=fusion_method,
+                )
+            else:
+                outputs = model(
+                    input_ids_sent=batch["input_ids_sent"],
+                    attention_mask_sent=batch["attention_mask_sent"],
+                    input_ids_term=batch["input_ids_term"],
+                    attention_mask_term=batch["attention_mask_term"],
+                    labels=batch["label"],
+                    fusion_method=fusion_method,
+                )
 
             loss = outputs.get("loss", None)
             logits = outputs["logits"]

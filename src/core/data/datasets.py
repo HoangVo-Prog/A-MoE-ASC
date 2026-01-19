@@ -9,6 +9,80 @@ import torch
 from torch.utils.data import Dataset
 
 
+def _find_subsequence(haystack: List[int], needle: List[int]) -> int:
+    if not needle or len(needle) > len(haystack):
+        return -1
+    for i in range(len(haystack) - len(needle) + 1):
+        if haystack[i : i + len(needle)] == needle:
+            return i
+    return -1
+
+
+def _compute_aspect_span(
+    *,
+    tokenizer,
+    sent_enc,
+    term: str,
+    max_len_sent: int,
+    max_len_term: int,
+):
+    term_enc = tokenizer(
+        term,
+        truncation=True,
+        padding="max_length",
+        max_length=max_len_term,
+        return_tensors="pt",
+        add_special_tokens=False,
+    )
+    sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+    sent_mask = sent_enc["attention_mask"].squeeze(0).tolist()
+
+    valid_len = int(sum(sent_mask))
+    if valid_len <= 0:
+        aspect_start = 0
+        aspect_end = 0
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        return aspect_start, aspect_end, aspect_mask, []
+
+    content_start = 1
+    content_end = valid_len
+    sep_id = getattr(tokenizer, "sep_token_id", None)
+    if content_end > content_start and sep_id is not None and sent_ids[content_end - 1] == sep_id:
+        content_end -= 1
+    if content_end < content_start:
+        content_end = content_start
+
+    content_ids = sent_ids[content_start:content_end]
+
+    term_ids = term_enc["input_ids"].squeeze(0).tolist()
+    term_mask = term_enc["attention_mask"].squeeze(0).tolist()
+    term_len = int(sum(term_mask))
+    term_ids = term_ids[:term_len]
+
+    match_idx = _find_subsequence(content_ids, term_ids)
+    if match_idx < 0 or term_len <= 0:
+        aspect_start = 0
+        aspect_end = 0
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        return aspect_start, aspect_end, aspect_mask, []
+
+    aspect_start = content_start + match_idx
+    aspect_end = aspect_start + term_len
+    if aspect_start >= max_len_sent:
+        aspect_start = 0
+        aspect_end = 0
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        return aspect_start, aspect_end, aspect_mask, []
+
+    aspect_end = min(aspect_end, max_len_sent)
+    aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+    if aspect_end > aspect_start:
+        aspect_mask[aspect_start:aspect_end] = 1
+
+    matched_tokens = tokenizer.convert_ids_to_tokens(sent_ids[aspect_start:aspect_end])
+    return aspect_start, aspect_end, aspect_mask, matched_tokens
+
+
 class AspectSentimentDataset(Dataset):
     def __init__(
         self,
@@ -34,6 +108,7 @@ class AspectSentimentDataset(Dataset):
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
+        self._debug_span_prints = 0
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -60,11 +135,31 @@ class AspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+            tokenizer=self.tokenizer,
+            sent_enc=sent_enc,
+            term=term,
+            max_len_sent=self.max_len_sent,
+            max_len_term=self.max_len_term,
+        )
+
+        if self._debug_span_prints < 3:
+            self._debug_span_prints += 1
+            print("[HAGMoE span debug]")
+            print(f"  sentence: {sentence}")
+            print(f"  aspect: {term}")
+            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
+            print(f"  matched_tokens: {matched_tokens}")
+            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
+            "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
+            "aspect_end": torch.tensor(aspect_end, dtype=torch.long),
+            "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
 
@@ -109,6 +204,7 @@ class _SubsetAspectSentimentDataset(Dataset):
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.label2id = label2id
+        self._debug_span_prints = 0
 
     def __len__(self) -> int:
         return len(self._indices)
@@ -136,11 +232,31 @@ class _SubsetAspectSentimentDataset(Dataset):
             return_tensors="pt",
         )
 
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+            tokenizer=self.tokenizer,
+            sent_enc=sent_enc,
+            term=term,
+            max_len_sent=self.max_len_sent,
+            max_len_term=self.max_len_term,
+        )
+
+        if self._debug_span_prints < 3:
+            self._debug_span_prints += 1
+            print("[HAGMoE span debug]")
+            print(f"  sentence: {sentence}")
+            print(f"  aspect: {term}")
+            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
+            print(f"  matched_tokens: {matched_tokens}")
+            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
+            "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
+            "aspect_end": torch.tensor(aspect_end, dtype=torch.long),
+            "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
 
@@ -198,6 +314,7 @@ class AspectSentimentDatasetKFold(Dataset):
             self.label2id = {lbl: i for i, lbl in enumerate(labels)}
         else:
             self.label2id = label2id
+        self._debug_span_prints = 0
 
         (
             self._sent_list,
@@ -237,11 +354,31 @@ class AspectSentimentDatasetKFold(Dataset):
             return_tensors="pt",
         )
 
+        aspect_start, aspect_end, aspect_mask_sent, matched_tokens = _compute_aspect_span(
+            tokenizer=self.tokenizer,
+            sent_enc=sent_enc,
+            term=term,
+            max_len_sent=self.max_len_sent,
+            max_len_term=self.max_len_term,
+        )
+
+        if self._debug_span_prints < 3:
+            self._debug_span_prints += 1
+            print("[HAGMoE span debug]")
+            print(f"  sentence: {sentence}")
+            print(f"  aspect: {term}")
+            print(f"  aspect_start/end: {aspect_start}/{aspect_end}")
+            print(f"  matched_tokens: {matched_tokens}")
+            print(f"  aspect_mask_sum: {int(aspect_mask_sent.sum().item())}")
+
         return {
             "input_ids_sent": sent_enc["input_ids"].squeeze(0),
             "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
+            "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
+            "aspect_end": torch.tensor(aspect_end, dtype=torch.long),
+            "aspect_mask_sent": aspect_mask_sent,
             "label": torch.tensor(label, dtype=torch.long),
         }
 
