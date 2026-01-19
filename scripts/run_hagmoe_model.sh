@@ -67,7 +67,7 @@ METHOD_FLAGS=""
 if [[ -n "${benchmark_methods:-}" ]]; then
   METHOD_FLAGS="--benchmark_methods ${benchmark_methods}"
 else
-  METHOD_FLAGS="--benchmark_methods 'concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction'"
+  METHOD_FLAGS="--benchmark_methods concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction"
 fi
 
 if [[ -n "${METHOD_FLAGS}" ]]; then
