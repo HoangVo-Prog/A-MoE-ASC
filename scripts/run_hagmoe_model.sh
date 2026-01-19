@@ -88,6 +88,7 @@ echo
 # =========================
 python -m main \
   --mode HAGMoE \
+  --debug_aspect_span \
   --model_name bert-base-uncased \
   --num_seeds 3 \
   --benchmark_fusions \
