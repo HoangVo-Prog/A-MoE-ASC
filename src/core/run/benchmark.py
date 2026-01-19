@@ -32,6 +32,8 @@ def run_benchmark_fusion(config):
     
     label2id = full_train_set.label2id
     id2label = {v: k for k, v in label2id.items()}
+    config.label2id = label2id
+    config.id2label = id2label
     samples = full_train_set.samples
     y = [label2id[s["sentiment"]] for s in samples]
     num_classes = len(label2id)
@@ -40,6 +42,8 @@ def run_benchmark_fusion(config):
     full_train_dataloader, _, test_loader = get_dataloader(config, train_set=full_train_set, test_set=test_set)
     
     methods = parse_str_list(config.benchmark_methods)
+    if str(getattr(config, "mode", "")).strip() == "HAGMoE":
+        methods = [m for m in methods if m not in {"sent", "term"}]
     
     all_results = {
         "methods": methods,
@@ -119,6 +123,7 @@ def run_benchmark_fusion(config):
                 fold_test_logits.append(test_logits.astype(np.float32))
                 
                 val_m = eval_model(
+                        cfg=config,
                         model=model,
                         dataloader=val_loader,
                         id2label=id2label,
@@ -130,6 +135,7 @@ def run_benchmark_fusion(config):
                     )
                     
                 test_m = eval_model(
+                    cfg=config,
                     model=model,
                     dataloader=test_loader,
                     id2label=id2label,
@@ -191,7 +197,7 @@ def run_benchmark_fusion(config):
                 "cv_test_f1_mean": float(cv_test_mean),
                 "cv_test_f1_std": float(cv_test_std),
                 "cv_val_confusion": aggregate_confusions(fold_val_cms),
-                                    "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
+                "cv_val_oof_ens_acc": float(oof_metrics["acc"]),
                 "cv_val_oof_ens_f1": float(oof_metrics["f1"]),
                 "cv_val_oof_ens_confusion": aggregate_confusions([oof_cm]),
                 "cv_test_ens_acc": float(seed_test_metrics["acc"]),

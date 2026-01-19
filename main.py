@@ -24,6 +24,8 @@ def main():
 
     label2id = full_train_set.label2id
     id2label = {v: k for k, v in label2id.items()}
+    cfg.label2id = label2id
+    cfg.id2label = id2label
 
     full_train_loader, _, test_loader = get_dataloader(cfg, train_set=full_train_set, test_set=test_set)
 

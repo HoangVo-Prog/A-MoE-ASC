@@ -53,6 +53,8 @@ class HAGMoE(nn.Module):
         hag_lambda_balance: float = 0.01,
         hag_lambda_diversity: float = 0.1,
         hag_verbose_loss: bool = False,
+        id2label: dict | None = None,
+        label2id: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -165,6 +167,87 @@ class HAGMoE(nn.Module):
 
         self.focal_gamma = float(focal_gamma)
 
+        labelid_to_groupid = None
+        if id2label is None and label2id is not None:
+            id2label = {int(v): k for k, v in label2id.items()}
+        if id2label is not None:
+            labelid_to_groupid = self._build_label_group_mapping(
+                id2label=id2label,
+                num_labels=num_labels,
+                num_groups=self.num_groups,
+            )
+        self.register_buffer("labelid_to_groupid", labelid_to_groupid)
+
+    @staticmethod
+    def _neg_inf(dtype: torch.dtype) -> float:
+        if dtype in (torch.float16, torch.bfloat16):
+            return -1e4
+        return -1e9
+
+    @staticmethod
+    def _build_label_group_mapping(
+        *,
+        id2label: dict,
+        num_labels: int,
+        num_groups: int,
+    ) -> torch.Tensor:
+        if num_groups < 3:
+            raise ValueError("HAGMoE requires num_groups >= 3 for polarity-aware group loss")
+
+        mapping = torch.full((int(num_labels),), -1, dtype=torch.long)
+        for idx in range(int(num_labels)):
+            name = str(id2label.get(idx, "")).lower().strip()
+            # Group index order is fixed: 0=positive, 1=negative, 2=neutral.
+            if name in {"positive", "pos", "posi"}:
+                group_id = 0
+            elif name in {"negative", "neg"}:
+                group_id = 1
+            elif name in {"neutral", "neu", "neut"}:
+                group_id = 2
+            else:
+                group_id = -1
+            if group_id >= 0:
+                mapping[idx] = group_id
+
+        if torch.any(mapping < 0):
+            missing = [i for i in range(int(num_labels)) if int(mapping[i].item()) < 0]
+            raise ValueError(
+                "HAGMoE group loss requires id2label with positive/negative/neutral labels. "
+                f"Unmapped label ids: {missing}"
+            )
+        return mapping
+
+    @staticmethod
+    def _gather_aspect_tokens(
+        h_sent_tokens: torch.Tensor,
+        aspect_mask_sent: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if aspect_mask_sent is None:
+            return h_sent_tokens, None
+
+        mask = aspect_mask_sent.to(dtype=torch.bool)
+        if mask.dim() == 1:
+            mask = mask.unsqueeze(0)
+
+        lengths = mask.sum(dim=1)
+        max_len = int(lengths.max().item()) if lengths.numel() > 0 else 0
+        max_len = max(1, max_len)
+
+        bsz, _, hidden = h_sent_tokens.shape
+        term_tok = h_sent_tokens.new_zeros((bsz, max_len, hidden))
+        term_attn_mask = mask.new_zeros((bsz, max_len), dtype=mask.dtype)
+
+        for i in range(bsz):
+            idx = torch.nonzero(mask[i], as_tuple=False).squeeze(-1)
+            if idx.numel() == 0:
+                continue
+            take = h_sent_tokens[i, idx, :]
+            take_len = min(max_len, int(take.size(0)))
+            term_tok[i, :take_len, :] = take[:take_len]
+            term_attn_mask[i, :take_len] = 1
+
+        return term_tok, term_attn_mask
+
     def compute_opinion(
         self,
         h_sent_tokens: torch.Tensor,
@@ -177,11 +260,11 @@ class HAGMoE(nn.Module):
 
         if attention_mask_sent is not None:
             pad_mask = attention_mask_sent.eq(0)
-            scores = scores.masked_fill(pad_mask, torch.finfo(scores.dtype).min)
+            scores = scores.masked_fill(pad_mask, self._neg_inf(scores.dtype))
 
         if aspect_mask_sent is not None:
             aspect_mask = aspect_mask_sent.to(dtype=torch.bool)
-            scores = scores.masked_fill(aspect_mask, torch.finfo(scores.dtype).min)
+            scores = scores.masked_fill(aspect_mask, self._neg_inf(scores.dtype))
 
         attn = torch.softmax(scores, dim=-1)
         h_opinion = torch.bmm(attn.unsqueeze(1), h_sent_tokens).squeeze(1)
@@ -232,6 +315,7 @@ class HAGMoE(nn.Module):
                 self.bilinear_proj_sent(rep_sent) * self.bilinear_proj_term(h_aspect)
             )
         elif fusion_method == "coattn":
+            # Co-attention variant: CLS attends to aspect-span tokens within the sentence embeddings.
             q_term = h_aspect.unsqueeze(1)
             q_sent = out_sent.last_hidden_state[:, 0:1, :]
             kpm_sent = attention_mask_sent.eq(0)
@@ -246,7 +330,7 @@ class HAGMoE(nn.Module):
             h_fused = term_ctx.squeeze(1) + sent_ctx.squeeze(1)
         elif fusion_method == "late_interaction":
             sent_tok = out_sent.last_hidden_state
-            term_tok = out_sent.last_hidden_state
+            term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
 
             sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
             term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
@@ -254,11 +338,14 @@ class HAGMoE(nn.Module):
             sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))
             if attention_mask_sent is not None:
                 mask = attention_mask_sent.unsqueeze(1).eq(0)
-                sim = sim.masked_fill(mask.bool(), torch.finfo(sim.dtype).min)
+                sim = sim.masked_fill(mask.bool(), self._neg_inf(sim.dtype))
+            if term_attn_mask is not None:
+                term_mask = term_attn_mask.unsqueeze(-1).eq(0)
+                sim = sim.masked_fill(term_mask.bool(), self._neg_inf(sim.dtype))
 
             max_sim = sim.max(dim=-1).values
-            if aspect_mask_sent is not None:
-                term_valid = aspect_mask_sent.float()
+            if term_attn_mask is not None:
+                term_valid = term_attn_mask.float()
                 denom = term_valid.sum(dim=1).clamp_min(1.0)
                 pooled = (max_sim * term_valid).sum(dim=1) / denom
                 empty = term_valid.sum(dim=1).eq(0)
@@ -507,7 +594,13 @@ class HAGMoE(nn.Module):
 
         loss_group = None
         if self.hag_use_group_loss and group_logits is not None:
-            loss_group = F.cross_entropy(group_logits, labels)
+            if self.labelid_to_groupid is None:
+                raise RuntimeError(
+                    "hag_use_group_loss=True but labelid_to_groupid is not set. "
+                    "Provide id2label/label2id in cfg."
+                )
+            group_target = self.labelid_to_groupid[labels]
+            loss_group = F.cross_entropy(group_logits, group_target)
 
         loss_balance = None
         if self.hag_use_balance_loss and p_expert_list is not None and len(p_expert_list) > 0:

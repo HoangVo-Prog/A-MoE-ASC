@@ -366,6 +366,7 @@ def train_one_epoch(
 
 def eval_model(
     *,
+    cfg=None,
     model: nn.Module,
     dataloader: DataLoader,
     id2label: Optional[Dict[int, str]] = None,
@@ -415,7 +416,8 @@ def eval_model(
         for batch_idx, batch in enumerate(dataloader):
             batch = _move_batch_to_device(batch)
 
-            if model.__class__.__name__ == "HAGMoE":
+            hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
+            if hag_mode:
                 outputs = model(
                     input_ids_sent=batch["input_ids_sent"],
                     attention_mask_sent=batch["attention_mask_sent"],
@@ -743,6 +745,7 @@ def run_training_loop(
         if val_loader is not None:
             print("Validation Confusion Matrix")
             val_metrics = eval_model(
+                cfg=cfg,
                 model=model,
                 dataloader=val_loader,
                 id2label=id2label,
@@ -788,6 +791,7 @@ def run_training_loop(
         if test_loader is not None:
             print("Test Confusion Matrix")
             test_metrics = eval_model(
+                cfg=cfg,
                 model=model,
                 dataloader=test_loader,
                 id2label=id2label,

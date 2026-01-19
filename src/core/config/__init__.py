@@ -15,6 +15,8 @@ class Config:
     max_len_term: int = 4
     num_labels: int = 3
     num_workers: int = 4
+    id2label: Optional[dict] = None
+    label2id: Optional[dict] = None
 
 
     # ====== Training ======
