@@ -83,7 +83,7 @@ class Config:
     router_jitter: float = 0.001
     jitter_warmup_steps: int = 0
     jitter_end: float = 0
-    router_entropy_weight: float = 0.001
+    router_entropy_weight: float = 0.01
     route_mask_pad_tokens: bool = True
     router_temperature: float = 1.0
     capacity_factor: Optional[float] = None
