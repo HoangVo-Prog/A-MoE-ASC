@@ -20,18 +20,80 @@ def _find_subsequence(haystack: List[int], needle: List[int]) -> int:
     return -1
 
 
+_HYPHEN_CLASS = r"\-\u2010\u2011\u2012\u2013\u2014\u2212"
+_HYPHEN_RE = re.compile(_HYPHEN_CLASS)
+
+
 def _normalize_text(s: str) -> str:
     s = (s or "").lower()
-    s = s.replace("-", " ")
+    s = _HYPHEN_RE.sub("-", s)
     s = s.strip(string.punctuation)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
+def _strip_wrapping_punct(s: str) -> str:
+    return (s or "").strip(string.punctuation + "\"'")
+
+
+def _find_aspect_char_span(sentence: str, term: str) -> Tuple[int, int]:
+    if not sentence or not term:
+        return -1, -1
+
+    sentence_lower = sentence.lower()
+    term_lower = term.lower()
+    idx = sentence_lower.find(term_lower)
+    if idx >= 0:
+        return idx, idx + len(term)
+
+    term_stripped = _strip_wrapping_punct(term)
+    if term_stripped and term_stripped != term:
+        idx = sentence_lower.find(term_stripped.lower())
+        if idx >= 0:
+            return idx, idx + len(term_stripped)
+
+    term_norm = _normalize_text(term_stripped or term)
+    if term_norm:
+        tokens = [t for t in re.split(rf"[\s{_HYPHEN_CLASS}]+", term_norm) if t]
+        if tokens:
+            sep_pattern = rf"(?:\s+|[{_HYPHEN_CLASS}]+)"
+            pattern = rf"\b{sep_pattern.join(map(re.escape, tokens))}\b"
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                return match.start(), match.end()
+            pattern = sep_pattern.join(map(re.escape, tokens))
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                return match.start(), match.end()
+
+    return -1, -1
+
+
+def _token_span_from_offsets(
+    offsets: Sequence[Tuple[int, int]], char_start: int, char_end: int
+) -> Tuple[int, int]:
+    tok_start = None
+    tok_end = None
+    for i, (start, end) in enumerate(offsets):
+        if start is None or end is None:
+            continue
+        if start == 0 and end == 0:
+            continue
+        if end <= char_start:
+            continue
+        if start >= char_end:
+            continue
+        if tok_start is None:
+            tok_start = i
+        tok_end = i + 1
+    if tok_start is None:
+        return -1, -1
+    return tok_start, tok_end
+
+
 def _compute_aspect_span(
     *,
     tokenizer,
-    sent_enc,
     term: str,
     sentence: str,
     max_len_sent: int,
@@ -39,204 +101,194 @@ def _compute_aspect_span(
 ):
     sentence_norm = _normalize_text(sentence)
     term_norm = _normalize_text(term)
-    term_raw = (term or "").lower()
 
-    term_enc = tokenizer(
+    char_start, char_end = _find_aspect_char_span(sentence, term)
+    if char_start < 0:
+        sent_enc = tokenizer(
+            sentence,
+            truncation=True,
+            padding="max_length",
+            max_length=max_len_sent,
+            return_tensors="pt",
+        )
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+        sent_mask = sent_enc["attention_mask"].squeeze(0).tolist()
+        valid_len = int(sum(sent_mask))
+        sep_id = getattr(tokenizer, "sep_token_id", None)
+        sep_idx = -1
+        if sep_id is not None:
+            try:
+                sep_idx = sent_ids.index(sep_id)
+            except ValueError:
+                sep_idx = -1
+        diag = {
+            "sentence_norm": sentence_norm,
+            "term_norm": term_norm,
+            "content_ids": sent_ids[1:sep_idx] if sep_idx > 1 else [],
+            "term_ids": [],
+            "sent_tokens": tokenizer.convert_ids_to_tokens(sent_ids[1:sep_idx])
+            if sep_idx > 1
+            else [],
+            "term_tokens": tokenizer.tokenize((term or "").lower()),
+            "token_match_idx": -1,
+            "valid_len": valid_len,
+            "sep_idx": sep_idx,
+        }
+        return (
+            sent_enc["input_ids"].squeeze(0),
+            sent_enc["attention_mask"].squeeze(0),
+            aspect_mask,
+            0,
+            0,
+            "NOT_FOUND_RAW",
+            False,
+            diag,
+        )
+
+    full_enc = tokenizer(
+        sentence,
+        truncation=False,
+        padding=False,
+        return_offsets_mapping=True,
+        return_tensors="pt",
+    )
+    full_ids = full_enc["input_ids"].squeeze(0).tolist()
+    offsets = full_enc["offset_mapping"].squeeze(0).tolist()
+
+    tok_start, tok_end = _token_span_from_offsets(offsets, char_start, char_end)
+    if tok_start < 0:
+        sent_enc = tokenizer(
+            sentence,
+            truncation=True,
+            padding="max_length",
+            max_length=max_len_sent,
+            return_tensors="pt",
+        )
+        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+        sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+        sent_mask = sent_enc["attention_mask"].squeeze(0).tolist()
+        valid_len = int(sum(sent_mask))
+        sep_id = getattr(tokenizer, "sep_token_id", None)
+        sep_idx = -1
+        if sep_id is not None:
+            try:
+                sep_idx = sent_ids.index(sep_id)
+            except ValueError:
+                sep_idx = -1
+        diag = {
+            "sentence_norm": sentence_norm,
+            "term_norm": term_norm,
+            "content_ids": sent_ids[1:sep_idx] if sep_idx > 1 else [],
+            "term_ids": [],
+            "sent_tokens": tokenizer.convert_ids_to_tokens(sent_ids[1:sep_idx])
+            if sep_idx > 1
+            else [],
+            "term_tokens": tokenizer.tokenize((term or "").lower()),
+            "token_match_idx": -1,
+            "valid_len": valid_len,
+            "sep_idx": sep_idx,
+        }
+        return (
+            sent_enc["input_ids"].squeeze(0),
+            sent_enc["attention_mask"].squeeze(0),
+            aspect_mask,
+            0,
+            0,
+            "TOKEN_MISMATCH",
+            False,
+            diag,
+        )
+
+    cls_id = getattr(tokenizer, "cls_token_id", None)
+    sep_id = getattr(tokenizer, "sep_token_id", None)
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    has_cls = bool(cls_id is not None and full_ids and full_ids[0] == cls_id)
+    has_sep = bool(sep_id is not None and full_ids and full_ids[-1] == sep_id)
+
+    total_len = len(full_ids)
+    if total_len <= max_len_sent:
+        cropped_ids = list(full_ids)
+        new_aspect_start = tok_start
+        new_aspect_end = tok_end
+    else:
+        if has_cls or has_sep:
+            content_start = 1 if has_cls else 0
+            content_end = total_len - 1 if has_sep else total_len
+            max_content_len = max_len_sent - (1 if has_cls else 0) - (1 if has_sep else 0)
+            max_content_len = max(1, max_content_len)
+            aspect_center = (tok_start + tok_end - 1) // 2
+            min_start = content_start
+            max_start = max(content_start, content_end - max_content_len)
+            crop_content_start = aspect_center - (max_content_len // 2)
+            crop_content_start = max(min_start, min(crop_content_start, max_start))
+            crop_content_end = crop_content_start + max_content_len
+            cropped_ids = []
+            if has_cls:
+                cropped_ids.append(full_ids[0])
+            cropped_ids.extend(full_ids[crop_content_start:crop_content_end])
+            if has_sep:
+                cropped_ids.append(full_ids[-1])
+            # Shift aspect span into the cropped window that excludes specials.
+            new_aspect_start = (tok_start - crop_content_start) + (1 if has_cls else 0)
+            new_aspect_end = (tok_end - crop_content_start) + (1 if has_cls else 0)
+        else:
+            aspect_center = (tok_start + tok_end - 1) // 2
+            crop_start = aspect_center - (max_len_sent // 2)
+            crop_start = max(0, min(crop_start, total_len - max_len_sent))
+            crop_end = crop_start + max_len_sent
+            cropped_ids = full_ids[crop_start:crop_end]
+            new_aspect_start = tok_start - crop_start
+            new_aspect_end = tok_end - crop_start
+
+    attention_mask = [1] * len(cropped_ids)
+    if len(cropped_ids) < max_len_sent:
+        pad_len = max_len_sent - len(cropped_ids)
+        cropped_ids.extend([pad_id] * pad_len)
+        attention_mask.extend([0] * pad_len)
+
+    aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
+    if new_aspect_end > new_aspect_start:
+        aspect_mask[new_aspect_start:new_aspect_end] = 1
+
+    sep_idx = -1
+    if sep_id is not None:
+        try:
+            sep_idx = cropped_ids.index(sep_id)
+        except ValueError:
+            sep_idx = -1
+    valid_len = int(sum(attention_mask))
+    term_ids = tokenizer(
         term_norm,
         truncation=True,
         padding="max_length",
         max_length=max_len_term,
         return_tensors="pt",
         add_special_tokens=False,
-    )
-    sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
-    sent_mask = sent_enc["attention_mask"].squeeze(0).tolist()
+    )["input_ids"].squeeze(0).tolist()
+    diag = {
+        "sentence_norm": sentence_norm,
+        "term_norm": term_norm,
+        "content_ids": cropped_ids[1:sep_idx] if sep_idx > 1 else [],
+        "term_ids": term_ids,
+        "sent_tokens": tokenizer.convert_ids_to_tokens(cropped_ids[1:sep_idx])
+        if sep_idx > 1
+        else [],
+        "term_tokens": tokenizer.tokenize((term or "").lower()),
+        "token_match_idx": -1,
+        "valid_len": valid_len,
+        "sep_idx": sep_idx,
+    }
 
-    valid_len = int(sum(sent_mask))
-    if valid_len <= 0:
-        aspect_start = 0
-        aspect_end = 0
-        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return (
-            aspect_start,
-            aspect_end,
-            aspect_mask,
-            [],
-            "NOT_FOUND_RAW",
-            False,
-            {
-                "sentence_norm": sentence_norm,
-                "term_norm": term_norm,
-                "content_ids": [],
-                "term_ids": [],
-                "sent_tokens": [],
-                "term_tokens": [],
-                "token_match_idx": -1,
-                "valid_len": valid_len,
-                "sep_idx": -1,
-            },
-        )
-
-    # Match aspect token IDs inside the sentence content region [CLS] ... [SEP].
-    sep_id = getattr(tokenizer, "sep_token_id", None)
-    sep_idx = None
-    if sep_id is not None:
-        try:
-            sep_idx = sent_ids.index(sep_id)
-        except ValueError:
-            sep_idx = None
-    if sep_idx is None:
-        sep_idx = min(valid_len - 1, max_len_sent - 1)
-
-    content_start = 1
-    content_end = max(content_start, sep_idx)
-
-    content_ids = sent_ids[content_start:content_end]
-    sent_tokens = tokenizer.convert_ids_to_tokens(content_ids)
-    term_tokens = tokenizer.tokenize(term_raw)
-
-    token_match_idx = _find_subsequence(sent_tokens, term_tokens)
-    if token_match_idx >= 0 and len(term_tokens) > 0:
-        aspect_start = content_start + token_match_idx
-        aspect_end = aspect_start + len(term_tokens)
-        if aspect_start >= max_len_sent:
-            aspect_start = 0
-            aspect_end = 0
-            aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-            return (
-                aspect_start,
-                aspect_end,
-                aspect_mask,
-                [],
-                "TRUNCATED",
-                False,
-                {
-                    "sentence_norm": sentence_norm,
-                    "term_norm": term_norm,
-                    "content_ids": content_ids,
-                    "term_ids": [],
-                    "sent_tokens": sent_tokens,
-                    "term_tokens": term_tokens,
-                    "token_match_idx": token_match_idx,
-                    "valid_len": valid_len,
-                    "sep_idx": sep_idx,
-                },
-            )
-
-        aspect_end = min(aspect_end, max_len_sent)
-        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        if aspect_end > aspect_start:
-            aspect_mask[aspect_start:aspect_end] = 1
-
-        matched_tokens = sent_tokens[token_match_idx : token_match_idx + len(term_tokens)]
-        return (
-            aspect_start,
-            aspect_end,
-            aspect_mask,
-            matched_tokens,
-            "OK",
-            True,
-            {
-                "sentence_norm": sentence_norm,
-                "term_norm": term_norm,
-                "content_ids": content_ids,
-                "term_ids": [],
-                "sent_tokens": sent_tokens,
-                "term_tokens": term_tokens,
-                "token_match_idx": token_match_idx,
-                "valid_len": valid_len,
-                "sep_idx": sep_idx,
-            },
-        )
-
-    term_ids = term_enc["input_ids"].squeeze(0).tolist()
-    term_mask = term_enc["attention_mask"].squeeze(0).tolist()
-    term_len = int(sum(term_mask))
-    term_ids = term_ids[:term_len]
-
-    match_idx = _find_subsequence(content_ids, term_ids)
-    if match_idx < 0 or term_len <= 0:
-        raw_found = term_norm != "" and term_norm in sentence_norm
-        truncated = (valid_len >= max_len_sent) or (sep_idx >= max_len_sent - 1)
-        if not raw_found:
-            fail_reason = "NOT_FOUND_RAW"
-        elif truncated:
-            fail_reason = "TRUNCATED"
-        else:
-            fail_reason = "TOKEN_MISMATCH"
-        aspect_start = 0
-        aspect_end = 0
-        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return (
-            aspect_start,
-            aspect_end,
-            aspect_mask,
-            [],
-            fail_reason,
-            False,
-            {
-                "sentence_norm": sentence_norm,
-                "term_norm": term_norm,
-                "content_ids": content_ids,
-                "term_ids": term_ids,
-                "sent_tokens": sent_tokens,
-                "term_tokens": term_tokens,
-                "token_match_idx": token_match_idx,
-                "valid_len": valid_len,
-                "sep_idx": sep_idx,
-            },
-        )
-
-    aspect_start = content_start + match_idx
-    aspect_end = aspect_start + term_len
-    if aspect_start >= max_len_sent:
-        aspect_start = 0
-        aspect_end = 0
-        aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-        return (
-            aspect_start,
-            aspect_end,
-            aspect_mask,
-            [],
-            "TRUNCATED",
-            False,
-            {
-                "sentence_norm": sentence_norm,
-                "term_norm": term_norm,
-                "content_ids": content_ids,
-                "term_ids": term_ids,
-                "sent_tokens": sent_tokens,
-                "term_tokens": term_tokens,
-                "token_match_idx": token_match_idx,
-                "valid_len": valid_len,
-                "sep_idx": sep_idx,
-            },
-        )
-
-    aspect_end = min(aspect_end, max_len_sent)
-    aspect_mask = torch.zeros(max_len_sent, dtype=torch.long)
-    if aspect_end > aspect_start:
-        aspect_mask[aspect_start:aspect_end] = 1
-
-    matched_tokens = tokenizer.convert_ids_to_tokens(sent_ids[aspect_start:aspect_end])
     return (
-        aspect_start,
-        aspect_end,
+        torch.tensor(cropped_ids, dtype=torch.long),
+        torch.tensor(attention_mask, dtype=torch.long),
         aspect_mask,
-        matched_tokens,
+        int(new_aspect_start),
+        int(new_aspect_end),
         "OK",
         True,
-        {
-            "sentence_norm": sentence_norm,
-            "term_norm": term_norm,
-            "content_ids": content_ids,
-            "term_ids": term_ids,
-            "sent_tokens": sent_tokens,
-            "term_tokens": term_tokens,
-            "token_match_idx": token_match_idx,
-            "valid_len": valid_len,
-            "sep_idx": sep_idx,
-        },
+        diag,
     )
 
 
@@ -251,6 +303,8 @@ class AspectSentimentDataset(Dataset):
         debug_aspect_span: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
+        if not getattr(self.tokenizer, "is_fast", False):
+            raise ValueError("Tokenizer must be fast (use_fast=True) for offset mapping.")
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.debug_aspect_span = bool(debug_aspect_span)
@@ -337,13 +391,6 @@ class AspectSentimentDataset(Dataset):
         term = item["aspect"]
         label = self.label2id[item["sentiment"]]
 
-        sent_enc = self.tokenizer(
-            sentence,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_len_sent,
-            return_tensors="pt",
-        )
         term_enc = self.tokenizer(
             term,
             truncation=True,
@@ -353,16 +400,16 @@ class AspectSentimentDataset(Dataset):
         )
 
         (
+            input_ids_sent,
+            attention_mask_sent,
+            aspect_mask_sent,
             aspect_start,
             aspect_end,
-            aspect_mask_sent,
-            matched_tokens,
             fail_reason,
             matched,
             diag,
         ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
-            sent_enc=sent_enc,
             term=term,
             sentence=sentence,
             max_len_sent=self.max_len_sent,
@@ -483,8 +530,8 @@ class AspectSentimentDataset(Dataset):
                 print("\n".join(block))
 
         item_out = {
-            "input_ids_sent": sent_enc["input_ids"].squeeze(0),
-            "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
+            "input_ids_sent": input_ids_sent,
+            "attention_mask_sent": attention_mask_sent,
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
@@ -494,7 +541,7 @@ class AspectSentimentDataset(Dataset):
         }
 
         if self.debug_aspect_span:
-            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sent_ids = input_ids_sent.tolist()
             sep_id = getattr(self.tokenizer, "sep_token_id", None)
             sep_idx = -1
             if sep_id is not None:
@@ -502,7 +549,7 @@ class AspectSentimentDataset(Dataset):
                     sep_idx = sent_ids.index(sep_id)
                 except ValueError:
                     sep_idx = -1
-            valid_len = int(sent_enc["attention_mask"].sum().item())
+            valid_len = int(attention_mask_sent.sum().item())
 
             item_out.update(
                 {
