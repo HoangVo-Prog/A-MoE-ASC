@@ -196,11 +196,16 @@ def _extract_seed_fold(tag: Optional[str], cfg) -> tuple[str, str]:
     return seed, fold
 
 
-def _routing_log_path(cfg, tag: Optional[str]) -> str:
+def _routing_log_path(cfg, tag: Optional[str], method: Optional[str]) -> str:
     output_dir = getattr(cfg, "output_dir", "results")
     os.makedirs(output_dir, exist_ok=True)
     seed, fold = _extract_seed_fold(tag, cfg)
-    return os.path.join(output_dir, f"routing_logs_seed{seed}_fold{fold}.jsonl")
+    mode = str(getattr(cfg, "mode", "unknown"))
+    loss_type = str(getattr(cfg, "loss_type", "unknown"))
+    method_str = str(method or "unknown")
+    base = os.path.join(output_dir, mode, method_str, loss_type, f"seed_{seed}", f"fold_{fold}")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "routing_logs.jsonl")
 
 
 def _append_routing_log(path: str, entry: Dict[str, Any]) -> None:
@@ -528,6 +533,7 @@ def _write_routing_entry(
     *,
     cfg,
     tag: Optional[str],
+    method: Optional[str],
     routing_metrics: Optional[Dict[str, Any]],
     split: str,
     epoch_idx: int,
@@ -574,7 +580,7 @@ def _write_routing_entry(
     if loss is not None:
         entry["loss"] = float(loss)
 
-    _append_routing_log(_routing_log_path(cfg, tag), entry)
+    _append_routing_log(_routing_log_path(cfg, tag, method), entry)
 
 
 def _normalize_schedule(raw) -> Optional[list]:
@@ -1205,6 +1211,7 @@ def run_training_loop(
             _write_routing_entry(
                 cfg=cfg,
                 tag=tag,
+                method=method,
                 split="train",
                 routing_metrics=train_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1227,6 +1234,7 @@ def run_training_loop(
             _write_routing_entry(
                 cfg=cfg,
                 tag=tag,
+                method=method,
                 split="train",
                 routing_metrics=train_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1267,6 +1275,7 @@ def run_training_loop(
             _write_routing_entry(
                 cfg=cfg,
                 tag=tag,
+                method=method,
                 split="val",
                 routing_metrics=val_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1292,6 +1301,7 @@ def run_training_loop(
                 output_dir=cfg.output_dir,
                 mode=cfg.mode,
                 method=method,
+                loss_type=cfg.loss_type,
                 seed=seed_val,
                 fold=fold_val,
                 split="val",
@@ -1346,6 +1356,7 @@ def run_training_loop(
             _write_routing_entry(
                 cfg=cfg,
                 tag=tag,
+                method=method,
                 split="test",
                 routing_metrics=test_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1368,6 +1379,7 @@ def run_training_loop(
                 output_dir=cfg.output_dir,
                 mode=cfg.mode,
                 method=method,
+                loss_type=cfg.loss_type,
                 seed=seed_val,
                 fold=fold_val,
                 split="test",

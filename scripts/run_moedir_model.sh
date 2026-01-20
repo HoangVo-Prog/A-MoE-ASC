@@ -33,11 +33,11 @@ FOCAL_GAMMA=""
 
 case "${DATASET_TYPE}" in
   laptop14)
-    CLASS_WEIGHTS="1.0,1.6,1.2"
+    CLASS_WEIGHTS="0.74,0.84,1.42"
     FOCAL_GAMMA="2.0"
     ;;
   rest14)
-    CLASS_WEIGHTS="1.4,2.2,0.8"
+    CLASS_WEIGHTS="0.4,1.1,1.5"
     FOCAL_GAMMA="2.0"
     ;;
 esac
@@ -85,8 +85,8 @@ python -m main \
   --model_name bert-base-uncased \
   --benchmark_fusions \
   --num_seeds 3 \
-  --output_dir "$ROOT_DIR/saved_model" \
-  --output_name base_model.json \
+  --output_dir "$ROOT_DIR/results" \
+  --output_name moedir_model_${LOSS_TYPE}.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   ${LOSS_FLAGS} \
