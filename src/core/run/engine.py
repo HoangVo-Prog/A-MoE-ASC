@@ -1,4 +1,7 @@
 from collections import deque
+import json
+import os
+from datetime import datetime
 import re
 import string
 from typing import Dict, Optional, Any
@@ -15,6 +18,119 @@ from src.core.utils.const import DEVICE
 from src.core.utils.general import cleanup_cuda, safe_float
 from src.core.utils.optim import build_optimizer_and_scheduler
 from src.core.utils.plotting import print_confusion_matrix
+
+
+class RoutingEpochAggregator:
+    def __init__(self) -> None:
+        self.sum_ent = 0.0
+        self.sum_ent2 = 0.0
+        self.count_samples = 0
+        self.sum_group_usage: Optional[torch.Tensor] = None
+        self.sum_top1_max = 0.0
+        self.top1_counts: Optional[torch.Tensor] = None
+        self.nan_batches = 0
+        self.num_groups: Optional[int] = None
+        self.enabled = False
+
+    def update(self, outputs: Optional[Dict[str, Any]], model: nn.Module) -> None:
+        p_group = None
+        if isinstance(outputs, dict) and "group_probs" in outputs:
+            p_group = outputs.get("group_probs")
+        if p_group is None and hasattr(model, "_last_group_probs"):
+            p_group = getattr(model, "_last_group_probs", None)
+        if p_group is None:
+            return
+        if not torch.is_tensor(p_group) or p_group.numel() == 0 or p_group.dim() != 2:
+            return
+
+        self.enabled = True
+
+        if not torch.isfinite(p_group).all():
+            self.nan_batches += 1
+            return
+
+        p_group = p_group.detach()
+        if p_group.device.type != "cpu":
+            p_group = p_group.to("cpu")
+
+        bsz, num_groups = p_group.shape
+        if self.num_groups is None:
+            self.num_groups = int(num_groups)
+            self.sum_group_usage = torch.zeros(num_groups, dtype=torch.float64)
+            self.top1_counts = torch.zeros(num_groups, dtype=torch.int64)
+        elif int(num_groups) != int(self.num_groups):
+            return
+
+        p = p_group.clamp_min(1e-12)
+        ent = -(p * p.log()).sum(dim=-1)
+        top1_max = p_group.max(dim=-1).values
+        top1 = p_group.argmax(dim=-1)
+
+        self.sum_ent += float(ent.sum().item())
+        self.sum_ent2 += float((ent * ent).sum().item())
+        self.count_samples += int(bsz)
+        self.sum_top1_max += float(top1_max.sum().item())
+
+        if self.sum_group_usage is not None:
+            self.sum_group_usage += p_group.sum(dim=0).to(dtype=torch.float64)
+        if self.top1_counts is not None:
+            self.top1_counts += torch.bincount(
+                top1.to(torch.int64), minlength=int(self.num_groups)
+            ).to(dtype=torch.int64)
+
+    def finalize(self) -> Optional[Dict[str, Any]]:
+        if not self.enabled or self.count_samples <= 0 or self.sum_group_usage is None:
+            return None
+        mean_ent = self.sum_ent / self.count_samples
+        var_ent = self.sum_ent2 / self.count_samples - mean_ent**2
+        if var_ent < 0.0:
+            var_ent = 0.0
+        std_ent = float(var_ent ** 0.5)
+        group_usage = (self.sum_group_usage / self.count_samples).tolist()
+        top1_dominance = self.sum_top1_max / self.count_samples
+        if self.top1_counts is None:
+            top1_hist = None
+        else:
+            top1_hist = (self.top1_counts.to(dtype=torch.float64) / self.count_samples).tolist()
+
+        return {
+            "mean_ent": float(mean_ent),
+            "std_ent": float(std_ent),
+            "group_usage": group_usage,
+            "top1_dominance": float(top1_dominance),
+            "top1_hist": top1_hist,
+            "nan_batches": int(self.nan_batches),
+        }
+
+
+def _extract_seed_fold(tag: Optional[str], cfg) -> tuple[str, str]:
+    seed = None
+    fold = None
+    if tag:
+        m_seed = re.search(r"seed\s*=\s*(\d+)", tag)
+        if m_seed:
+            seed = m_seed.group(1)
+        m_fold = re.search(r"fold\s*=\s*(\d+)", tag)
+        if m_fold:
+            fold = m_fold.group(1)
+
+    if seed is None:
+        seed = str(getattr(cfg, "seed", "unknown"))
+    if fold is None:
+        fold = "full"
+    return seed, fold
+
+
+def _routing_log_path(cfg, tag: Optional[str]) -> str:
+    output_dir = getattr(cfg, "output_dir", "results")
+    os.makedirs(output_dir, exist_ok=True)
+    seed, fold = _extract_seed_fold(tag, cfg)
+    return os.path.join(output_dir, f"routing_logs_seed{seed}_fold{fold}.jsonl")
+
+
+def _append_routing_log(path: str, entry: Dict[str, Any]) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
 
 def _normalize_aspect_text(s: str) -> str:
@@ -191,6 +307,8 @@ def train_one_epoch(
     not_found_raw_count = 0
     unknown_count = 0
 
+    routing_agg = RoutingEpochAggregator()
+
     def _move_batch_to_device(batch_dict):
         out = {}
         for k, v in batch_dict.items():
@@ -239,6 +357,8 @@ def train_one_epoch(
             loss_main = outputs.get("loss_main", None)
             loss_lambda = outputs.get("loss_lambda", None)
             loss_aux = outputs.get("aux_loss", None)
+
+        routing_agg.update(outputs, model)
 
         if hag_mode:
             if step == 0:
@@ -358,6 +478,20 @@ def train_one_epoch(
             f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
         )
 
+    routing_metrics = routing_agg.finalize()
+    if routing_metrics is not None:
+        usage = routing_metrics.get("group_usage", [])
+        top1_hist = routing_metrics.get("top1_hist", [])
+        print(
+            "Routing(train): "
+            f"mean_ent={routing_metrics['mean_ent']:.6f} "
+            f"std_ent={routing_metrics['std_ent']:.6f} "
+            f"usage={usage} "
+            f"top1_dom={routing_metrics['top1_dominance']:.6f} "
+            f"top1_hist={top1_hist} "
+            f"nan_batches={routing_metrics['nan_batches']}"
+        )
+
     if moe:
         return {
             "loss_total": total_loss_sum / denom,
@@ -366,12 +500,14 @@ def train_one_epoch(
             "aux_loss": aux_loss_sum / denom,
             "acc": acc,
             "f1": f1,
+            "routing": routing_metrics,
         }
 
     return {
         "loss": total_loss_sum / denom,
         "acc": acc,
         "f1": f1,
+        "routing": routing_metrics,
     }
 
 
@@ -413,6 +549,7 @@ def eval_model(
     truncated_count = 0
     not_found_raw_count = 0
     unknown_count = 0
+    routing_agg = RoutingEpochAggregator()
 
     with torch.no_grad():
         def _move_batch_to_device(batch_dict):
@@ -452,6 +589,8 @@ def eval_model(
 
             loss = outputs.get("loss", None)
             logits = outputs["logits"]
+
+            routing_agg.update(outputs, model)
 
             if hag_mode and batch_idx == 0:
                 effective = getattr(model, "_last_fusion_method", None)
@@ -599,6 +738,22 @@ def eval_model(
             f"not_found_raw={not_found_raw_count} unknown={unknown_count} "
             f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
         )
+
+    routing_metrics = routing_agg.finalize()
+    if routing_metrics is not None and split in {"train", "val"}:
+        usage = routing_metrics.get("group_usage", [])
+        top1_hist = routing_metrics.get("top1_hist", [])
+        print(
+            f"Routing({split}): "
+            f"mean_ent={routing_metrics['mean_ent']:.6f} "
+            f"std_ent={routing_metrics['std_ent']:.6f} "
+            f"usage={usage} "
+            f"top1_dom={routing_metrics['top1_dominance']:.6f} "
+            f"top1_hist={top1_hist} "
+            f"nan_batches={routing_metrics['nan_batches']}"
+        )
+
+    out["routing"] = routing_metrics
     return out
 
 
@@ -648,6 +803,49 @@ def run_training_loop(
 
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
+
+    def _maybe_write_routing(
+        *,
+        split: str,
+        routing_metrics: Optional[Dict[str, Any]],
+        epoch_idx: int,
+        loss: Optional[float] = None,
+        macro_f1: Optional[float] = None,
+        neutral_f1: Optional[float] = None,
+    ) -> None:
+        if routing_metrics is None:
+            return
+        seed_str, fold_str = _extract_seed_fold(tag, cfg)
+        try:
+            seed_val: Any = int(seed_str)
+        except Exception:
+            seed_val = seed_str
+        try:
+            fold_val: Any = int(fold_str)
+        except Exception:
+            fold_val = fold_str
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "seed": seed_val,
+            "fold": fold_val,
+            "epoch": int(epoch_idx) + 1,
+            "split": str(split),
+            "mean_ent": routing_metrics["mean_ent"],
+            "std_ent": routing_metrics["std_ent"],
+            "group_usage": routing_metrics["group_usage"],
+            "top1_dominance": routing_metrics["top1_dominance"],
+            "top1_hist": routing_metrics["top1_hist"],
+            "nan_batches": routing_metrics.get("nan_batches", 0),
+        }
+        if macro_f1 is not None:
+            entry["macro_f1"] = float(macro_f1)
+        if neutral_f1 is not None:
+            entry["neutral_f1"] = float(neutral_f1)
+        if loss is not None:
+            entry["loss"] = float(loss)
+
+        _append_routing_log(_routing_log_path(cfg, tag), entry)
 
         # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
     freeze0 = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
@@ -755,6 +953,14 @@ def run_training_loop(
             history["train_f1"].append(train_metrics["f1"])
             history["train_acc"].append(train_metrics["acc"])
 
+            _maybe_write_routing(
+                split="train",
+                routing_metrics=train_metrics.get("routing"),
+                epoch_idx=epoch,
+                loss=train_metrics.get("loss_total"),
+                macro_f1=train_metrics.get("f1"),
+            )
+
             log = (
                 f"Train main_loss {train_metrics['loss_main']:.6f} "
                 f"aux_loss {train_metrics['aux_loss']:.6f} "
@@ -766,6 +972,14 @@ def run_training_loop(
         else:
             history["train_loss"].append(float(train_metrics["loss"]))
             history["train_f1"].append(float(train_metrics["f1"]))
+
+            _maybe_write_routing(
+                split="train",
+                routing_metrics=train_metrics.get("routing"),
+                epoch_idx=epoch,
+                loss=train_metrics.get("loss"),
+                macro_f1=train_metrics.get("f1"),
+            )
 
             log = (
                 f"Train loss {train_metrics['loss']:.4f} "
@@ -794,6 +1008,15 @@ def run_training_loop(
 
             macro_f1 = float(val_metrics["f1"])
             neutral_f1 = float(val_metrics["f1_per_class"][neutral_idx])
+
+            _maybe_write_routing(
+                split="val",
+                routing_metrics=val_metrics.get("routing"),
+                epoch_idx=epoch,
+                loss=val_metrics.get("loss"),
+                macro_f1=macro_f1,
+                neutral_f1=neutral_f1,
+            )
 
             log += (
                 f"Val loss {val_metrics['loss']:.4f} "

@@ -655,6 +655,7 @@ class HAGMoE(nn.Module):
             p_expert_list=p_expert_list,
             expert_outs_list=expert_outs_list,
         )
+        out["group_probs"] = p_group.detach()
 
         if self.training and self.hag_verbose_loss and labels is not None:
             if not hasattr(self, "_expert_input_logged"):
