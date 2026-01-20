@@ -52,7 +52,7 @@ class HAGMoE(nn.Module):
         hag_lambda_group: float = 0.5,
         hag_lambda_balance: float = 0.01,
         hag_lambda_diversity: float = 0.1,
-        hag_verbose_loss: bool = True,
+        hag_verbose_loss: bool = False,
         id2label: dict | None = None,
         label2id: dict | None = None,
     ) -> None:
