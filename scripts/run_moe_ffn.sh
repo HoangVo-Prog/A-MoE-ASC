@@ -22,7 +22,10 @@ esac
 # Project root
 # =========================
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
+LOG_FILE="$LOG_DIR/moe_ffn_${LOSS_TYPE}_${DATASET_TYPE}.log"
 export PYTHONPATH="$ROOT_DIR/src"
+mkdir -p "$LOG_DIR"
 
 # =========================
 # Dataset-specific weights/gamma (ABSA 3-class)
@@ -80,7 +83,7 @@ echo
 # =========================
 # Run
 # =========================
-python -m main \
+nohup python -m main \
   --mode MoEFFN \
   --model_name bert-base-uncased \
   --benchmark_fusions \
@@ -91,4 +94,4 @@ python -m main \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   --route_mask_pad_tokens \
   ${LOSS_FLAGS} \
-  ${METHOD_FLAGS} 
+  ${METHOD_FLAGS}  > "$LOG_FILE" 2>&1 &

@@ -22,7 +22,10 @@ esac
 # Project root
 # =========================
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
+LOG_FILE="$LOG_DIR/base_model_${LOSS_TYPE}_${DATASET_TYPE}.log"
 export PYTHONPATH="$ROOT_DIR/src"
+mkdir -p "$LOG_DIR"
 
 # =========================
 # Dataset-specific weights/gamma (ABSA 3-class)
@@ -78,7 +81,7 @@ echo
 # =========================
 # Run
 # =========================
-python -m main \
+nohup python -m main \
   --model_name bert-base-uncased \
   --num_seeds 3 \
   --benchmark_fusions \
@@ -87,4 +90,4 @@ python -m main \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
   ${LOSS_FLAGS} \
-  ${METHOD_FLAGS}
+  ${METHOD_FLAGS} > "$LOG_FILE" 2>&1 &
