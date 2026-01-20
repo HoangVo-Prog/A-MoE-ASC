@@ -94,7 +94,7 @@ python -m main \
   --model_name bert-base-uncased \
   --num_seeds 3 \
   --benchmark_fusions \
-  --output_dir "$ROOT_DIR/results/hagmoe/json_files" \
+  --output_dir "$ROOT_DIR/results/hagmoe/json_files/$LOSS_TYPE" \
   --output_name hagmoe_model.json \
   --train_path "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/train.json" \
   --test_path  "$ROOT_DIR/dataset/atsa/${DATASET_TYPE}/test.json" \
