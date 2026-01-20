@@ -56,6 +56,8 @@ class HAGMoE(nn.Module):
         hag_lambda_diversity: float = 0.1,
         router_entropy_weight: float = 0.0,
         router_entropy_target: float | None = None,
+        router_collapse_weight: float = 0.0,
+        router_collapse_tau: float = 0.02,
         hag_verbose_loss: bool = False,
         id2label: dict | None = None,
         label2id: dict | None = None,
@@ -125,6 +127,8 @@ class HAGMoE(nn.Module):
         self.hag_lambda_diversity = float(hag_lambda_diversity)
         self.router_entropy_weight = float(router_entropy_weight)
         self.router_entropy_target = router_entropy_target
+        self.router_collapse_weight = float(router_collapse_weight)
+        self.router_collapse_tau = float(router_collapse_tau)
         self.hag_verbose_loss = bool(hag_verbose_loss)
 
         cfg = getattr(self.encoder, "config", None)
@@ -675,7 +679,9 @@ class HAGMoE(nn.Module):
                 f"div_raw={(out['loss_diversity_raw'].item() if out['loss_diversity_raw'] is not None else 0.0):.4f} "
                 f"div_used={(out['loss_diversity_used'].item() if out['loss_diversity_used'] is not None else 0.0):.4f} "
                 f"ent_raw={(out['loss_entropy_raw'].item() if out.get('loss_entropy_raw') is not None else 0.0):.4f} "
-                f"ent_used={(out['loss_entropy_used'].item() if out.get('loss_entropy_used') is not None else 0.0):.4f}"
+                f"ent_used={(out['loss_entropy_used'].item() if out.get('loss_entropy_used') is not None else 0.0):.4f} "
+                f"col_raw={(out['loss_collapse_raw'].item() if out.get('loss_collapse_raw') is not None else 0.0):.4f} "
+                f"col_used={(out['loss_collapse_used'].item() if out.get('loss_collapse_used') is not None else 0.0):.4f}"
             )
 
         return out
@@ -701,6 +707,8 @@ class HAGMoE(nn.Module):
                 "loss_diversity": None,
                 "loss_entropy_raw": None,
                 "loss_entropy_used": None,
+                "loss_collapse_raw": None,
+                "loss_collapse_used": None,
                 "loss_group_raw": None,
                 "loss_balance_raw": None,
                 "loss_diversity_raw": None,
@@ -712,12 +720,18 @@ class HAGMoE(nn.Module):
                 "lambda_balance": float(self.hag_lambda_balance),
                 "lambda_diversity": float(self.hag_lambda_diversity),
                 "lambda_entropy": float(self.router_entropy_weight),
+                "lambda_collapse": float(self.router_collapse_weight),
                 "mean_ent": None,
+                "ent_of_mean": None,
+                "group_mean": None,
+                "min_group_mean": None,
+                "collapse_tau": float(self.router_collapse_tau),
                 "enabled_flags": {
                     "group": False,
                     "balance": False,
                     "diversity": False,
                     "entropy": False,
+                    "collapse": False,
                 },
             }
 
@@ -824,12 +838,17 @@ class HAGMoE(nn.Module):
         lambda_balance = float(self.hag_lambda_balance) if self.hag_use_balance_loss else 0.0
         lambda_diversity = float(self.hag_lambda_diversity) if self.hag_use_diversity_loss else 0.0
         lambda_entropy = float(self.router_entropy_weight)
+        lambda_collapse = float(self.router_collapse_weight)
 
         use_group = loss_group is not None and lambda_group > 0.0
         use_balance = loss_balance is not None and lambda_balance > 0.0
         use_diversity = loss_diversity is not None and lambda_diversity > 0.0
         mean_ent = None
         loss_entropy = None
+        ent_of_mean = None
+        group_mean = None
+        min_group_mean = None
+        loss_collapse = None
         if p_group is not None and p_group.numel() > 0:
             p = p_group.clamp_min(1e-12)
             mean_ent = -(p * p.log()).sum(dim=-1).mean()
@@ -840,7 +859,13 @@ class HAGMoE(nn.Module):
                     float(self.router_entropy_target), device=mean_ent.device, dtype=mean_ent.dtype
                 )
                 loss_entropy = (mean_ent - target) ** 2
+            group_mean = p_group.mean(dim=0)
+            min_group_mean = group_mean.min()
+            mean_p = group_mean.clamp_min(1e-12)
+            ent_of_mean = -(mean_p * mean_p.log()).sum()
+            loss_collapse = F.relu(self.router_collapse_tau - min_group_mean).pow(2)
         use_entropy = loss_entropy is not None and lambda_entropy > 0.0
+        use_collapse = loss_collapse is not None and lambda_collapse > 0.0
 
         aux_loss = torch.zeros((), device=logits.device)
         if use_group:
@@ -851,6 +876,8 @@ class HAGMoE(nn.Module):
             aux_loss = aux_loss + lambda_diversity * loss_diversity
         if use_entropy:
             aux_loss = aux_loss + lambda_entropy * loss_entropy
+        if use_collapse:
+            aux_loss = aux_loss + lambda_collapse * loss_collapse
 
         loss = loss_main + aux_loss
 
@@ -861,6 +888,13 @@ class HAGMoE(nn.Module):
             loss_entropy_used = None
         if loss_entropy_used is None and lambda_entropy == 0.0:
             loss_entropy_used = torch.zeros((), device=logits.device)
+        loss_collapse_raw = loss_collapse.detach() if loss_collapse is not None else None
+        if loss_collapse is not None:
+            loss_collapse_used = loss_collapse.detach() * lambda_collapse
+        else:
+            loss_collapse_used = None
+        if loss_collapse_used is None and lambda_collapse == 0.0:
+            loss_collapse_used = torch.zeros((), device=logits.device)
 
         return {
             "loss": loss,
@@ -873,6 +907,8 @@ class HAGMoE(nn.Module):
             "loss_diversity": loss_diversity.detach() if loss_diversity is not None else None,
             "loss_entropy_raw": loss_entropy_raw,
             "loss_entropy_used": loss_entropy_used,
+            "loss_collapse_raw": loss_collapse_raw,
+            "loss_collapse_used": loss_collapse_used,
             "loss_group_raw": loss_group.detach() if loss_group is not None else None,
             "loss_balance_raw": loss_balance.detach() if loss_balance is not None else None,
             "loss_diversity_raw": loss_diversity.detach() if loss_diversity is not None else None,
@@ -886,12 +922,18 @@ class HAGMoE(nn.Module):
             "lambda_balance": lambda_balance,
             "lambda_diversity": lambda_diversity,
             "lambda_entropy": lambda_entropy,
+            "lambda_collapse": lambda_collapse,
             "mean_ent": mean_ent.detach() if mean_ent is not None else None,
+            "ent_of_mean": ent_of_mean.detach() if ent_of_mean is not None else None,
+            "group_mean": group_mean.detach() if group_mean is not None else None,
+            "min_group_mean": min_group_mean.detach() if min_group_mean is not None else None,
+            "collapse_tau": float(self.router_collapse_tau),
             "enabled_flags": {
                 "group": bool(use_group),
                 "balance": bool(use_balance),
                 "diversity": bool(use_diversity),
                 "entropy": bool(use_entropy),
+                "collapse": bool(use_collapse),
             },
             "div_pair_mean": div_pair_mean.detach() if div_pair_mean is not None else None,
             "div_pair_max": div_pair_max.detach() if div_pair_max is not None else None,
