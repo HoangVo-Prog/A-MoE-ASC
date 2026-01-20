@@ -34,7 +34,7 @@ class Config:
 
     freeze_epochs: int = 1
     rolling_k: int = 3
-    early_stop_patience: int = 3
+    early_stop_patience: int = 5
 
     # ====== Run mode ======
     mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoFModel","SDModel","SDMoEDirModel","HAGMoE"
@@ -116,7 +116,7 @@ class Config:
     hag_use_diversity_loss: bool = True
     hag_lambda_group: float = 0.5
     hag_lambda_balance: float = 0.01
-    hag_lambda_diversity: float = 0.1
+    hag_lambda_diversity: float = 0.2
     hag_verbose_loss: bool = False
 
     # Mixture of Fusion
