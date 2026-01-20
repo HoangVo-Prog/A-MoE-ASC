@@ -602,6 +602,8 @@ class _SubsetAspectSentimentDataset(Dataset):
         self._base_samples = base_samples
         self._indices = indices
         self.tokenizer = tokenizer
+        if not getattr(self.tokenizer, "is_fast", False):
+            raise ValueError("Tokenizer must be fast (use_fast=True) for offset mapping.")
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.label2id = label2id
@@ -677,13 +679,6 @@ class _SubsetAspectSentimentDataset(Dataset):
         term = item["aspect"]
         label = self.label2id[item["sentiment"]]
 
-        sent_enc = self.tokenizer(
-            sentence,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_len_sent,
-            return_tensors="pt",
-        )
         term_enc = self.tokenizer(
             term,
             truncation=True,
@@ -693,16 +688,16 @@ class _SubsetAspectSentimentDataset(Dataset):
         )
 
         (
+            input_ids_sent,
+            attention_mask_sent,
+            aspect_mask_sent,
             aspect_start,
             aspect_end,
-            aspect_mask_sent,
-            matched_tokens,
             fail_reason,
             matched,
             diag,
         ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
-            sent_enc=sent_enc,
             term=term,
             sentence=sentence,
             max_len_sent=self.max_len_sent,
@@ -823,8 +818,8 @@ class _SubsetAspectSentimentDataset(Dataset):
                 print("\n".join(block))
 
         item_out = {
-            "input_ids_sent": sent_enc["input_ids"].squeeze(0),
-            "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
+            "input_ids_sent": input_ids_sent,
+            "attention_mask_sent": attention_mask_sent,
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
@@ -834,7 +829,7 @@ class _SubsetAspectSentimentDataset(Dataset):
         }
 
         if self.debug_aspect_span:
-            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sent_ids = input_ids_sent.tolist()
             sep_id = getattr(self.tokenizer, "sep_token_id", None)
             sep_idx = -1
             if sep_id is not None:
@@ -842,7 +837,7 @@ class _SubsetAspectSentimentDataset(Dataset):
                     sep_idx = sent_ids.index(sep_id)
                 except ValueError:
                     sep_idx = -1
-            valid_len = int(sent_enc["attention_mask"].sum().item())
+            valid_len = int(attention_mask_sent.sum().item())
 
             item_out.update(
                 {
@@ -896,6 +891,8 @@ class AspectSentimentDatasetKFold(Dataset):
         debug_aspect_span: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
+        if not getattr(self.tokenizer, "is_fast", False):
+            raise ValueError("Tokenizer must be fast (use_fast=True) for offset mapping.")
         self.max_len_sent = max_len_sent
         self.max_len_term = max_len_term
         self.debug_aspect_span = bool(debug_aspect_span)
@@ -995,13 +992,6 @@ class AspectSentimentDatasetKFold(Dataset):
         term = item["aspect"]
         label = self.label2id[item["sentiment"]]
 
-        sent_enc = self.tokenizer(
-            sentence,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_len_sent,
-            return_tensors="pt",
-        )
         term_enc = self.tokenizer(
             term,
             truncation=True,
@@ -1011,16 +1001,16 @@ class AspectSentimentDatasetKFold(Dataset):
         )
 
         (
+            input_ids_sent,
+            attention_mask_sent,
+            aspect_mask_sent,
             aspect_start,
             aspect_end,
-            aspect_mask_sent,
-            matched_tokens,
             fail_reason,
             matched,
             diag,
         ) = _compute_aspect_span(
             tokenizer=self.tokenizer,
-            sent_enc=sent_enc,
             term=term,
             sentence=sentence,
             max_len_sent=self.max_len_sent,
@@ -1141,8 +1131,8 @@ class AspectSentimentDatasetKFold(Dataset):
                 print("\n".join(block))
 
         item_out = {
-            "input_ids_sent": sent_enc["input_ids"].squeeze(0),
-            "attention_mask_sent": sent_enc["attention_mask"].squeeze(0),
+            "input_ids_sent": input_ids_sent,
+            "attention_mask_sent": attention_mask_sent,
             "input_ids_term": term_enc["input_ids"].squeeze(0),
             "attention_mask_term": term_enc["attention_mask"].squeeze(0),
             "aspect_start": torch.tensor(aspect_start, dtype=torch.long),
@@ -1152,7 +1142,7 @@ class AspectSentimentDatasetKFold(Dataset):
         }
 
         if self.debug_aspect_span:
-            sent_ids = sent_enc["input_ids"].squeeze(0).tolist()
+            sent_ids = input_ids_sent.tolist()
             sep_id = getattr(self.tokenizer, "sep_token_id", None)
             sep_idx = -1
             if sep_id is not None:
@@ -1160,7 +1150,7 @@ class AspectSentimentDatasetKFold(Dataset):
                     sep_idx = sent_ids.index(sep_id)
                 except ValueError:
                     sep_idx = -1
-            valid_len = int(sent_enc["attention_mask"].sum().item())
+            valid_len = int(attention_mask_sent.sum().item())
 
             item_out.update(
                 {
