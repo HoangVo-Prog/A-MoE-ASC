@@ -84,7 +84,7 @@ class MoEMetricsAccumulator:
         hist_idx = torch.clamp((ent_norm * 19).long(), 0, 19)
         self.ent_hist += torch.bincount(hist_idx, minlength=20).to(dtype=torch.int64)
 
-        if labels_cpu is not None:
+        if labels_cpu is not None and labels_cpu.numel() == bsz:
             for lbl in labels_cpu.unique().tolist():
                 mask = labels_cpu == int(lbl)
                 if not torch.any(mask):
