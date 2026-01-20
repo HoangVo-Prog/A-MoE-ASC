@@ -704,25 +704,50 @@ class HAGMoE(nn.Module):
                 loss_balance = sum(losses) / len(losses)
 
         loss_diversity = None
-        # Expert diversity via weight orthogonality within each group.
-        losses = []
-        eps = 1e-8
-        for group in self.experts:
-            if group is None or len(group) == 0:
-                continue
-            weights = []
-            for expert in group:
-                w = expert.fc1.weight
-                weights.append(w.reshape(-1))
-            if len(weights) < 2:
-                continue
-            W = torch.stack(weights, dim=0)
-            W = W / (W.norm(dim=1, keepdim=True) + eps)
-            G = W @ W.t()
-            eye = torch.eye(G.size(0), device=G.device, dtype=G.dtype)
-            losses.append(((G - eye) ** 2).sum())
-        if losses:
-            loss_diversity = sum(losses) / len(losses)
+        div_pair_mean = None
+        div_pair_max = None
+        div_usage_stats = []
+        if expert_outs_list is not None and p_expert_list is not None:
+            losses = []
+            pair_means = []
+            pair_maxes = []
+            for expert_stack, p_expert in zip(expert_outs_list, p_expert_list):
+                if expert_stack is None or p_expert is None:
+                    continue
+                if expert_stack.dim() != 3:
+                    continue
+                bsz, n_experts, _ = expert_stack.shape
+                if n_experts < 2 or bsz == 0:
+                    continue
+                # Expert outputs: [B, E, d] -> normalize per sample.
+                z = F.normalize(expert_stack, p=2, dim=-1)
+                dot = torch.einsum("bed,bfd->bef", z, z).mean(dim=0)
+                dot = dot.clamp(min=-0.999, max=0.999)
+                offdiag = torch.triu(dot, diagonal=1)
+                offdiag_vals = offdiag[offdiag != 0]
+                if offdiag_vals.numel() == 0:
+                    continue
+
+                w = p_expert.mean(dim=0).detach()
+                div_usage_stats.append(
+                    {
+                        "w_mean": float(w.mean().item()),
+                        "w_min": float(w.min().item()),
+                        "w_max": float(w.max().item()),
+                    }
+                )
+                w_outer = torch.outer(w, w)
+                w_offdiag = torch.triu(w_outer, diagonal=1)
+                weighted = (w_offdiag * (offdiag ** 2)).sum()
+                num_pairs = max(n_experts * (n_experts - 1) // 2, 1)
+                losses.append(weighted / float(num_pairs))
+                pair_means.append(offdiag_vals.abs().mean())
+                pair_maxes.append(offdiag_vals.abs().max())
+
+            if losses:
+                loss_diversity = sum(losses) / len(losses)
+                div_pair_mean = sum(pair_means) / len(pair_means)
+                div_pair_max = max(pair_maxes)
 
         lambda_group = float(self.hag_lambda_group) if self.hag_use_group_loss else 0.0
         lambda_balance = float(self.hag_lambda_balance) if self.hag_use_balance_loss else 0.0
@@ -768,6 +793,9 @@ class HAGMoE(nn.Module):
                 "balance": bool(use_balance),
                 "diversity": bool(use_diversity),
             },
+            "div_pair_mean": div_pair_mean.detach() if div_pair_mean is not None else None,
+            "div_pair_max": div_pair_max.detach() if div_pair_max is not None else None,
+            "div_usage_stats": div_usage_stats,
         }
 
     def _collect_aux_loss(self):
