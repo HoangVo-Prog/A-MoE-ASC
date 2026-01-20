@@ -11,6 +11,7 @@ from src.core.utils.general import (
     aggregate_confusions,
 )
 from src.core.utils.plotting import print_confusion_matrix
+from src.core.utils.artifacts import save_artifacts, aggregate_metrics
 
 def train_multi_seed(
     config,
@@ -125,6 +126,33 @@ def train_multi_seed(
                 id2label=id2label,
                 normalize=True,
             )
+
+    metrics_list = []
+    for m, cm in zip(per_seed_metrics, all_seed_cms):
+        cm_norm = (cm / np.clip(cm.sum(axis=1, keepdims=True), 1e-12, None)).tolist()
+        metrics_list.append(
+            {
+                "loss": None,
+                "acc": float(m.get("acc", 0.0)),
+                "f1": float(m.get("f1", 0.0)),
+                "f1_per_class": m.get("f1_per_class"),
+                "confusion": {"cm": cm.tolist(), "cm_normalized": cm_norm},
+                "moe_metrics": m.get("moe_metrics"),
+                "calibration": m.get("calibration"),
+            }
+        )
+    agg = aggregate_metrics(metrics_list)
+    if agg is not None:
+        save_artifacts(
+            output_dir=config.output_dir,
+            mode=config.mode,
+            method=method,
+            loss_type=config.loss_type,
+            seed="avg",
+            fold="full",
+            split="test",
+            metrics=agg,
+        )
 
     return {
         "per_seed": per_seed_metrics,

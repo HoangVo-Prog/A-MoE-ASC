@@ -19,6 +19,7 @@ from src.core.utils.general import (
     aggregate_confusions,
     parse_str_list
 )
+from src.core.utils.artifacts import save_artifacts, aggregate_metrics
 from .engine import run_training_loop, eval_model
 from .train import train_multi_seed
 
@@ -64,6 +65,9 @@ def run_benchmark_fusion(config):
         per_method_seed_records[method] = []
         seed_oof_logits_list = []
         seed_test_logits_list = [] 
+        agg_train = []
+        agg_val = []
+        agg_test = []
         
         for seed in seeds:
             oof_logits = None
@@ -160,24 +164,45 @@ def run_benchmark_fusion(config):
                 fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                 fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
+                train_extra = out.get("last_train_metrics") or {}
                 val_extra = out.get("last_val_metrics") or {}
                 test_extra = out.get("last_test_metrics") or {}
+
+                cm_val = np.asarray(val_m["confusion"], dtype=np.float64)
+                cm_val_norm = (
+                    cm_val / np.clip(cm_val.sum(axis=1, keepdims=True), 1e-12, None)
+                ).tolist()
+                cm_test = np.asarray(test_m["confusion"], dtype=np.float64)
+                cm_test_norm = (
+                    cm_test / np.clip(cm_test.sum(axis=1, keepdims=True), 1e-12, None)
+                ).tolist()
+
                 fold_extra.append(
                     {
-                        "val_calibration": val_extra.get("calibration"),
-                        "test_calibration": test_extra.get("calibration"),
-                        "val_moe_metrics": val_extra.get("moe_metrics"),
-                        "test_moe_metrics": test_extra.get("moe_metrics"),
-                        "val_f1_per_class": (
-                            val_extra.get("f1_per_class").tolist()
-                            if hasattr(val_extra.get("f1_per_class"), "tolist")
-                            else val_extra.get("f1_per_class")
-                        ),
-                        "test_f1_per_class": (
-                            test_extra.get("f1_per_class").tolist()
-                            if hasattr(test_extra.get("f1_per_class"), "tolist")
-                            else test_extra.get("f1_per_class")
-                        ),
+                        "train": {
+                            "loss": float(train_extra.get("loss_total") or train_extra.get("loss") or 0.0),
+                            "acc": float(train_extra.get("acc") or 0.0),
+                            "f1": float(train_extra.get("f1") or 0.0),
+                            "moe_metrics": train_extra.get("moe_metrics"),
+                        },
+                        "val": {
+                            "loss": float(val_m["loss"]),
+                            "acc": float(val_m["acc"]),
+                            "f1": float(val_m["f1"]),
+                            "f1_per_class": val_m.get("f1_per_class"),
+                            "confusion": {"cm": cm_val.tolist(), "cm_normalized": cm_val_norm},
+                            "moe_metrics": val_extra.get("moe_metrics"),
+                            "calibration": val_extra.get("calibration"),
+                        },
+                        "test": {
+                            "loss": float(test_m["loss"]),
+                            "acc": float(test_m["acc"]),
+                            "f1": float(test_m["f1"]),
+                            "f1_per_class": test_m.get("f1_per_class"),
+                            "confusion": {"cm": cm_test.tolist(), "cm_normalized": cm_test_norm},
+                            "moe_metrics": test_extra.get("moe_metrics"),
+                            "calibration": test_extra.get("calibration"),
+                        },
                     }
                 )
 
@@ -229,7 +254,52 @@ def run_benchmark_fusion(config):
             }
             per_method_seed_records[method].append(record)
 
+            for fe in fold_extra:
+                if fe.get("train"):
+                    agg_train.append(fe["train"])
+                if fe.get("val"):
+                    agg_val.append(fe["val"])
+                if fe.get("test"):
+                    agg_test.append(fe["test"])
+
         # Benchmark-level ensemble across seeds (using OOF logits for CV-val, and seed-ensembled logits for test)
+        agg_train_metrics = aggregate_metrics(agg_train)
+        if agg_train_metrics is not None:
+            save_artifacts(
+                output_dir=config.output_dir,
+                mode=config.mode,
+                method=method,
+                loss_type=config.loss_type,
+                seed="avg",
+                fold="avg",
+                split="train",
+                metrics=agg_train_metrics,
+            )
+        agg_val_metrics = aggregate_metrics(agg_val)
+        if agg_val_metrics is not None:
+            save_artifacts(
+                output_dir=config.output_dir,
+                mode=config.mode,
+                method=method,
+                loss_type=config.loss_type,
+                seed="avg",
+                fold="avg",
+                split="val",
+                metrics=agg_val_metrics,
+            )
+        agg_test_metrics = aggregate_metrics(agg_test)
+        if agg_test_metrics is not None:
+            save_artifacts(
+                output_dir=config.output_dir,
+                mode=config.mode,
+                method=method,
+                loss_type=config.loss_type,
+                seed="avg",
+                fold="avg",
+                split="test",
+                metrics=agg_test_metrics,
+            )
+
         if len(seed_oof_logits_list) >= 2:
             ens_oof = np.mean(np.stack(seed_oof_logits_list, axis=0), axis=0)
             y_true = np.asarray(y, dtype=int)

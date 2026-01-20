@@ -1070,6 +1070,7 @@ def run_training_loop(
     epochs_no_improve = 0
     last_val_metrics = None
     last_test_metrics = None
+    last_train_metrics = None
 
     print("=======================================================================")
     print("Fusion Method:", method)
@@ -1200,6 +1201,7 @@ def run_training_loop(
             max_grad_norm=cfg.max_grad_norm,
             epoch_idx=epoch,
         )
+        last_train_metrics = train_metrics
 
         if moe:
             history["train_total_loss"].append(train_metrics["loss_total"])
@@ -1248,6 +1250,22 @@ def run_training_loop(
                 f"acc {train_metrics['acc']:.4f}"
             )
             log += "\n"
+
+        save_artifacts(
+            output_dir=cfg.output_dir,
+            mode=cfg.mode,
+            method=method,
+            loss_type=cfg.loss_type,
+            seed=seed_val,
+            fold=fold_val,
+            split="train",
+            metrics={
+                "loss": float(train_metrics["loss_total"] if moe else train_metrics["loss"]),
+                "acc": float(train_metrics["acc"]),
+                "f1": float(train_metrics["f1"]),
+                "moe_metrics": train_metrics.get("moe_metrics"),
+            },
+        )
 
         if val_loader is not None:
             print("Validation Confusion Matrix")
@@ -1413,4 +1431,5 @@ def run_training_loop(
         "history": history,
         "last_val_metrics": last_val_metrics,
         "last_test_metrics": last_test_metrics,
+        "last_train_metrics": last_train_metrics,
     }
