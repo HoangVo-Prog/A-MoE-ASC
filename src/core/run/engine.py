@@ -31,6 +31,17 @@ class RoutingEpochAggregator:
         self.nan_batches = 0
         self.num_groups: Optional[int] = None
         self.enabled = False
+        self.batch_count_logged = 0
+        self.min_group_mean_min = float("inf")
+        self.min_group_mean_sum = 0.0
+        self.min_group_mean_max = float("-inf")
+        self.max_group_mean_min = float("inf")
+        self.max_group_mean_sum = 0.0
+        self.max_group_mean_max = float("-inf")
+        self.ent_of_mean_min = float("inf")
+        self.ent_of_mean_sum = 0.0
+        self.ent_of_mean_max = float("-inf")
+        self.low_min_group_mean_count = 0
 
     def update(self, outputs: Optional[Dict[str, Any]], model: nn.Module) -> None:
         p_group = None
@@ -66,6 +77,25 @@ class RoutingEpochAggregator:
         top1_max = p_group.max(dim=-1).values
         top1 = p_group.argmax(dim=-1)
 
+        group_mean_batch = p_group.mean(dim=0)
+        min_gm = float(group_mean_batch.min().item())
+        max_gm = float(group_mean_batch.max().item())
+        mean_p = group_mean_batch.clamp_min(1e-12)
+        ent_of_mean = float(-(mean_p * mean_p.log()).sum().item())
+
+        self.batch_count_logged += 1
+        self.min_group_mean_sum += min_gm
+        self.min_group_mean_min = min(self.min_group_mean_min, min_gm)
+        self.min_group_mean_max = max(self.min_group_mean_max, min_gm)
+        self.max_group_mean_sum += max_gm
+        self.max_group_mean_min = min(self.max_group_mean_min, max_gm)
+        self.max_group_mean_max = max(self.max_group_mean_max, max_gm)
+        self.ent_of_mean_sum += ent_of_mean
+        self.ent_of_mean_min = min(self.ent_of_mean_min, ent_of_mean)
+        self.ent_of_mean_max = max(self.ent_of_mean_max, ent_of_mean)
+        if min_gm < 0.01:
+            self.low_min_group_mean_count += 1
+
         self.sum_ent += float(ent.sum().item())
         self.sum_ent2 += float((ent * ent).sum().item())
         self.count_samples += int(bsz)
@@ -93,6 +123,30 @@ class RoutingEpochAggregator:
         else:
             top1_hist = (self.top1_counts.to(dtype=torch.float64) / self.count_samples).tolist()
 
+        min_group_mean_stats = None
+        max_group_mean_stats = None
+        ent_of_mean_stats = None
+        low_min_group_mean_ratio = None
+        if self.batch_count_logged > 0:
+            min_group_mean_stats = {
+                "min": float(self.min_group_mean_min),
+                "mean": float(self.min_group_mean_sum / self.batch_count_logged),
+                "max": float(self.min_group_mean_max),
+            }
+            max_group_mean_stats = {
+                "min": float(self.max_group_mean_min),
+                "mean": float(self.max_group_mean_sum / self.batch_count_logged),
+                "max": float(self.max_group_mean_max),
+            }
+            ent_of_mean_stats = {
+                "min": float(self.ent_of_mean_min),
+                "mean": float(self.ent_of_mean_sum / self.batch_count_logged),
+                "max": float(self.ent_of_mean_max),
+            }
+            low_min_group_mean_ratio = float(
+                self.low_min_group_mean_count / self.batch_count_logged
+            )
+
         return {
             "mean_ent": float(mean_ent),
             "std_ent": float(std_ent),
@@ -100,6 +154,11 @@ class RoutingEpochAggregator:
             "top1_dominance": float(top1_dominance),
             "top1_hist": top1_hist,
             "nan_batches": int(self.nan_batches),
+            "min_group_mean_batch_stats": min_group_mean_stats,
+            "max_group_mean_batch_stats": max_group_mean_stats,
+            "entropy_of_mean_batch_stats": ent_of_mean_stats,
+            "low_min_group_mean_ratio": low_min_group_mean_ratio,
+            "batch_count_logged": int(self.batch_count_logged),
         }
 
 
@@ -484,6 +543,14 @@ def train_one_epoch(
     if routing_metrics is not None:
         usage = routing_metrics.get("group_usage", [])
         top1_hist = routing_metrics.get("top1_hist", [])
+        ent_stats = routing_metrics.get("entropy_of_mean_batch_stats")
+        ent_str = "None"
+        if ent_stats:
+            ent_str = (
+                f"[{ent_stats['min']:.4f}/"
+                f"{ent_stats['mean']:.4f}/"
+                f"{ent_stats['max']:.4f}]"
+            )
         print(
             "Routing(train): "
             f"mean_ent={routing_metrics['mean_ent']:.6f} "
@@ -491,6 +558,8 @@ def train_one_epoch(
             f"usage={usage} "
             f"top1_dom={routing_metrics['top1_dominance']:.6f} "
             f"top1_hist={top1_hist} "
+            f"lowMinGM={routing_metrics.get('low_min_group_mean_ratio')} "
+            f"entMean[min/mean/max]={ent_str} "
             f"nan_batches={routing_metrics['nan_batches']}"
         )
 
@@ -745,6 +814,14 @@ def eval_model(
     if routing_metrics is not None and split in {"train", "val"}:
         usage = routing_metrics.get("group_usage", [])
         top1_hist = routing_metrics.get("top1_hist", [])
+        ent_stats = routing_metrics.get("entropy_of_mean_batch_stats")
+        ent_str = "None"
+        if ent_stats:
+            ent_str = (
+                f"[{ent_stats['min']:.4f}/"
+                f"{ent_stats['mean']:.4f}/"
+                f"{ent_stats['max']:.4f}]"
+            )
         print(
             f"Routing({split}): "
             f"mean_ent={routing_metrics['mean_ent']:.6f} "
@@ -752,6 +829,8 @@ def eval_model(
             f"usage={usage} "
             f"top1_dom={routing_metrics['top1_dominance']:.6f} "
             f"top1_hist={top1_hist} "
+            f"lowMinGM={routing_metrics.get('low_min_group_mean_ratio')} "
+            f"entMean[min/mean/max]={ent_str} "
             f"nan_batches={routing_metrics['nan_batches']}"
         )
 
@@ -839,6 +918,11 @@ def run_training_loop(
             "top1_dominance": routing_metrics["top1_dominance"],
             "top1_hist": routing_metrics["top1_hist"],
             "nan_batches": routing_metrics.get("nan_batches", 0),
+            "min_group_mean_batch_stats": routing_metrics.get("min_group_mean_batch_stats"),
+            "max_group_mean_batch_stats": routing_metrics.get("max_group_mean_batch_stats"),
+            "entropy_of_mean_batch_stats": routing_metrics.get("entropy_of_mean_batch_stats"),
+            "low_min_group_mean_ratio": routing_metrics.get("low_min_group_mean_ratio"),
+            "batch_count_logged": routing_metrics.get("batch_count_logged"),
         }
         if macro_f1 is not None:
             entry["macro_f1"] = float(macro_f1)
