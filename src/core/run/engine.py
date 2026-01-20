@@ -695,6 +695,15 @@ def run_training_loop(
         if cfg.freeze_epochs > 0 and epoch < cfg.freeze_epochs:
             print(f"Encoder frozen (epoch {epoch + 1}/{cfg.freeze_epochs})")
 
+        if cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE":
+            if hasattr(model, "maybe_update_group_temperature"):
+                try:
+                    model.maybe_update_group_temperature(
+                        epoch_idx=epoch, total_epochs=int(cfg.epochs)
+                    )
+                except Exception as e:
+                    print(f"[HAGMoE] cannot update group temperature: {e}")
+
         # Rebuild optimizer exactly at unfreeze boundary
         if (cfg.mode != "SDModel") and (cfg.freeze_epochs > 0) and (epoch == cfg.freeze_epochs):
             print("Encoder unfrozen, rebuilding optimizer to include newly-trainable params")

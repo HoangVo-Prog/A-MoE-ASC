@@ -109,6 +109,8 @@ class Config:
     hag_num_groups: int = 3
     hag_experts_per_group: int = 8
     hag_router_temperature: float = 1.0
+    hag_group_temperature: float = 1.0
+    hag_group_temperature_anneal: Optional[str] = 2.0,0.9
     hag_merge: str = "residual"  # "residual" | "moe_only"
     hag_fusion_method: str = "concat"
     hag_use_group_loss: bool = True

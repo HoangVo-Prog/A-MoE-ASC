@@ -44,6 +44,8 @@ class HAGMoE(nn.Module):
         hag_num_groups: int = 3,
         hag_experts_per_group: int = 8,
         hag_router_temperature: float = 1.0,
+        hag_group_temperature: float = 1.0,
+        hag_group_temperature_anneal: str | None = None,
         hag_merge: str = "residual",
         hag_fusion_method: str = "concat",
         hag_use_group_loss: bool = False,
@@ -104,6 +106,12 @@ class HAGMoE(nn.Module):
         self.num_groups = int(hag_num_groups) if hag_num_groups else 3
         self.num_experts = int(hag_experts_per_group) if hag_experts_per_group else int(num_experts)
         self.router_temperature = float(hag_router_temperature if hag_router_temperature else router_temperature)
+        self.group_temperature = float(hag_group_temperature) if hag_group_temperature else 1.0
+        if self.group_temperature <= 0:
+            self.group_temperature = 1.0
+        self.group_temperature_anneal = (
+            str(hag_group_temperature_anneal).strip() if hag_group_temperature_anneal else ""
+        )
 
         self.hag_merge = str(hag_merge).lower().strip() if hag_merge is not None else "residual"
         self.hag_fusion_method = str(hag_fusion_method).strip() if hag_fusion_method else ""
@@ -187,6 +195,43 @@ class HAGMoE(nn.Module):
         if dtype in (torch.float16, torch.bfloat16):
             return -1e4
         return -1e9
+
+    @staticmethod
+    def _parse_temperature_anneal(spec: str) -> tuple[float, float] | None:
+        if not spec:
+            return None
+        sep = "," if "," in spec else (":" if ":" in spec else None)
+        if sep is None:
+            return None
+        parts = [p.strip() for p in spec.split(sep) if p.strip()]
+        if len(parts) < 2:
+            return None
+        try:
+            start = float(parts[0])
+            end = float(parts[1])
+        except ValueError:
+            return None
+        return start, end
+
+    def maybe_update_group_temperature(
+        self, *, epoch_idx: int | None, total_epochs: int | None
+    ) -> None:
+        spec = self.group_temperature_anneal
+        if not spec or epoch_idx is None or total_epochs is None:
+            return
+        parsed = self._parse_temperature_anneal(spec)
+        if parsed is None:
+            return
+        start, end = parsed
+        if total_epochs <= 1:
+            ratio = 1.0
+        else:
+            ratio = float(epoch_idx) / float(max(1, total_epochs - 1))
+            ratio = max(0.0, min(1.0, ratio))
+        temp = start + (end - start) * ratio
+        if temp <= 0:
+            temp = 1e-6
+        self.group_temperature = float(temp)
 
     @staticmethod
     def _build_label_group_mapping(
@@ -489,10 +534,15 @@ class HAGMoE(nn.Module):
 
     def apply_grouped_experts(
         self, h_fused: torch.Tensor, h_expert_in: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
+    ) -> tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor], list[torch.Tensor]
+    ]:
         # Soft mixture over groups; all groups contribute to h_moe.
-        group_logits = self.route_group(h_fused)
+        group_logits = self.route_group(h_fused) / self.group_temperature
         p_group = torch.softmax(group_logits, dim=-1)
+        if self.hag_verbose_loss and self.training and not hasattr(self, "_group_temp_logged"):
+            print(f"[HAGMoE] group_temperature={self.group_temperature:.4f}")
+            self._group_temp_logged = True
 
         h_moe = torch.zeros_like(h_fused)
         p_expert_list: list[torch.Tensor] = []
@@ -511,7 +561,7 @@ class HAGMoE(nn.Module):
             h_g = (p_expert.unsqueeze(-1) * expert_stack).sum(dim=1)
             h_moe = h_moe + p_group[:, g].unsqueeze(-1) * h_g
 
-        return h_moe, group_logits, p_expert_list, expert_outs_list
+        return h_moe, group_logits, p_group, p_expert_list, expert_outs_list
 
     def _compute_fused_and_cond(
         self,
@@ -585,10 +635,10 @@ class HAGMoE(nn.Module):
             fusion_method=fusion_method,
         )
 
-        h_moe, group_logits, p_expert_list, expert_outs_list = self.apply_grouped_experts(
+        h_moe, group_logits, p_group, p_expert_list, expert_outs_list = self.apply_grouped_experts(
             h_fused, h_expert_in
         )
-        self._last_group_probs = torch.softmax(group_logits, dim=-1).detach()
+        self._last_group_probs = p_group.detach()
         self._last_expert_probs = [p.detach() for p in p_expert_list]
         self._last_h_expert_in = h_expert_in.detach()
         if self.hag_merge == "moe_only":
@@ -601,6 +651,7 @@ class HAGMoE(nn.Module):
             logits,
             labels,
             group_logits=group_logits,
+            p_group=p_group,
             p_expert_list=p_expert_list,
             expert_outs_list=expert_outs_list,
         )
@@ -628,6 +679,7 @@ class HAGMoE(nn.Module):
         labels,
         *,
         group_logits: torch.Tensor | None = None,
+        p_group: torch.Tensor | None = None,
         p_expert_list: list[torch.Tensor] | None = None,
         expert_outs_list: list[torch.Tensor] | None = None,
     ):
@@ -692,16 +744,23 @@ class HAGMoE(nn.Module):
         if p_expert_list is not None and len(p_expert_list) > 0:
             # Switch-style load balance: N * sum_i f_i * P_i
             losses = []
-            for p_expert in p_expert_list:
+            for g, p_expert in enumerate(p_expert_list):
                 if p_expert.numel() == 0:
                     continue
                 p_mean = p_expert.mean(dim=0)
-                assign = torch.argmax(p_expert, dim=-1)
+                assign = torch.argmax(p_expert.detach(), dim=-1)
                 f = F.one_hot(assign, num_classes=p_expert.size(1)).float().mean(dim=0)
                 n_experts = p_expert.size(1)
-                losses.append(n_experts * torch.sum(f * p_mean))
+                balance_g = n_experts * torch.sum(f * p_mean)
+                if p_group is not None and p_group.numel() > 0 and g < p_group.size(1):
+                    w_g = p_group[:, g].mean().detach()
+                    balance_g = w_g * balance_g
+                losses.append(balance_g)
             if losses:
-                loss_balance = sum(losses) / len(losses)
+                if p_group is not None and p_group.numel() > 0:
+                    loss_balance = sum(losses)
+                else:
+                    loss_balance = sum(losses) / len(losses)
 
         loss_diversity = None
         div_pair_mean = None
@@ -814,11 +873,16 @@ class HAGMoE(nn.Module):
             return
 
         group_mean = group_probs.mean(dim=0).detach().cpu()
-        entropy = -torch.sum(group_mean * torch.log(group_mean.clamp_min(1e-12))).item()
+        eps = 1e-12
+        ent_of_mean = -torch.sum(group_mean * torch.log(group_mean.clamp_min(eps))).item()
+        mean_ent = (
+            -(group_probs * torch.log(group_probs.clamp_min(eps))).sum(dim=-1).mean().item()
+        )
         group_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(group_mean)])
         print("\n[HAGMoE Debug - Grouped Router]")
         print(f"  group_mean: {group_pairs}")
-        print(f"  group_entropy: {entropy:.6f}")
+        print(f"  ent_of_mean: {ent_of_mean:.6f}")
+        print(f"  mean_ent: {mean_ent:.6f}")
 
         for g, p_expert in enumerate(expert_probs):
             if p_expert is None or p_expert.numel() == 0:
