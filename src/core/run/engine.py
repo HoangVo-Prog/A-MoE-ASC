@@ -295,6 +295,8 @@ def train_one_epoch(
         "loss_group": 0.0,
         "loss_balance": 0.0,
         "loss_diversity": 0.0,
+        "loss_entropy_raw": 0.0,
+        "loss_entropy_used": 0.0,
     }
     hag_log_counts = {k: 0 for k in hag_log_sums}
 
