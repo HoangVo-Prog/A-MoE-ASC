@@ -85,6 +85,13 @@ class Config:
     jitter_end: float = 0
     router_entropy_weight: float = 0.01
     router_entropy_target: float = 0.45
+    
+    router_entropy_schedule = [
+        (1, 0.03),
+        (3, 0.02),
+        (5, 0.01),
+    ]
+
 
     route_mask_pad_tokens: bool = True
     router_temperature: float = 1.0
