@@ -91,7 +91,9 @@ class Config:
         (3, 0.02),
         (5, 0.01),
     ]
-
+    
+    router_collapse_tau = 0.03
+    router_collapse_weight = 0.02
 
     route_mask_pad_tokens: bool = True
     router_temperature: float = 1.0
