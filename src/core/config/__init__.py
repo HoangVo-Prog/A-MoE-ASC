@@ -117,7 +117,7 @@ class Config:
     hag_lambda_group: float = 0.5
     hag_lambda_balance: float = 0.01
     hag_lambda_diversity: float = 0.1
-    hag_verbose_loss: bool = True
+    hag_verbose_loss: bool = False
 
     # Mixture of Fusion
     mof_experts: Optional[list[str]] = field(
