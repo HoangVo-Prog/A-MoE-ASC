@@ -820,4 +820,23 @@ class HAGMoE(nn.Module):
         print(f"  group_mean: {group_pairs}")
         print(f"  group_entropy: {entropy:.6f}")
 
+        for g, p_expert in enumerate(expert_probs):
+            if p_expert is None or p_expert.numel() == 0:
+                print(f"  group{g}: no expert stats")
+                continue
+
+            usage = p_expert.mean(dim=0).detach().cpu()
+            dead = int((usage < eps_dead).sum().item())
+            topk = min(topn, usage.numel())
+            botk = min(topn, usage.numel())
+            topv, topi = torch.topk(usage, k=topk, largest=True)
+            botv, boti = torch.topk(usage, k=botk, largest=False)
+            top_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv, topi)])
+            bot_pairs = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv, boti)])
+
+            print(
+                f"  group{g}: min={float(usage.min()):.6f} max={float(usage.max()):.6f} dead(<{eps_dead:g})={dead}"
+            )
+            print(f"    top: {top_pairs}")
+            print(f"    bot: {bot_pairs}")
     
