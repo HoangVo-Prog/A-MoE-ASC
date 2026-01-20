@@ -52,7 +52,7 @@ class HAGMoE(nn.Module):
         hag_lambda_group: float = 0.5,
         hag_lambda_balance: float = 0.01,
         hag_lambda_diversity: float = 0.1,
-        hag_verbose_loss: bool = False,
+        hag_verbose_loss: bool = True,
         id2label: dict | None = None,
         label2id: dict | None = None,
     ) -> None:
@@ -168,9 +168,13 @@ class HAGMoE(nn.Module):
         self.focal_gamma = float(focal_gamma)
 
         labelid_to_groupid = None
-        if id2label is None and label2id is not None:
-            id2label = {int(v): k for k, v in label2id.items()}
-        if id2label is not None:
+        if self.hag_use_group_loss:
+            if id2label is None and label2id is not None:
+                id2label = {int(v): k for k, v in label2id.items()}
+            if id2label is None:
+                raise ValueError(
+                    "hag_use_group_loss=True requires id2label/label2id for group mapping."
+                )
             labelid_to_groupid = self._build_label_group_mapping(
                 id2label=id2label,
                 num_labels=num_labels,
@@ -484,9 +488,9 @@ class HAGMoE(nn.Module):
         return mask_out
 
     def apply_grouped_experts(
-        self, h_fused: torch.Tensor, h_aspect: torch.Tensor
+        self, h_fused: torch.Tensor, h_expert_in: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
-        h_cond = self.cond_proj(torch.cat([h_fused, h_aspect], dim=-1))
+        # Soft mixture over groups; all groups contribute to h_moe.
         group_logits = self.route_group(h_fused)
         p_group = torch.softmax(group_logits, dim=-1)
 
@@ -494,13 +498,13 @@ class HAGMoE(nn.Module):
         p_expert_list: list[torch.Tensor] = []
         expert_outs_list: list[torch.Tensor] = []
         for g in range(self.num_groups):
-            logits = self.expert_routers[g](h_cond) / self.router_temperature
+            logits = self.expert_routers[g](h_expert_in) / self.router_temperature
             p_expert = torch.softmax(logits, dim=-1)
             p_expert_list.append(p_expert)
 
             expert_outs = []
             for expert in self.experts[g]:
-                expert_outs.append(expert(h_fused))
+                expert_outs.append(expert(h_expert_in))
             expert_stack = torch.stack(expert_outs, dim=1)
             expert_outs_list.append(expert_stack)
 
@@ -509,17 +513,17 @@ class HAGMoE(nn.Module):
 
         return h_moe, group_logits, p_expert_list, expert_outs_list
 
-    def forward(
+    def _compute_fused_and_cond(
         self,
+        *,
         input_ids_sent: torch.Tensor,
         attention_mask_sent: torch.Tensor,
         input_ids_term: torch.Tensor,
         attention_mask_term: torch.Tensor,
-        aspect_start: torch.Tensor | None = None,
-        aspect_end: torch.Tensor | None = None,
-        aspect_mask_sent: torch.Tensor | None = None,
-        labels=None,
-        fusion_method: str = "concat",
+        aspect_start: torch.Tensor | None,
+        aspect_end: torch.Tensor | None,
+        aspect_mask_sent: torch.Tensor | None,
+        fusion_method: str,
     ):
         out_sent = self.encoder(input_ids=input_ids_sent, attention_mask=attention_mask_sent)
 
@@ -554,11 +558,39 @@ class HAGMoE(nn.Module):
             fusion_method=effective_fusion,
         )
 
+        h_expert_in = self.cond_proj(torch.cat([h_fused, h_aspect], dim=-1))
+
+        return out_sent, h_fused, h_aspect, h_expert_in, aspect_mask
+
+    def forward(
+        self,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        aspect_start: torch.Tensor | None = None,
+        aspect_end: torch.Tensor | None = None,
+        aspect_mask_sent: torch.Tensor | None = None,
+        labels=None,
+        fusion_method: str = "concat",
+    ):
+        out_sent, h_fused, h_aspect, h_expert_in, aspect_mask = self._compute_fused_and_cond(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            aspect_start=aspect_start,
+            aspect_end=aspect_end,
+            aspect_mask_sent=aspect_mask_sent,
+            fusion_method=fusion_method,
+        )
+
         h_moe, group_logits, p_expert_list, expert_outs_list = self.apply_grouped_experts(
-            h_fused, h_aspect
+            h_fused, h_expert_in
         )
         self._last_group_probs = torch.softmax(group_logits, dim=-1).detach()
         self._last_expert_probs = [p.detach() for p in p_expert_list]
+        self._last_h_expert_in = h_expert_in.detach()
         if self.hag_merge == "moe_only":
             h_final = h_moe
         else:
@@ -574,12 +606,18 @@ class HAGMoE(nn.Module):
         )
 
         if self.training and self.hag_verbose_loss and labels is not None:
+            if not hasattr(self, "_expert_input_logged"):
+                print("[HAGMoE] expert_input=conditioned (h_cond)")
+                self._expert_input_logged = True
             print(
                 "[HAGMoE] "
                 f"main={out['loss_main'].item():.4f} "
-                f"group={(out['loss_group'].item() if out['loss_group'] is not None else 0.0):.4f} "
-                f"balance={(out['loss_balance'].item() if out['loss_balance'] is not None else 0.0):.4f} "
-                f"diversity={(out['loss_diversity'].item() if out['loss_diversity'] is not None else 0.0):.4f}"
+                f"group_raw={(out['loss_group_raw'].item() if out['loss_group_raw'] is not None else 0.0):.4f} "
+                f"group_used={(out['loss_group_used'].item() if out['loss_group_used'] is not None else 0.0):.4f} "
+                f"balance_raw={(out['loss_balance_raw'].item() if out['loss_balance_raw'] is not None else 0.0):.4f} "
+                f"balance_used={(out['loss_balance_used'].item() if out['loss_balance_used'] is not None else 0.0):.4f} "
+                f"div_raw={(out['loss_diversity_raw'].item() if out['loss_diversity_raw'] is not None else 0.0):.4f} "
+                f"div_used={(out['loss_diversity_used'].item() if out['loss_diversity_used'] is not None else 0.0):.4f}"
             )
 
         return out
@@ -602,10 +640,21 @@ class HAGMoE(nn.Module):
                 "loss_group": None,
                 "loss_balance": None,
                 "loss_diversity": None,
+                "loss_group_raw": None,
+                "loss_balance_raw": None,
+                "loss_diversity_raw": None,
+                "loss_group_used": None,
+                "loss_balance_used": None,
+                "loss_diversity_used": None,
                 "loss_lambda": None,
                 "lambda_group": float(self.hag_lambda_group),
                 "lambda_balance": float(self.hag_lambda_balance),
                 "lambda_diversity": float(self.hag_lambda_diversity),
+                "enabled_flags": {
+                    "group": False,
+                    "balance": False,
+                    "diversity": False,
+                },
             }
 
         if self.loss_type == "ce":
@@ -621,7 +670,8 @@ class HAGMoE(nn.Module):
             raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
 
         loss_group = None
-        if group_logits is not None:
+        group_target = None
+        if self.hag_use_group_loss and group_logits is not None:
             if self.labelid_to_groupid is None:
                 raise RuntimeError(
                     "hag_use_group_loss=True but labelid_to_groupid is not set. "
@@ -629,6 +679,14 @@ class HAGMoE(nn.Module):
                 )
             group_target = self.labelid_to_groupid[labels]
             loss_group = F.cross_entropy(group_logits, group_target)
+            if self.hag_verbose_loss and self.training:
+                counts = torch.bincount(group_target, minlength=self.num_groups)
+                print(
+                    "[HAGMoE] group_targets "
+                    f"min={int(group_target.min().item())} "
+                    f"max={int(group_target.max().item())} "
+                    f"counts={counts.tolist()}"
+                )
 
         loss_balance = None
         if p_expert_list is not None and len(p_expert_list) > 0:
@@ -670,12 +728,16 @@ class HAGMoE(nn.Module):
         lambda_balance = float(self.hag_lambda_balance) if self.hag_use_balance_loss else 0.0
         lambda_diversity = float(self.hag_lambda_diversity) if self.hag_use_diversity_loss else 0.0
 
+        use_group = loss_group is not None and lambda_group > 0.0
+        use_balance = loss_balance is not None and lambda_balance > 0.0
+        use_diversity = loss_diversity is not None and lambda_diversity > 0.0
+
         aux_loss = torch.zeros((), device=logits.device)
-        if loss_group is not None:
+        if use_group:
             aux_loss = aux_loss + lambda_group * loss_group
-        if loss_balance is not None:
+        if use_balance:
             aux_loss = aux_loss + lambda_balance * loss_balance
-        if loss_diversity is not None:
+        if use_diversity:
             aux_loss = aux_loss + lambda_diversity * loss_diversity
 
         loss = loss_main + aux_loss
@@ -689,10 +751,23 @@ class HAGMoE(nn.Module):
             "loss_group": loss_group.detach() if loss_group is not None else None,
             "loss_balance": loss_balance.detach() if loss_balance is not None else None,
             "loss_diversity": loss_diversity.detach() if loss_diversity is not None else None,
+            "loss_group_raw": loss_group.detach() if loss_group is not None else None,
+            "loss_balance_raw": loss_balance.detach() if loss_balance is not None else None,
+            "loss_diversity_raw": loss_diversity.detach() if loss_diversity is not None else None,
+            "loss_group_used": (loss_group.detach() * lambda_group) if use_group else None,
+            "loss_balance_used": (loss_balance.detach() * lambda_balance) if use_balance else None,
+            "loss_diversity_used": (loss_diversity.detach() * lambda_diversity)
+            if use_diversity
+            else None,
             "loss_lambda": aux_loss.detach(),
             "lambda_group": lambda_group,
             "lambda_balance": lambda_balance,
             "lambda_diversity": lambda_diversity,
+            "enabled_flags": {
+                "group": bool(use_group),
+                "balance": bool(use_balance),
+                "diversity": bool(use_diversity),
+            },
         }
 
     def _collect_aux_loss(self):
@@ -711,9 +786,49 @@ class HAGMoE(nn.Module):
             return
 
         group_mean = group_probs.mean(dim=0).detach().cpu()
+        entropy = -torch.sum(group_mean * torch.log(group_mean.clamp_min(1e-12))).item()
         group_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(group_mean)])
         print("\n[HAGMoE Debug - Grouped Router]")
         print(f"  group_mean: {group_pairs}")
+        print(f"  group_entropy: {entropy:.6f}")
+
+    @torch.no_grad()
+    def debug_expert_input_sanity(
+        self,
+        *,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        aspect_mask_a: torch.Tensor,
+        aspect_mask_b: torch.Tensor,
+        aspect_start: torch.Tensor | None = None,
+        aspect_end: torch.Tensor | None = None,
+        fusion_method: str = "concat",
+    ) -> None:
+        self.eval()
+        _, _, _, h_expert_a, _ = self._compute_fused_and_cond(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            aspect_start=aspect_start,
+            aspect_end=aspect_end,
+            aspect_mask_sent=aspect_mask_a,
+            fusion_method=fusion_method,
+        )
+        _, _, _, h_expert_b, _ = self._compute_fused_and_cond(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            aspect_start=aspect_start,
+            aspect_end=aspect_end,
+            aspect_mask_sent=aspect_mask_b,
+            fusion_method=fusion_method,
+        )
+        diff = (h_expert_a - h_expert_b).norm(dim=-1).mean().item()
+        print(f"[HAGMoE] expert_input_diff_norm={diff:.6f} (expect > 0)")
 
         for g, p_expert in enumerate(expert_probs):
             if p_expert is None or p_expert.numel() == 0:
