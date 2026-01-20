@@ -68,7 +68,20 @@ def train_multi_seed(
         cm = confusion_matrix(labels, preds, labels=list(range(num_classes)))
         all_seed_cms.append(cm)
 
-        per_seed_metrics.append({"seed": int(seed), **m})
+        extra = out.get("last_test_metrics") or {}
+        per_seed_metrics.append(
+            {
+                "seed": int(seed),
+                **m,
+                "calibration": extra.get("calibration"),
+                "moe_metrics": extra.get("moe_metrics"),
+                "f1_per_class": (
+                    extra.get("f1_per_class").tolist()
+                    if hasattr(extra.get("f1_per_class"), "tolist")
+                    else extra.get("f1_per_class")
+                ),
+            }
+        )
         all_seed_logits.append(logits)
 
         del model

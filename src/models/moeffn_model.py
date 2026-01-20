@@ -317,6 +317,37 @@ class MoEFFN(BaseModel):
             capacity_factor=capacity_factor
         )
 
+    def forward(
+        self,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        labels=None,
+        fusion_method: str = "concat",
+    ):
+        out = super().forward(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+            attention_mask_term=attention_mask_term,
+            labels=labels,
+            fusion_method=fusion_method,
+        )
+        out["moe_stats"] = self._get_moe_stats()
+        return out
+
+    def _get_moe_stats(self):
+        logits = None
+        for layer in self.encoder.encoder.layer:
+            moe = getattr(layer, "moe_ffn", None)
+            if moe is None:
+                continue
+            logits = getattr(moe, "last_router_logits", None)
+        if logits is None:
+            return None
+        return {"router_logits": logits.detach()}
+
 
     def _collect_aux_loss(self):
         total, count = 0.0, 0

@@ -19,6 +19,9 @@ from src.core.utils.const import DEVICE
 from src.core.utils.general import cleanup_cuda, safe_float
 from src.core.utils.optim import build_optimizer_and_scheduler
 from src.core.utils.plotting import print_confusion_matrix
+from src.core.utils.moe_metrics import MoEMetricsAccumulator
+from src.core.utils.calibration import compute_calibration
+from src.core.utils.artifacts import save_artifacts
 
 
 class RoutingEpochAggregator:
@@ -213,6 +216,415 @@ def _normalize_aspect_text(s: str) -> str:
     return s
 
 
+def _move_batch_to_device(batch_dict: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in batch_dict.items():
+        if torch.is_tensor(v):
+            out[k] = v.to(DEVICE)
+        else:
+            out[k] = v
+    return out
+
+
+def _forward_step(
+    cfg, model: nn.Module, batch: Dict[str, Any], fusion_method: str
+) -> Dict[str, Any]:
+    if cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE":
+        return model(
+            input_ids_sent=batch["input_ids_sent"],
+            attention_mask_sent=batch["attention_mask_sent"],
+            input_ids_term=batch["input_ids_term"],
+            attention_mask_term=batch["attention_mask_term"],
+            aspect_start=batch.get("aspect_start"),
+            aspect_end=batch.get("aspect_end"),
+            aspect_mask_sent=batch.get("aspect_mask_sent"),
+            labels=batch["label"],
+            fusion_method=fusion_method,
+        )
+    return model(
+        input_ids_sent=batch["input_ids_sent"],
+        attention_mask_sent=batch["attention_mask_sent"],
+        input_ids_term=batch["input_ids_term"],
+        attention_mask_term=batch["attention_mask_term"],
+        labels=batch["label"],
+        fusion_method=fusion_method,
+    )
+
+
+def _backward_step(
+    *,
+    loss_total: torch.Tensor,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    scaler: Optional[GradScaler],
+    use_amp: bool,
+    max_grad_norm: Optional[float],
+) -> None:
+    if use_amp:
+        if scaler is None:
+            raise RuntimeError("use_amp=True but scaler is None")
+        scaler.scale(loss_total).backward()
+
+        if max_grad_norm is not None:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss_total.backward()
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+        optimizer.step()
+
+    if scheduler is not None:
+        scheduler.step()
+
+
+def _accumulate_basic_metrics(
+    *,
+    counters: Dict[str, Any],
+    loss_total: torch.Tensor,
+    loss_main,
+    loss_lambda,
+    loss_aux,
+    moe: bool,
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> None:
+    counters["total_loss_sum"] += safe_float(loss_total)
+    if moe:
+        counters["main_loss_sum"] += safe_float(loss_main)
+        counters["lambda_loss_sum"] += safe_float(loss_lambda)
+        counters["aux_loss_sum"] += safe_float(loss_aux)
+    counters["n_steps"] += 1
+
+    preds = torch.argmax(logits, dim=-1)
+    counters["all_preds"].extend(preds.detach().cpu().tolist())
+    counters["all_labels"].extend(labels.detach().cpu().tolist())
+
+
+def _init_hag_log_buffers() -> tuple[Dict[str, float], Dict[str, int]]:
+    sums = {
+        "loss": 0.0,
+        "loss_main": 0.0,
+        "aux_loss": 0.0,
+        "loss_group": 0.0,
+        "loss_balance": 0.0,
+        "loss_diversity": 0.0,
+        "loss_entropy_raw": 0.0,
+        "loss_entropy_used": 0.0,
+        "loss_collapse_raw": 0.0,
+        "loss_collapse_used": 0.0,
+    }
+    counts = {k: 0 for k in sums}
+    return sums, counts
+
+
+def _update_hag_log_buffers(
+    outputs: Dict[str, Any],
+    hag_log_sums: Dict[str, float],
+    hag_log_counts: Dict[str, int],
+) -> None:
+    for key in hag_log_sums:
+        if key in outputs and outputs.get(key) is not None:
+            hag_log_sums[key] += safe_float(outputs.get(key))
+            hag_log_counts[key] += 1
+
+
+def _print_hag_epoch_loss_summary(
+    *,
+    model: nn.Module,
+    hag_log_sums: Dict[str, float],
+    hag_log_counts: Dict[str, int],
+) -> None:
+    parts = ["epoch_summary"]
+    for key, total in hag_log_sums.items():
+        cnt = max(1, hag_log_counts[key])
+        if hag_log_counts[key] > 0:
+            parts.append(f"{key}={total / cnt:.6f}")
+    print("[HAGMoE] " + " ".join(parts))
+    entropy_weight = float(getattr(model, "router_entropy_weight", 0.0) or 0.0)
+    ent_cnt = hag_log_counts.get("loss_entropy_used", 0)
+    if entropy_weight > 0.0 and ent_cnt > 0:
+        ent_mean = hag_log_sums.get("loss_entropy_used", 0.0) / max(1, ent_cnt)
+        if abs(ent_mean) < 1e-8:
+            print("[HAGMoE] Warning: router_entropy_weight > 0 but loss_entropy_used ~ 0.")
+
+
+def _init_aspect_span_counters() -> Dict[str, Any]:
+    return {
+        "match_total": 0,
+        "match_matched": 0,
+        "match_mask_sum": 0.0,
+        "match_zero": 0,
+        "token_mismatch_count": 0,
+        "truncated_count": 0,
+        "not_found_raw_count": 0,
+        "unknown_count": 0,
+    }
+
+
+def _aspect_span_update(
+    batch: Dict[str, Any],
+    cfg,
+    counters: Dict[str, Any],
+    *,
+    verbose: bool,
+    use_cfg_max_len: bool,
+    epoch_idx: Optional[int] = None,
+    split: Optional[str] = None,
+    batch_idx: Optional[int] = None,
+) -> None:
+    if "aspect_mask_sent" not in batch:
+        return
+
+    mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
+    matched = mask_sum > 0
+    counters["match_total"] += int(mask_sum.numel())
+    counters["match_matched"] += int(matched.sum().item())
+    counters["match_mask_sum"] += float(mask_sum[matched].sum().item())
+    counters["match_zero"] += int((~matched).sum().item())
+
+    if (
+        "sentence_raw" in batch
+        and "aspect_raw" in batch
+        and "valid_len" in batch
+        and "sep_idx" in batch
+    ):
+        sentence_raw = batch["sentence_raw"]
+        aspect_raw = batch["aspect_raw"]
+        valid_len = batch["valid_len"].detach().cpu().tolist()
+        sep_idx = batch["sep_idx"].detach().cpu().tolist()
+        max_len_sent = int(
+            batch["max_len_sent"][0].item()
+            if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
+            else (int(getattr(cfg, "max_len_sent", 0) or 0) if use_cfg_max_len else 0)
+        )
+        for i in range(len(mask_sum)):
+            if matched[i]:
+                continue
+            try:
+                sent_norm = _normalize_aspect_text(sentence_raw[i])
+                asp_norm = _normalize_aspect_text(aspect_raw[i])
+            except Exception:
+                counters["unknown_count"] += 1
+                continue
+            raw_found = asp_norm != "" and asp_norm in sent_norm
+            truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
+            if raw_found and truncated:
+                counters["truncated_count"] += 1
+            elif raw_found:
+                counters["token_mismatch_count"] += 1
+            else:
+                counters["not_found_raw_count"] += 1
+    else:
+        counters["unknown_count"] += int((~matched).sum().item())
+
+    if (
+        verbose
+        and epoch_idx == 0
+        and split in {"val", "test"}
+        and batch_idx == 0
+    ):
+        sentence_raw = batch.get("sentence_raw", [])
+        aspect_raw = batch.get("aspect_raw", [])
+        valid_len = (
+            batch["valid_len"].detach().cpu().tolist()
+            if "valid_len" in batch
+            else [0] * len(mask_sum)
+        )
+        sep_idx = (
+            batch["sep_idx"].detach().cpu().tolist()
+            if "sep_idx" in batch
+            else [-1] * len(mask_sum)
+        )
+        max_len_sent = int(
+            batch["max_len_sent"][0].item()
+            if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
+            else 0
+        )
+
+        for i in range(min(10, len(mask_sum))):
+            if mask_sum[i].item() > 0:
+                continue
+            try:
+                sent_norm = _normalize_aspect_text(sentence_raw[i])
+                asp_norm = _normalize_aspect_text(aspect_raw[i])
+            except Exception:
+                sent_norm = ""
+                asp_norm = ""
+            raw_idx = sent_norm.find(asp_norm) if asp_norm else -1
+            raw_found = raw_idx >= 0
+            truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
+            if raw_found and truncated:
+                reason = "TRUNCATED"
+            elif raw_found:
+                reason = "TOKEN_MISMATCH"
+            else:
+                reason = "NOT_FOUND_RAW"
+
+            block = [
+                f"[AspectSpanDebug] epoch={epoch_idx} split={split} batch={batch_idx} sample={i}",
+                f"  max_len_sent={max_len_sent} valid_len={valid_len[i]} sep_idx={sep_idx[i]}",
+                f"  sentence_raw: {sentence_raw[i] if i < len(sentence_raw) else ''}",
+                f"  aspect_raw: {aspect_raw[i] if i < len(aspect_raw) else ''}",
+                f"  sentence_norm: {sent_norm}",
+                f"  aspect_norm: {asp_norm}",
+                f"  aspect_mask_sum: {int(mask_sum[i].item())}",
+                f"  raw_found_substring: {raw_found} idx={raw_idx}",
+                f"  truncated: {truncated}",
+                f"  fail_reason: {reason}",
+            ]
+            print("\n".join(block))
+
+
+def _print_routing_epoch_summary(routing_metrics: Dict[str, Any], split: str) -> None:
+    usage = routing_metrics.get("group_usage", [])
+    top1_hist = routing_metrics.get("top1_hist", [])
+    ent_stats = routing_metrics.get("entropy_of_mean_batch_stats")
+    ent_str = "None"
+    if ent_stats:
+        ent_str = (
+            f"[{ent_stats['min']:.4f}/"
+            f"{ent_stats['mean']:.4f}/"
+            f"{ent_stats['max']:.4f}]"
+        )
+    min_gm_stats = routing_metrics.get("min_group_mean_batch_stats")
+    min_gm_str = "None"
+    if min_gm_stats:
+        min_gm_str = (
+            f"[{min_gm_stats['min']:.4f}/"
+            f"{min_gm_stats['mean']:.4f}/"
+            f"{min_gm_stats['max']:.4f}]"
+        )
+    max_gm_stats = routing_metrics.get("max_group_mean_batch_stats")
+    max_gm_str = "None"
+    if max_gm_stats:
+        max_gm_str = (
+            f"[{max_gm_stats['min']:.4f}/"
+            f"{max_gm_stats['mean']:.4f}/"
+            f"{max_gm_stats['max']:.4f}]"
+        )
+    top1_dom = routing_metrics.get("top1_dominance")
+    top1_dom_str = f"{top1_dom:.6f}" if top1_dom is not None else "None"
+    print(
+        f"Routing({split}): "
+        f"mean_ent={routing_metrics['mean_ent']:.6f} "
+        f"std_ent={routing_metrics['std_ent']:.6f} "
+        f"usage={usage} "
+        f"top1_dom={top1_dom_str} "
+        f"top1_hist={top1_hist} "
+        f"minGM[min/mean/max]={min_gm_str} "
+        f"maxGM[min/mean/max]={max_gm_str} "
+        f"lowMinGM={routing_metrics.get('low_min_group_mean_ratio')} "
+        f"entMean[min/mean/max]={ent_str} "
+        f"nan_batches={routing_metrics['nan_batches']}"
+    )
+
+
+def _write_routing_entry(
+    *,
+    cfg,
+    tag: Optional[str],
+    routing_metrics: Optional[Dict[str, Any]],
+    split: str,
+    epoch_idx: int,
+    loss: Optional[float] = None,
+    macro_f1: Optional[float] = None,
+    neutral_f1: Optional[float] = None,
+) -> None:
+    if routing_metrics is None:
+        return
+    seed_str, fold_str = _extract_seed_fold(tag, cfg)
+    try:
+        seed_val: Any = int(seed_str)
+    except Exception:
+        seed_val = seed_str
+    try:
+        fold_val: Any = int(fold_str)
+    except Exception:
+        fold_val = fold_str
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "seed": seed_val,
+        "fold": fold_val,
+        "epoch": int(epoch_idx) + 1,
+        "split": str(split),
+        "mean_ent": routing_metrics["mean_ent"],
+        "std_ent": routing_metrics["std_ent"],
+        "group_usage": routing_metrics["group_usage"],
+        "top1_dominance": routing_metrics["top1_dominance"],
+        "top1_dominance_mean": routing_metrics.get("top1_dominance_mean"),
+        "top1_hist": routing_metrics["top1_hist"],
+        "nan_batches": routing_metrics.get("nan_batches", 0),
+        "min_group_mean_batch_stats": routing_metrics.get("min_group_mean_batch_stats"),
+        "max_group_mean_batch_stats": routing_metrics.get("max_group_mean_batch_stats"),
+        "entropy_of_mean_batch_stats": routing_metrics.get("entropy_of_mean_batch_stats"),
+        "low_min_group_mean_ratio": routing_metrics.get("low_min_group_mean_ratio"),
+        "batch_count_logged": routing_metrics.get("batch_count_logged"),
+        "collapse_tau": routing_metrics.get("collapse_tau"),
+    }
+    if macro_f1 is not None:
+        entry["macro_f1"] = float(macro_f1)
+    if neutral_f1 is not None:
+        entry["neutral_f1"] = float(neutral_f1)
+    if loss is not None:
+        entry["loss"] = float(loss)
+
+    _append_routing_log(_routing_log_path(cfg, tag), entry)
+
+
+def _normalize_schedule(raw) -> Optional[list]:
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = ast.literal_eval(raw)
+        except Exception:
+            return None
+        if isinstance(parsed, (list, tuple)):
+            return list(parsed)
+    return None
+
+
+def _resolve_schedule(raw, epoch_num: int) -> Optional[Any]:
+    sched = _normalize_schedule(raw)
+    if not sched:
+        return None
+    current = None
+    for item in sched:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            start = int(item[0])
+        except Exception:
+            continue
+        if start <= epoch_num:
+            current = item[1]
+    return current
+
+
+def _apply_hagmoe_router_schedules(cfg, model: nn.Module, epoch_idx: int) -> None:
+    epoch_num = int(epoch_idx) + 1
+    ent_w = _resolve_schedule(getattr(cfg, "router_entropy_schedule", None), epoch_num)
+    if ent_w is not None and hasattr(model, "router_entropy_weight"):
+        model.router_entropy_weight = float(ent_w)
+    ent_t = _resolve_schedule(getattr(cfg, "router_entropy_target_schedule", None), epoch_num)
+    if ent_t is not None and hasattr(model, "router_entropy_target"):
+        model.router_entropy_target = ent_t
+    col_w = _resolve_schedule(getattr(cfg, "router_collapse_schedule", None), epoch_num)
+    if col_w is not None and hasattr(model, "router_collapse_weight"):
+        model.router_collapse_weight = float(col_w)
+    col_tau = _resolve_schedule(getattr(cfg, "router_collapse_tau_schedule", None), epoch_num)
+    if col_tau is not None and hasattr(model, "router_collapse_tau"):
+        model.router_collapse_tau = float(col_tau)
+
+
 def _set_encoder_requires_grad(
     cfg,
     model: nn.Module,
@@ -346,53 +758,26 @@ def train_one_epoch(
     if dataset is not None and hasattr(dataset, "reset_match_stats"):
         dataset.reset_match_stats()
 
-    total_loss_sum = 0.0
-    main_loss_sum = 0.0
-    aux_loss_sum = 0.0
-    lambda_loss_sum = 0.0
-    n_steps = 0
-
-    all_preds: list[int] = []
-    all_labels: list[int] = []
+    counters: Dict[str, Any] = {
+        "total_loss_sum": 0.0,
+        "main_loss_sum": 0.0,
+        "aux_loss_sum": 0.0,
+        "lambda_loss_sum": 0.0,
+        "n_steps": 0,
+        "all_preds": [],
+        "all_labels": [],
+    }
 
     amp_dtype_torch = (
         torch.float16 if (amp_dtype or "").lower().strip() == "fp16" else torch.bfloat16
     )
     step_print_i = int(step_print_moe) if step_print_moe is not None else 0
 
-    hag_log_sums = {
-        "loss": 0.0,
-        "loss_main": 0.0,
-        "aux_loss": 0.0,
-        "loss_group": 0.0,
-        "loss_balance": 0.0,
-        "loss_diversity": 0.0,
-        "loss_entropy_raw": 0.0,
-        "loss_entropy_used": 0.0,
-        "loss_collapse_raw": 0.0,
-        "loss_collapse_used": 0.0,
-    }
-    hag_log_counts = {k: 0 for k in hag_log_sums}
-
-    match_total = 0
-    match_matched = 0
-    match_mask_sum = 0.0
-    match_zero = 0
-    token_mismatch_count = 0
-    truncated_count = 0
-    not_found_raw_count = 0
-    unknown_count = 0
+    hag_log_sums, hag_log_counts = _init_hag_log_buffers()
+    aspect_counters = _init_aspect_span_counters()
 
     routing_agg = RoutingEpochAggregator()
-
-    def _move_batch_to_device(batch_dict):
-        out = {}
-        for k, v in batch_dict.items():
-            if torch.is_tensor(v):
-                out[k] = v.to(DEVICE)
-            else:
-                out[k] = v
-        return out
+    moe_acc = MoEMetricsAccumulator(num_labels=getattr(cfg, "num_labels", None), compute_mi=False)
 
     for step, batch in enumerate(dataloader):
         batch = _move_batch_to_device(batch)
@@ -404,27 +789,7 @@ def train_one_epoch(
             enabled=bool(use_amp),
             dtype=amp_dtype_torch,
         ):
-            if cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE":
-                outputs = model(
-                    input_ids_sent=batch["input_ids_sent"],
-                    attention_mask_sent=batch["attention_mask_sent"],
-                    input_ids_term=batch["input_ids_term"],
-                    attention_mask_term=batch["attention_mask_term"],
-                    aspect_start=batch.get("aspect_start"),
-                    aspect_end=batch.get("aspect_end"),
-                    aspect_mask_sent=batch.get("aspect_mask_sent"),
-                    labels=batch["label"],
-                    fusion_method=fusion_method,
-                )
-            else:
-                outputs = model(
-                    input_ids_sent=batch["input_ids_sent"],
-                    attention_mask_sent=batch["attention_mask_sent"],
-                    input_ids_term=batch["input_ids_term"],
-                    attention_mask_term=batch["attention_mask_term"],
-                    labels=batch["label"],
-                    fusion_method=fusion_method,
-                )
+            outputs = _forward_step(cfg, model, batch, fusion_method)
 
             loss_total = outputs["loss"]
             logits = outputs["logits"]
@@ -435,6 +800,8 @@ def train_one_epoch(
             loss_aux = outputs.get("aux_loss", None)
 
         routing_agg.update(outputs, model)
+        if isinstance(outputs, dict) and outputs.get("moe_stats") is not None:
+            moe_acc.update(outputs.get("moe_stats"), batch.get("label"))
 
         if hag_mode:
             if step == 0:
@@ -444,82 +811,38 @@ def train_one_epoch(
                 model_attr_fusion = str(getattr(model, "hag_fusion_method", "")).strip()
                 print(
                     "[HAGMoE] "
-                    f"benchmark_method={fusion_method} "
-                    f"cfg.hag_fusion_method={model_cfg_fusion or '""'} "
-                    f"model.hag_fusion_method={model_attr_fusion or '""'} "
-                    f"effective_fusion={effective}"
+                f"benchmark_method={fusion_method} "
+                f"cfg.hag_fusion_method={model_cfg_fusion or '""'} "
+                f"model.hag_fusion_method={model_attr_fusion or '""'} "
+                f"effective_fusion={effective}"
                 )
-            for key in hag_log_sums:
-                if key in outputs and outputs.get(key) is not None:
-                    hag_log_sums[key] += safe_float(outputs.get(key))
-                    hag_log_counts[key] += 1
+            _update_hag_log_buffers(outputs, hag_log_sums, hag_log_counts)
 
-        # backward + step
-        if use_amp:
-            if scaler is None:
-                raise RuntimeError("use_amp=True but scaler is None")
-            scaler.scale(loss_total).backward()
+        _backward_step(
+            loss_total=loss_total,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            use_amp=use_amp,
+            max_grad_norm=max_grad_norm,
+        )
 
-            if max_grad_norm is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+        _accumulate_basic_metrics(
+            counters=counters,
+            loss_total=loss_total,
+            loss_main=loss_main,
+            loss_lambda=loss_lambda,
+            loss_aux=loss_aux,
+            moe=moe,
+            logits=logits,
+            labels=batch["label"],
+        )
 
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_total.backward()
-            if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
-            optimizer.step()
-
-        if scheduler is not None:
-            scheduler.step()
-
-        # stats
-        total_loss_sum += safe_float(loss_total)
-        if moe:
-            main_loss_sum += safe_float(loss_main)
-            lambda_loss_sum += safe_float(loss_lambda)
-            aux_loss_sum += safe_float(loss_aux)
-        n_steps += 1
-
-        preds = torch.argmax(logits, dim=-1)
-        all_preds.extend(preds.detach().cpu().tolist())
-        all_labels.extend(batch["label"].detach().cpu().tolist())
-
-        if debug_aspect_span and "aspect_mask_sent" in batch:
-            mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
-            matched = mask_sum > 0
-            match_total += int(mask_sum.numel())
-            match_matched += int(matched.sum().item())
-            match_mask_sum += float(mask_sum[matched].sum().item())
-            match_zero += int((~matched).sum().item())
-
-            if "sentence_raw" in batch and "aspect_raw" in batch and "valid_len" in batch and "sep_idx" in batch:
-                sentence_raw = batch["sentence_raw"]
-                aspect_raw = batch["aspect_raw"]
-                valid_len = batch["valid_len"].detach().cpu().tolist()
-                sep_idx = batch["sep_idx"].detach().cpu().tolist()
-                max_len_sent = int(getattr(cfg, "max_len_sent", 0) or 0)
-                for i in range(len(mask_sum)):
-                    if matched[i]:
-                        continue
-                    try:
-                        sent_norm = _normalize_aspect_text(sentence_raw[i])
-                        asp_norm = _normalize_aspect_text(aspect_raw[i])
-                    except Exception:
-                        unknown_count += 1
-                        continue
-                    raw_found = asp_norm != "" and asp_norm in sent_norm
-                    truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
-                    if raw_found and truncated:
-                        truncated_count += 1
-                    elif raw_found:
-                        token_mismatch_count += 1
-                    else:
-                        not_found_raw_count += 1
-            else:
-                unknown_count += int((~matched).sum().item())
+        if debug_aspect_span:
+            _aspect_span_update(
+                batch, cfg, aspect_counters, verbose=False, use_cfg_max_len=True
+            )
 
         if (not hag_mode) and step_print_i and (step > 0) and (step % step_print_i == 0):
             if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
@@ -528,23 +851,14 @@ def train_one_epoch(
                 except Exception as e:
                     print("Cannot print_moe_debug:", e)
 
-    denom = max(1, n_steps)
-    acc = float(accuracy_score(all_labels, all_preds))
-    f1 = float(f1_score(all_labels, all_preds, average=f1_average))
+    denom = max(1, counters["n_steps"])
+    acc = float(accuracy_score(counters["all_labels"], counters["all_preds"]))
+    f1 = float(f1_score(counters["all_labels"], counters["all_preds"], average=f1_average))
 
     if hag_mode:
-        parts = ["epoch_summary"]
-        for key, total in hag_log_sums.items():
-            cnt = max(1, hag_log_counts[key])
-            if hag_log_counts[key] > 0:
-                parts.append(f"{key}={total / cnt:.6f}")
-        print("[HAGMoE] " + " ".join(parts))
-        entropy_weight = float(getattr(model, "router_entropy_weight", 0.0) or 0.0)
-        ent_cnt = hag_log_counts.get("loss_entropy_used", 0)
-        if entropy_weight > 0.0 and ent_cnt > 0:
-            ent_mean = hag_log_sums.get("loss_entropy_used", 0.0) / max(1, ent_cnt)
-            if abs(ent_mean) < 1e-8:
-                print("[HAGMoE] Warning: router_entropy_weight > 0 but loss_entropy_used ~ 0.")
+        _print_hag_epoch_loss_summary(
+            model=model, hag_log_sums=hag_log_sums, hag_log_counts=hag_log_counts
+        )
         if hasattr(model, "print_moe_debug") and callable(getattr(model, "print_moe_debug")):
             try:
                 model.print_moe_debug(topn=3)
@@ -553,73 +867,40 @@ def train_one_epoch(
 
     if debug_aspect_span:
         print(
-            f"[AspectSpanDiag] split=train total={match_total} matched={match_matched} "
-            f"match_rate={(match_matched / max(1, match_total)) * 100:.2f}% "
-            f"token_mismatch={token_mismatch_count} truncated={truncated_count} "
-            f"not_found_raw={not_found_raw_count} unknown={unknown_count} "
-            f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
+            f"[AspectSpanDiag] split=train total={aspect_counters['match_total']} "
+            f"matched={aspect_counters['match_matched']} "
+            f"match_rate={(aspect_counters['match_matched'] / max(1, aspect_counters['match_total'])) * 100:.2f}% "
+            f"token_mismatch={aspect_counters['token_mismatch_count']} "
+            f"truncated={aspect_counters['truncated_count']} "
+            f"not_found_raw={aspect_counters['not_found_raw_count']} "
+            f"unknown={aspect_counters['unknown_count']} "
+            f"avg_mask_sum={(aspect_counters['match_mask_sum'] / max(1, aspect_counters['match_matched'])):.2f}"
         )
 
     routing_metrics = routing_agg.finalize()
     if routing_metrics is not None:
-        usage = routing_metrics.get("group_usage", [])
-        top1_hist = routing_metrics.get("top1_hist", [])
-        ent_stats = routing_metrics.get("entropy_of_mean_batch_stats")
-        ent_str = "None"
-        if ent_stats:
-            ent_str = (
-                f"[{ent_stats['min']:.4f}/"
-                f"{ent_stats['mean']:.4f}/"
-                f"{ent_stats['max']:.4f}]"
-            )
-        min_gm_stats = routing_metrics.get("min_group_mean_batch_stats")
-        min_gm_str = "None"
-        if min_gm_stats:
-            min_gm_str = (
-                f"[{min_gm_stats['min']:.4f}/"
-                f"{min_gm_stats['mean']:.4f}/"
-                f"{min_gm_stats['max']:.4f}]"
-            )
-        max_gm_stats = routing_metrics.get("max_group_mean_batch_stats")
-        max_gm_str = "None"
-        if max_gm_stats:
-            max_gm_str = (
-                f"[{max_gm_stats['min']:.4f}/"
-                f"{max_gm_stats['mean']:.4f}/"
-                f"{max_gm_stats['max']:.4f}]"
-            )
-        top1_dom = routing_metrics.get("top1_dominance")
-        top1_dom_str = f"{top1_dom:.6f}" if top1_dom is not None else "None"
-        print(
-            "Routing(train): "
-            f"mean_ent={routing_metrics['mean_ent']:.6f} "
-            f"std_ent={routing_metrics['std_ent']:.6f} "
-            f"usage={usage} "
-            f"top1_dom={top1_dom_str} "
-            f"top1_hist={top1_hist} "
-            f"minGM[min/mean/max]={min_gm_str} "
-            f"maxGM[min/mean/max]={max_gm_str} "
-            f"lowMinGM={routing_metrics.get('low_min_group_mean_ratio')} "
-            f"entMean[min/mean/max]={ent_str} "
-            f"nan_batches={routing_metrics['nan_batches']}"
-        )
+        _print_routing_epoch_summary(routing_metrics, "train")
+
+    moe_metrics = moe_acc.finalize()
 
     if moe:
         return {
-            "loss_total": total_loss_sum / denom,
-            "loss_main": main_loss_sum / denom,
-            "loss_lambda": lambda_loss_sum / denom,
-            "aux_loss": aux_loss_sum / denom,
+            "loss_total": counters["total_loss_sum"] / denom,
+            "loss_main": counters["main_loss_sum"] / denom,
+            "loss_lambda": counters["lambda_loss_sum"] / denom,
+            "aux_loss": counters["aux_loss_sum"] / denom,
             "acc": acc,
             "f1": f1,
             "routing": routing_metrics,
+            "moe_metrics": moe_metrics,
         }
 
     return {
-        "loss": total_loss_sum / denom,
+        "loss": counters["total_loss_sum"] / denom,
         "acc": acc,
         "f1": f1,
         "routing": routing_metrics,
+        "moe_metrics": moe_metrics,
     }
 
 
@@ -642,67 +923,33 @@ def eval_model(
     total_loss = 0.0
     all_preds: list[int] = []
     all_labels: list[int] = []
+    all_logits: list[np.ndarray] = []
 
     dataset = getattr(dataloader, "dataset", None)
     if dataset is not None and hasattr(dataset, "reset_match_stats"):
         dataset.reset_match_stats()
 
-    match_total = 0
-    match_matched = 0
-    match_mask_sum = 0.0
-
     debug_aspect_span = bool(debug_aspect_span)
-
-    match_total = 0
-    match_matched = 0
-    match_mask_sum = 0.0
-    match_zero = 0
-    token_mismatch_count = 0
-    truncated_count = 0
-    not_found_raw_count = 0
-    unknown_count = 0
+    aspect_counters = _init_aspect_span_counters()
+    moe_acc = MoEMetricsAccumulator(
+        num_labels=len(id2label) if id2label is not None else None,
+        compute_mi=split in {"val", "test"},
+    )
     routing_agg = RoutingEpochAggregator()
 
     with torch.no_grad():
-        def _move_batch_to_device(batch_dict):
-            out = {}
-            for k, v in batch_dict.items():
-                if torch.is_tensor(v):
-                    out[k] = v.to(DEVICE)
-                else:
-                    out[k] = v
-            return out
-
         for batch_idx, batch in enumerate(dataloader):
             batch = _move_batch_to_device(batch)
 
             hag_mode = cfg is not None and str(getattr(cfg, "mode", "")).strip() == "HAGMoE"
-            if hag_mode:
-                outputs = model(
-                    input_ids_sent=batch["input_ids_sent"],
-                    attention_mask_sent=batch["attention_mask_sent"],
-                    input_ids_term=batch["input_ids_term"],
-                    attention_mask_term=batch["attention_mask_term"],
-                    aspect_start=batch.get("aspect_start"),
-                    aspect_end=batch.get("aspect_end"),
-                    aspect_mask_sent=batch.get("aspect_mask_sent"),
-                    labels=batch["label"],
-                    fusion_method=fusion_method,
-                )
-            else:
-                outputs = model(
-                    input_ids_sent=batch["input_ids_sent"],
-                    attention_mask_sent=batch["attention_mask_sent"],
-                    input_ids_term=batch["input_ids_term"],
-                    attention_mask_term=batch["attention_mask_term"],
-                    labels=batch["label"],
-                    fusion_method=fusion_method,
-                )
+            outputs = _forward_step(cfg, model, batch, fusion_method)
 
             loss = outputs.get("loss", None)
             logits = outputs["logits"]
 
             routing_agg.update(outputs, model)
+            if isinstance(outputs, dict) and outputs.get("moe_stats") is not None:
+                moe_acc.update(outputs.get("moe_stats"), batch.get("label"))
 
             if hag_mode and batch_idx == 0:
                 effective = getattr(model, "_last_fusion_method", None)
@@ -722,101 +969,18 @@ def eval_model(
             preds = torch.argmax(logits, dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(batch["label"].cpu().tolist())
+            all_logits.append(logits.detach().cpu().numpy())
 
-            if "aspect_mask_sent" in batch:
-                mask_sum = batch["aspect_mask_sent"].detach().sum(dim=1)
-                matched = mask_sum > 0
-                match_total += int(mask_sum.numel())
-                match_matched += int(matched.sum().item())
-                match_mask_sum += float(mask_sum[matched].sum().item())
-                match_zero += int((~matched).sum().item())
-
-                if "sentence_raw" in batch and "aspect_raw" in batch and "valid_len" in batch and "sep_idx" in batch:
-                    sentence_raw = batch["sentence_raw"]
-                    aspect_raw = batch["aspect_raw"]
-                    valid_len = batch["valid_len"].detach().cpu().tolist()
-                    sep_idx = batch["sep_idx"].detach().cpu().tolist()
-                    max_len_sent = int(
-                        batch["max_len_sent"][0].item()
-                        if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
-                        else 0
-                    )
-                    for i in range(len(mask_sum)):
-                        if matched[i]:
-                            continue
-                        try:
-                            sent_norm = _normalize_aspect_text(sentence_raw[i])
-                            asp_norm = _normalize_aspect_text(aspect_raw[i])
-                        except Exception:
-                            unknown_count += 1
-                            continue
-                        raw_found = asp_norm != "" and asp_norm in sent_norm
-                        truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
-                        if raw_found and truncated:
-                            truncated_count += 1
-                        elif raw_found:
-                            token_mismatch_count += 1
-                        else:
-                            not_found_raw_count += 1
-                else:
-                    unknown_count += int((~matched).sum().item())
-
-                if (
-                    debug_aspect_span
-                    and epoch_idx == 0
-                    and split in {"val", "test"}
-                    and batch_idx == 0
-                ):
-                    sentence_raw = batch.get("sentence_raw", [])
-                    aspect_raw = batch.get("aspect_raw", [])
-                    valid_len = (
-                        batch["valid_len"].detach().cpu().tolist()
-                        if "valid_len" in batch
-                        else [0] * len(mask_sum)
-                    )
-                    sep_idx = (
-                        batch["sep_idx"].detach().cpu().tolist()
-                        if "sep_idx" in batch
-                        else [-1] * len(mask_sum)
-                    )
-                    max_len_sent = int(
-                        batch["max_len_sent"][0].item()
-                        if "max_len_sent" in batch and torch.is_tensor(batch["max_len_sent"])
-                        else 0
-                    )
-
-                    for i in range(min(10, len(mask_sum))):
-                        if mask_sum[i].item() > 0:
-                            continue
-                        try:
-                            sent_norm = _normalize_aspect_text(sentence_raw[i])
-                            asp_norm = _normalize_aspect_text(aspect_raw[i])
-                        except Exception:
-                            sent_norm = ""
-                            asp_norm = ""
-                        raw_idx = sent_norm.find(asp_norm) if asp_norm else -1
-                        raw_found = raw_idx >= 0
-                        truncated = (valid_len[i] >= max_len_sent) or (sep_idx[i] >= max_len_sent - 1)
-                        if raw_found and truncated:
-                            reason = "TRUNCATED"
-                        elif raw_found:
-                            reason = "TOKEN_MISMATCH"
-                        else:
-                            reason = "NOT_FOUND_RAW"
-
-                        block = [
-                            f"[AspectSpanDebug] epoch={epoch_idx} split={split} batch={batch_idx} sample={i}",
-                            f"  max_len_sent={max_len_sent} valid_len={valid_len[i]} sep_idx={sep_idx[i]}",
-                            f"  sentence_raw: {sentence_raw[i] if i < len(sentence_raw) else ''}",
-                            f"  aspect_raw: {aspect_raw[i] if i < len(aspect_raw) else ''}",
-                            f"  sentence_norm: {sent_norm}",
-                            f"  aspect_norm: {asp_norm}",
-                            f"  aspect_mask_sum: {int(mask_sum[i].item())}",
-                            f"  raw_found_substring: {raw_found} idx={raw_idx}",
-                            f"  truncated: {truncated}",
-                            f"  fail_reason: {reason}",
-                        ]
-                        print("\n".join(block))
+            _aspect_span_update(
+                batch,
+                cfg,
+                aspect_counters,
+                verbose=debug_aspect_span,
+                use_cfg_max_len=False,
+                epoch_idx=epoch_idx,
+                split=split,
+                batch_idx=batch_idx,
+            )
 
     avg_loss = total_loss / max(1, len(dataloader))
     acc = accuracy_score(all_labels, all_preds)
@@ -844,58 +1008,27 @@ def eval_model(
 
     if debug_aspect_span:
         print(
-            f"[AspectSpanDiag] split={split} total={match_total} matched={match_matched} "
-            f"match_rate={(match_matched / max(1, match_total)) * 100:.2f}% "
-            f"token_mismatch={token_mismatch_count} truncated={truncated_count} "
-            f"not_found_raw={not_found_raw_count} unknown={unknown_count} "
-            f"avg_mask_sum={(match_mask_sum / max(1, match_matched)):.2f}"
+            f"[AspectSpanDiag] split={split} total={aspect_counters['match_total']} "
+            f"matched={aspect_counters['match_matched']} "
+            f"match_rate={(aspect_counters['match_matched'] / max(1, aspect_counters['match_total'])) * 100:.2f}% "
+            f"token_mismatch={aspect_counters['token_mismatch_count']} "
+            f"truncated={aspect_counters['truncated_count']} "
+            f"not_found_raw={aspect_counters['not_found_raw_count']} "
+            f"unknown={aspect_counters['unknown_count']} "
+            f"avg_mask_sum={(aspect_counters['match_mask_sum'] / max(1, aspect_counters['match_matched'])):.2f}"
         )
 
     routing_metrics = routing_agg.finalize()
     if routing_metrics is not None and split in {"train", "val", "test"}:
-        usage = routing_metrics.get("group_usage", [])
-        top1_hist = routing_metrics.get("top1_hist", [])
-        ent_stats = routing_metrics.get("entropy_of_mean_batch_stats")
-        ent_str = "None"
-        if ent_stats:
-            ent_str = (
-                f"[{ent_stats['min']:.4f}/"
-                f"{ent_stats['mean']:.4f}/"
-                f"{ent_stats['max']:.4f}]"
-            )
-        min_gm_stats = routing_metrics.get("min_group_mean_batch_stats")
-        min_gm_str = "None"
-        if min_gm_stats:
-            min_gm_str = (
-                f"[{min_gm_stats['min']:.4f}/"
-                f"{min_gm_stats['mean']:.4f}/"
-                f"{min_gm_stats['max']:.4f}]"
-            )
-        max_gm_stats = routing_metrics.get("max_group_mean_batch_stats")
-        max_gm_str = "None"
-        if max_gm_stats:
-            max_gm_str = (
-                f"[{max_gm_stats['min']:.4f}/"
-                f"{max_gm_stats['mean']:.4f}/"
-                f"{max_gm_stats['max']:.4f}]"
-            )
-        top1_dom = routing_metrics.get("top1_dominance")
-        top1_dom_str = f"{top1_dom:.6f}" if top1_dom is not None else "None"
-        print(
-            f"Routing({split}): "
-            f"mean_ent={routing_metrics['mean_ent']:.6f} "
-            f"std_ent={routing_metrics['std_ent']:.6f} "
-            f"usage={usage} "
-            f"top1_dom={top1_dom_str} "
-            f"top1_hist={top1_hist} "
-            f"minGM[min/mean/max]={min_gm_str} "
-            f"maxGM[min/mean/max]={max_gm_str} "
-            f"lowMinGM={routing_metrics.get('low_min_group_mean_ratio')} "
-            f"entMean[min/mean/max]={ent_str} "
-            f"nan_batches={routing_metrics['nan_batches']}"
-        )
+        _print_routing_epoch_summary(routing_metrics, split)
 
+    moe_metrics = moe_acc.finalize()
     out["routing"] = routing_metrics
+    out["moe_metrics"] = moe_metrics
+    if all_logits:
+        logits_np = np.concatenate(all_logits, axis=0)
+        labels_np = np.asarray(all_labels, dtype=np.int64)
+        out["calibration"] = compute_calibration(logits_np, labels_np)
     return out
 
 
@@ -929,6 +1062,8 @@ def run_training_loop(
     best_state_dict = None
     best_epoch = -1
     epochs_no_improve = 0
+    last_val_metrics = None
+    last_test_metrics = None
 
     print("=======================================================================")
     print("Fusion Method:", method)
@@ -946,102 +1081,21 @@ def run_training_loop(
     def trainable_params():
         return [p for p in model.parameters() if p.requires_grad]
 
-    def _maybe_write_routing(
-        *,
-        split: str,
-        routing_metrics: Optional[Dict[str, Any]],
-        epoch_idx: int,
-        loss: Optional[float] = None,
-        macro_f1: Optional[float] = None,
-        neutral_f1: Optional[float] = None,
-    ) -> None:
-        if routing_metrics is None:
-            return
-        seed_str, fold_str = _extract_seed_fold(tag, cfg)
-        try:
-            seed_val: Any = int(seed_str)
-        except Exception:
-            seed_val = seed_str
-        try:
-            fold_val: Any = int(fold_str)
-        except Exception:
-            fold_val = fold_str
+    seed_str, fold_str = _extract_seed_fold(tag, cfg)
+    try:
+        seed_val = int(seed_str)
+    except Exception:
+        seed_val = seed_str
+    try:
+        fold_val = int(fold_str)
+    except Exception:
+        fold_val = fold_str
 
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "seed": seed_val,
-            "fold": fold_val,
-            "epoch": int(epoch_idx) + 1,
-            "split": str(split),
-            "mean_ent": routing_metrics["mean_ent"],
-            "std_ent": routing_metrics["std_ent"],
-            "group_usage": routing_metrics["group_usage"],
-            "top1_dominance": routing_metrics["top1_dominance"],
-            "top1_dominance_mean": routing_metrics.get("top1_dominance_mean"),
-            "top1_hist": routing_metrics["top1_hist"],
-            "nan_batches": routing_metrics.get("nan_batches", 0),
-            "min_group_mean_batch_stats": routing_metrics.get("min_group_mean_batch_stats"),
-            "max_group_mean_batch_stats": routing_metrics.get("max_group_mean_batch_stats"),
-            "entropy_of_mean_batch_stats": routing_metrics.get("entropy_of_mean_batch_stats"),
-            "low_min_group_mean_ratio": routing_metrics.get("low_min_group_mean_ratio"),
-            "batch_count_logged": routing_metrics.get("batch_count_logged"),
-            "collapse_tau": routing_metrics.get("collapse_tau"),
-        }
-        if macro_f1 is not None:
-            entry["macro_f1"] = float(macro_f1)
-        if neutral_f1 is not None:
-            entry["neutral_f1"] = float(neutral_f1)
-        if loss is not None:
-            entry["loss"] = float(loss)
-
-        _append_routing_log(_routing_log_path(cfg, tag), entry)
-
-    def _normalize_schedule(raw):
-        if raw is None:
-            return None
-        if isinstance(raw, (list, tuple)):
-            return list(raw)
-        if isinstance(raw, str) and raw.strip():
-            try:
-                parsed = ast.literal_eval(raw)
-            except Exception:
-                return None
-            if isinstance(parsed, (list, tuple)):
-                return list(parsed)
-        return None
-
-    def _resolve_schedule(raw, epoch_num: int):
-        sched = _normalize_schedule(raw)
-        if not sched:
-            return None
-        current = None
-        for item in sched:
-            if not isinstance(item, (list, tuple)) or len(item) < 2:
-                continue
-            try:
-                start = int(item[0])
-            except Exception:
-                continue
-            if start <= epoch_num:
-                current = item[1]
-        return current
-
-    def _apply_router_schedules(epoch_idx: int) -> None:
-        epoch_num = int(epoch_idx) + 1
-        ent_w = _resolve_schedule(getattr(cfg, "router_entropy_schedule", None), epoch_num)
-        if ent_w is not None and hasattr(model, "router_entropy_weight"):
-            model.router_entropy_weight = float(ent_w)
-        ent_t = _resolve_schedule(getattr(cfg, "router_entropy_target_schedule", None), epoch_num)
-        if ent_t is not None and hasattr(model, "router_entropy_target"):
-            model.router_entropy_target = ent_t
-        col_w = _resolve_schedule(getattr(cfg, "router_collapse_schedule", None), epoch_num)
-        if col_w is not None and hasattr(model, "router_collapse_weight"):
-            model.router_collapse_weight = float(col_w)
-        col_tau = _resolve_schedule(getattr(cfg, "router_collapse_tau_schedule", None), epoch_num)
-        if col_tau is not None and hasattr(model, "router_collapse_tau"):
-            model.router_collapse_tau = float(col_tau)
-
-        # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
+    # Freeze phases:
+    # - Epoch 0 warmup uses freeze0 result before optimizer/scheduler build.
+    # - Unfreeze boundary rebuilds optimizer to include newly trainable params.
+    # - SDModel is an exception (single optimizer for all epochs).
+    # Phase fix: apply freeze for epoch 0 BEFORE building optimizer/scheduler
     freeze0 = maybe_freeze_encoder(cfg, model, epoch_idx_0based=0)
 
     # SDModel: build optimizer once and keep it for the whole training
@@ -1095,7 +1149,7 @@ def run_training_loop(
                     )
                 except Exception as e:
                     print(f"[HAGMoE] cannot update group temperature: {e}")
-            _apply_router_schedules(epoch)
+            _apply_hagmoe_router_schedules(cfg, model, epoch)
 
         # Rebuild optimizer exactly at unfreeze boundary
         if (cfg.mode != "SDModel") and (cfg.freeze_epochs > 0) and (epoch == cfg.freeze_epochs):
@@ -1148,7 +1202,9 @@ def run_training_loop(
             history["train_f1"].append(train_metrics["f1"])
             history["train_acc"].append(train_metrics["acc"])
 
-            _maybe_write_routing(
+            _write_routing_entry(
+                cfg=cfg,
+                tag=tag,
                 split="train",
                 routing_metrics=train_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1168,7 +1224,9 @@ def run_training_loop(
             history["train_loss"].append(float(train_metrics["loss"]))
             history["train_f1"].append(float(train_metrics["f1"]))
 
-            _maybe_write_routing(
+            _write_routing_entry(
+                cfg=cfg,
+                tag=tag,
                 split="train",
                 routing_metrics=train_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1197,14 +1255,18 @@ def run_training_loop(
                 epoch_idx=epoch,
                 split="val",
                 debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
+                return_confusion=True,
             )
+            last_val_metrics = val_metrics
             history["val_loss"].append(float(val_metrics["loss"]))
             history["val_f1"].append(float(val_metrics["f1"]))
 
             macro_f1 = float(val_metrics["f1"])
             neutral_f1 = float(val_metrics["f1_per_class"][neutral_idx])
 
-            _maybe_write_routing(
+            _write_routing_entry(
+                cfg=cfg,
+                tag=tag,
                 split="val",
                 routing_metrics=val_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1218,6 +1280,32 @@ def run_training_loop(
                 f"F1 {val_metrics['f1']:.4f} "
                 f"acc {val_metrics['acc']:.4f} "
                 f"| Val neutral f1 {neutral_f1:.4f}"
+            )
+
+            if val_metrics.get("confusion") is not None:
+                cm = np.asarray(val_metrics["confusion"], dtype=np.float64)
+                cm_norm = (cm / np.clip(cm.sum(axis=1, keepdims=True), 1e-12, None)).tolist()
+                conf_block = {"cm": cm.tolist(), "cm_normalized": cm_norm}
+            else:
+                conf_block = None
+            save_artifacts(
+                output_dir=cfg.output_dir,
+                mode=cfg.mode,
+                method=method,
+                seed=seed_val,
+                fold=fold_val,
+                split="val",
+                metrics={
+                    "loss": float(val_metrics["loss"]),
+                    "acc": float(val_metrics["acc"]),
+                    "f1": float(val_metrics["f1"]),
+                    "f1_per_class": val_metrics["f1_per_class"].tolist()
+                    if hasattr(val_metrics["f1_per_class"], "tolist")
+                    else val_metrics["f1_per_class"],
+                    "confusion": conf_block,
+                    "moe_metrics": val_metrics.get("moe_metrics"),
+                    "calibration": val_metrics.get("calibration"),
+                },
             )
 
             should_save = (macro_f1 > best_macro_f1) and (neutral_f1 >= best_f1_neutral)
@@ -1252,8 +1340,12 @@ def run_training_loop(
                 epoch_idx=epoch,
                 split="test",
                 debug_aspect_span=getattr(cfg, "debug_aspect_span", False),
+                return_confusion=True,
             )
-            _maybe_write_routing(
+            last_test_metrics = test_metrics
+            _write_routing_entry(
+                cfg=cfg,
+                tag=tag,
                 split="test",
                 routing_metrics=test_metrics.get("routing"),
                 epoch_idx=epoch,
@@ -1264,6 +1356,32 @@ def run_training_loop(
                 f"\nTest loss {test_metrics['loss']:.4f} "
                 f"F1 {test_metrics['f1']:.4f} "
                 f"acc {test_metrics['acc']:.4f} "
+            )
+
+            if test_metrics.get("confusion") is not None:
+                cm = np.asarray(test_metrics["confusion"], dtype=np.float64)
+                cm_norm = (cm / np.clip(cm.sum(axis=1, keepdims=True), 1e-12, None)).tolist()
+                conf_block = {"cm": cm.tolist(), "cm_normalized": cm_norm}
+            else:
+                conf_block = None
+            save_artifacts(
+                output_dir=cfg.output_dir,
+                mode=cfg.mode,
+                method=method,
+                seed=seed_val,
+                fold=fold_val,
+                split="test",
+                metrics={
+                    "loss": float(test_metrics["loss"]),
+                    "acc": float(test_metrics["acc"]),
+                    "f1": float(test_metrics["f1"]),
+                    "f1_per_class": test_metrics["f1_per_class"].tolist()
+                    if hasattr(test_metrics["f1_per_class"], "tolist")
+                    else test_metrics["f1_per_class"],
+                    "confusion": conf_block,
+                    "moe_metrics": test_metrics.get("moe_metrics"),
+                    "calibration": test_metrics.get("calibration"),
+                },
             )
 
         print(log)
@@ -1281,4 +1399,6 @@ def run_training_loop(
         "best_state_dict": best_state_dict,
         "best_epoch": best_epoch,
         "history": history,
+        "last_val_metrics": last_val_metrics,
+        "last_test_metrics": last_test_metrics,
     }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any
 
 import torch
 import torch.nn as nn
@@ -445,8 +446,22 @@ class MoESkConnectionModel(BaseModel):
         
         else:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
-        
-        return self._compute_loss(logits, labels, fusion_method=fusion_method)
+
+        out = self._compute_loss(logits, labels, fusion_method=fusion_method)
+        out["moe_stats"] = self._get_moe_stats(fusion_method)
+        return out
+
+    def _get_moe_stats(self, fusion_method: str) -> Optional[Dict[str, Any]]:
+        moe_module = (
+            self.encoder.moe_sk_2h
+            if fusion_method == "concat"
+            else self.encoder.moe_sk_h
+        )
+        moe_residual = moe_module.moe_residual
+        logits = getattr(moe_residual, "last_router_logits", None)
+        if logits is None:
+            return None
+        return {"router_logits": logits.detach()}
     
     def _collect_aux_loss(self, moe_module: MoESkConnection) -> torch.Tensor:
         """Collect load-balancing loss from MoE module."""

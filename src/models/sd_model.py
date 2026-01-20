@@ -213,6 +213,7 @@ class SDModel(BaseModel):
         u, g = self._compute_gate(t=t, s=s)
         self.last_router_logits = u.detach()
         self.last_gate = g.detach()
+        moe_stats = {"router_probs": g.detach(), "router_logits": u.detach()}
         
         loss_entropy = None
         if self.router_entropy_weight > 0.0:
@@ -306,7 +307,7 @@ class SDModel(BaseModel):
 
         # 5) If no labels, inference only
         if labels is None:
-            return {"loss": None, "logits": logits}
+            return {"loss": None, "logits": logits, "moe_stats": moe_stats}
 
         # 6) Main loss (match BaseModel)
         if self.loss_type == "ce":
@@ -353,6 +354,7 @@ class SDModel(BaseModel):
             "loss_div": loss_div.detach(),
             "gate_entropy_mean": gate_entropy_mean.detach(),
             "p_k": p_k,
+            "moe_stats": moe_stats,
         }
             
     def _sd_debug_stats(self):

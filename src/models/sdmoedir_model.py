@@ -163,6 +163,7 @@ class SDMoEDirModel(BaseModel):
         u, g = self._compute_gate(t=t)
         self.last_router_logits = u.detach()
         self.last_gate = g.detach()
+        moe_stats = {"router_probs": g.detach(), "router_logits": u.detach()}
 
         # 4) Mixture of directions on z0
         z = self._apply_directions(z0=z0, g=g)  # [B, 2d]
@@ -171,7 +172,7 @@ class SDMoEDirModel(BaseModel):
         logits = self.head_concat(self.dropout(z))  # [B, C]
 
         if labels is None:
-            return {"loss": None, "logits": logits}
+            return {"loss": None, "logits": logits, "moe_stats": moe_stats}
 
         # 6) Main loss
         if self.loss_type == "ce":
@@ -212,4 +213,5 @@ class SDMoEDirModel(BaseModel):
             "gate_entropy_mean": gate_entropy_mean.detach(),
             "p_k": p_k,
             "gate": g.detach(),
+            "moe_stats": moe_stats,
         }

@@ -1,6 +1,7 @@
 import math
 
 import torch
+from typing import Optional, Dict, Any
 import torch.nn.functional as F
 import torch.nn as nn
 
@@ -202,6 +203,19 @@ class MultiMoEHead(MoEHead):
         # Replace encoder with multi-MoE version
         base_encoder = self.encoder
         self.encoder = EncoderWithMultiMoEHead(base_encoder=base_encoder, stacked_moe=stacked_moe)
+
+    def _get_moe_stats(self) -> Optional[Dict[str, Any]]:
+        stacked = getattr(self.encoder, "stacked_moe", None)
+        if stacked is None:
+            return None
+        logits_list = []
+        for layer in getattr(stacked, "layers", []):
+            logits = getattr(layer, "last_router_logits", None)
+            if logits is not None:
+                logits_list.append(logits.detach())
+        if not logits_list:
+            return None
+        return {"router_logits_list": logits_list}
 
     def _generate_top_k_schedule(self, start_k: int, num_layers: int, num_experts: int, decay_type: str) -> list:
         """Generate decreasing top-k schedule for multiple layers"""

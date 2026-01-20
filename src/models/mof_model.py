@@ -354,7 +354,17 @@ class MoFModel(BaseModel):
         if self.mof_logit_clamp > 0:
             logits = logits.clamp(min=-self.mof_logit_clamp, max=self.mof_logit_clamp)
         
-        return self._compute_loss(logits, labels)
+        out = self._compute_loss(logits, labels)
+        weights = getattr(self.mof_router, "last_weights", None)
+        logits_r = getattr(self.mof_router, "last_router_logits", None)
+        if weights is not None or logits_r is not None:
+            moe_stats = {}
+            if weights is not None:
+                moe_stats["router_probs"] = weights.detach()
+            if logits_r is not None:
+                moe_stats["router_logits"] = logits_r.detach()
+            out["moe_stats"] = moe_stats
+        return out
 
     def _compute_loss(self, logits, labels):
         if labels is None:

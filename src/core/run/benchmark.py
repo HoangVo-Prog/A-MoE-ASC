@@ -77,6 +77,7 @@ def run_benchmark_fusion(config):
             fold_test_f1 = []
             fold_val_cms = []
             fold_test_cms = []      
+            fold_extra = []
             
             for fold in range(config.k_folds):                
                 train_ds, val_ds = kfold_train_set.get_fold(fold)
@@ -159,6 +160,27 @@ def run_benchmark_fusion(config):
                 fold_val_cms.append(np.asarray(val_m["confusion"], dtype=np.float64))
                 fold_test_cms.append(np.asarray(test_m["confusion"], dtype=np.float64))
 
+                val_extra = out.get("last_val_metrics") or {}
+                test_extra = out.get("last_test_metrics") or {}
+                fold_extra.append(
+                    {
+                        "val_calibration": val_extra.get("calibration"),
+                        "test_calibration": test_extra.get("calibration"),
+                        "val_moe_metrics": val_extra.get("moe_metrics"),
+                        "test_moe_metrics": test_extra.get("moe_metrics"),
+                        "val_f1_per_class": (
+                            val_extra.get("f1_per_class").tolist()
+                            if hasattr(val_extra.get("f1_per_class"), "tolist")
+                            else val_extra.get("f1_per_class")
+                        ),
+                        "test_f1_per_class": (
+                            test_extra.get("f1_per_class").tolist()
+                            if hasattr(test_extra.get("f1_per_class"), "tolist")
+                            else test_extra.get("f1_per_class")
+                        ),
+                    }
+                )
+
 
                 del model
                 cleanup_cuda()
@@ -203,6 +225,7 @@ def run_benchmark_fusion(config):
                 "cv_test_ens_acc": float(seed_test_metrics["acc"]),
                 "cv_test_ens_f1": float(seed_test_metrics["f1"]),
                 "cv_test_ens_confusion": aggregate_confusions([seed_test_cm]),
+                "fold_extra": fold_extra,
             }
             per_method_seed_records[method].append(record)
 

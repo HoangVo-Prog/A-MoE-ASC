@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import math
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -224,6 +225,7 @@ class HAGMoE(nn.Module):
     def maybe_update_group_temperature(
         self, *, epoch_idx: int | None, total_epochs: int | None
     ) -> None:
+        """Anneal group temperature if a schedule is configured."""
         spec = self.group_temperature_anneal
         if not spec or epoch_idx is None or total_epochs is None:
             return
@@ -312,6 +314,7 @@ class HAGMoE(nn.Module):
         h_aspect: torch.Tensor,
         aspect_mask_sent: torch.Tensor | None,
     ) -> torch.Tensor:
+        """Compute opinion representation via attention over sentence tokens."""
         q = self.opinion_q(h_sent_tokens)
         scores = (q * h_aspect.unsqueeze(1)).sum(dim=-1) / math.sqrt(q.size(-1))
 
@@ -327,6 +330,155 @@ class HAGMoE(nn.Module):
         h_opinion = torch.bmm(attn.unsqueeze(1), h_sent_tokens).squeeze(1)
         return h_opinion
 
+    def _fusion_concat(
+        self,
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        fusion_in = torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)
+        if self.hag_verbose_loss and not hasattr(self, "_fusion_debug_printed"):
+            self._fusion_debug_printed = True
+            print(f"[HAGMoE] fusion=concat input={tuple(fusion_in.shape)}")
+        return self.fusion_concat(fusion_in)
+
+    @staticmethod
+    def _fusion_add(
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        return rep_sent + h_aspect + h_opinion
+
+    @staticmethod
+    def _fusion_mul(
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        return rep_sent * h_aspect * h_opinion
+
+    def _fusion_cross(
+        self,
+        *,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        out_sent,
+        attention_mask_sent: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        q = h_aspect.unsqueeze(1)
+        kpm = attention_mask_sent.eq(0)
+        attn_out, _ = self.cross_attn(
+            q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
+        )
+        q_o = h_opinion.unsqueeze(1)
+        attn_out_o, _ = self.cross_attn(
+            q_o, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
+        )
+        return attn_out.squeeze(1) + attn_out_o.squeeze(1)
+
+    def _fusion_gated_concat(
+        self,
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        g = torch.sigmoid(self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)))
+        return g * rep_sent + (1 - g) * (0.5 * (h_aspect + h_opinion))
+
+    def _fusion_bilinear(
+        self,
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        **_: object,
+    ) -> torch.Tensor:
+        return self.bilinear_out(
+            self.bilinear_proj_sent(rep_sent)
+            * self.bilinear_proj_term(h_aspect)
+            * self.bilinear_proj_term(h_opinion)
+        )
+
+    def _fusion_coattn(
+        self,
+        *,
+        out_sent,
+        attention_mask_sent: torch.Tensor,
+        aspect_mask_sent: torch.Tensor | None,
+        **_: object,
+    ) -> torch.Tensor:
+        sent_tok = out_sent.last_hidden_state
+        term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
+
+        q_sent = sent_tok[:, 0:1, :]
+        kpm_sent = attention_mask_sent.eq(0)
+        kpm_term = term_attn_mask.eq(0) if term_attn_mask is not None else None
+
+        term_ctx, _ = self.coattn_term_to_sent(
+            term_tok, sent_tok, sent_tok, key_padding_mask=kpm_sent
+        )
+        if term_attn_mask is not None:
+            term_valid = term_attn_mask.float()
+            denom = term_valid.sum(dim=1, keepdim=True).clamp_min(1.0)
+            term_ctx = (term_ctx * term_valid.unsqueeze(-1)).sum(dim=1) / denom
+        else:
+            term_ctx = term_ctx.mean(dim=1)
+
+        sent_ctx, _ = self.coattn_sent_to_term(
+            q_sent, term_tok, term_tok, key_padding_mask=kpm_term
+        )
+        return term_ctx + sent_ctx.squeeze(1)
+
+    def _fusion_late_interaction(
+        self,
+        *,
+        rep_sent: torch.Tensor,
+        h_aspect: torch.Tensor,
+        h_opinion: torch.Tensor,
+        out_sent,
+        attention_mask_sent: torch.Tensor,
+        aspect_mask_sent: torch.Tensor | None,
+        **_: object,
+    ) -> torch.Tensor:
+        sent_tok = out_sent.last_hidden_state
+        term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
+
+        sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
+        term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
+
+        sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))
+        if attention_mask_sent is not None:
+            mask = attention_mask_sent.unsqueeze(1).eq(0)
+            sim = sim.masked_fill(mask.bool(), self._neg_inf(sim.dtype))
+        if term_attn_mask is not None:
+            term_mask = term_attn_mask.unsqueeze(-1).eq(0)
+            sim = sim.masked_fill(term_mask.bool(), self._neg_inf(sim.dtype))
+
+        max_sim = sim.max(dim=-1).values
+        if term_attn_mask is not None:
+            term_valid = term_attn_mask.float()
+            denom = term_valid.sum(dim=1).clamp_min(1.0)
+            pooled = (max_sim * term_valid).sum(dim=1) / denom
+            empty = term_valid.sum(dim=1).eq(0)
+            if torch.any(empty):
+                pooled = torch.where(empty, torch.ones_like(pooled), pooled)
+        else:
+            pooled = max_sim.mean(dim=1)
+
+        # TODO: consider a better calibrated fusion for late_interaction beyond scalar gating.
+        cond = self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1))
+        return cond * pooled.unsqueeze(-1)
+
     def build_fusion(
         self,
         *,
@@ -338,104 +490,36 @@ class HAGMoE(nn.Module):
         aspect_mask_sent: torch.Tensor | None,
         fusion_method: str,
     ) -> torch.Tensor:
+        """Dispatch fusion based on fusion_method."""
         fusion_method = fusion_method.lower().strip()
         rep_sent = h_sent
 
-        if fusion_method == "sent":
+        if fusion_method in {"sent", "term"}:
             raise ValueError(
                 "HAGMoE does not support fusion_method 'sent' or 'term'. "
                 "Use one of: concat, add, mul, cross, gated_concat, bilinear, coattn, late_interaction."
             )
-        elif fusion_method == "term":
-            raise ValueError(
-                "HAGMoE does not support fusion_method 'sent' or 'term'. "
-                "Use one of: concat, add, mul, cross, gated_concat, bilinear, coattn, late_interaction."
-            )
-        elif fusion_method == "concat":
-            fusion_in = torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)
-            if not hasattr(self, "_fusion_debug_printed"):
-                self._fusion_debug_printed = True
-                print(f"[HAGMoE] fusion=concat input={tuple(fusion_in.shape)}")
-            h_fused = self.fusion_concat(fusion_in)
-        elif fusion_method == "add":
-            h_fused = rep_sent + h_aspect + h_opinion
-        elif fusion_method == "mul":
-            h_fused = rep_sent * h_aspect * h_opinion
-        elif fusion_method == "cross":
-            q = h_aspect.unsqueeze(1)
-            kpm = attention_mask_sent.eq(0)
-            attn_out, _ = self.cross_attn(
-                q, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
-            )
-            q_o = h_opinion.unsqueeze(1)
-            attn_out_o, _ = self.cross_attn(
-                q_o, out_sent.last_hidden_state, out_sent.last_hidden_state, key_padding_mask=kpm
-            )
-            h_fused = attn_out.squeeze(1) + attn_out_o.squeeze(1)
-        elif fusion_method == "gated_concat":
-            g = torch.sigmoid(self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1)))
-            h_fused = g * rep_sent + (1 - g) * (0.5 * (h_aspect + h_opinion))
-        elif fusion_method == "bilinear":
-            h_fused = self.bilinear_out(
-                self.bilinear_proj_sent(rep_sent)
-                * self.bilinear_proj_term(h_aspect)
-                * self.bilinear_proj_term(h_opinion)
-            )
-        elif fusion_method == "coattn":
-            sent_tok = out_sent.last_hidden_state
-            term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
-
-            q_sent = sent_tok[:, 0:1, :]
-            kpm_sent = attention_mask_sent.eq(0)
-            kpm_term = term_attn_mask.eq(0) if term_attn_mask is not None else None
-
-            term_ctx, _ = self.coattn_term_to_sent(
-                term_tok, sent_tok, sent_tok, key_padding_mask=kpm_sent
-            )
-            if term_attn_mask is not None:
-                term_valid = term_attn_mask.float()
-                denom = term_valid.sum(dim=1, keepdim=True).clamp_min(1.0)
-                term_ctx = (term_ctx * term_valid.unsqueeze(-1)).sum(dim=1) / denom
-            else:
-                term_ctx = term_ctx.mean(dim=1)
-
-            sent_ctx, _ = self.coattn_sent_to_term(
-                q_sent, term_tok, term_tok, key_padding_mask=kpm_term
-            )
-            h_fused = term_ctx + sent_ctx.squeeze(1)
-        elif fusion_method == "late_interaction":
-            sent_tok = out_sent.last_hidden_state
-            term_tok, term_attn_mask = self._gather_aspect_tokens(sent_tok, aspect_mask_sent)
-
-            sent_tok = torch.nn.functional.normalize(sent_tok, p=2, dim=-1)
-            term_tok = torch.nn.functional.normalize(term_tok, p=2, dim=-1)
-
-            sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))
-            if attention_mask_sent is not None:
-                mask = attention_mask_sent.unsqueeze(1).eq(0)
-                sim = sim.masked_fill(mask.bool(), self._neg_inf(sim.dtype))
-            if term_attn_mask is not None:
-                term_mask = term_attn_mask.unsqueeze(-1).eq(0)
-                sim = sim.masked_fill(term_mask.bool(), self._neg_inf(sim.dtype))
-
-            max_sim = sim.max(dim=-1).values
-            if term_attn_mask is not None:
-                term_valid = term_attn_mask.float()
-                denom = term_valid.sum(dim=1).clamp_min(1.0)
-                pooled = (max_sim * term_valid).sum(dim=1) / denom
-                empty = term_valid.sum(dim=1).eq(0)
-                if torch.any(empty):
-                    pooled = torch.where(empty, torch.ones_like(pooled), pooled)
-            else:
-                pooled = max_sim.mean(dim=1)
-
-            # TODO: consider a better calibrated fusion for late_interaction beyond scalar gating.
-            cond = self.gate(torch.cat([rep_sent, h_aspect, h_opinion], dim=-1))
-            h_fused = cond * pooled.unsqueeze(-1)
-        else:
+        fusion_map = {
+            "concat": self._fusion_concat,
+            "add": self._fusion_add,
+            "mul": self._fusion_mul,
+            "cross": self._fusion_cross,
+            "gated_concat": self._fusion_gated_concat,
+            "bilinear": self._fusion_bilinear,
+            "coattn": self._fusion_coattn,
+            "late_interaction": self._fusion_late_interaction,
+        }
+        if fusion_method not in fusion_map:
             raise ValueError(f"Unsupported fusion_method: {fusion_method}")
 
-        return h_fused
+        return fusion_map[fusion_method](
+            rep_sent=rep_sent,
+            h_aspect=h_aspect,
+            h_opinion=h_opinion,
+            out_sent=out_sent,
+            attention_mask_sent=attention_mask_sent,
+            aspect_mask_sent=aspect_mask_sent,
+        )
 
     def route_group(self, h_fused: torch.Tensor) -> torch.Tensor:
         return self.group_router(h_fused)
@@ -474,23 +558,58 @@ class HAGMoE(nn.Module):
         aspect_end: torch.Tensor | None,
         aspect_mask_sent: torch.Tensor | None,
     ) -> torch.Tensor | None:
-        if aspect_mask_sent is not None:
-            return aspect_mask_sent
+        """Build aspect mask with fallbacks: provided -> span -> term match."""
+        mask = self._mask_from_provided(aspect_mask_sent)
+        if mask is not None:
+            return mask
 
-        if aspect_start is not None and aspect_end is not None:
-            start = aspect_start.to(device=input_ids_sent.device)
-            end = aspect_end.to(device=input_ids_sent.device)
-            if start.dim() == 0:
-                start = start.unsqueeze(0)
-            if end.dim() == 0:
-                end = end.unsqueeze(0)
-            L = input_ids_sent.size(1)
-            positions = torch.arange(L, device=input_ids_sent.device).unsqueeze(0)
-            mask = (positions >= start.unsqueeze(1)) & (positions < end.unsqueeze(1))
-            return mask.to(dtype=torch.long)
+        mask = self._mask_from_span(input_ids_sent, aspect_start, aspect_end)
+        if mask is not None:
+            return mask
 
         if input_ids_term is None:
             return None
+
+        return self._mask_from_term_match(
+            input_ids_sent=input_ids_sent,
+            attention_mask_sent=attention_mask_sent,
+            input_ids_term=input_ids_term,
+        )
+
+    @staticmethod
+    def _mask_from_provided(aspect_mask_sent: torch.Tensor | None) -> torch.Tensor | None:
+        if aspect_mask_sent is None:
+            return None
+        return aspect_mask_sent
+
+    @staticmethod
+    def _mask_from_span(
+        input_ids_sent: torch.Tensor,
+        aspect_start: torch.Tensor | None,
+        aspect_end: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if aspect_start is None or aspect_end is None:
+            return None
+
+        start = aspect_start.to(device=input_ids_sent.device)
+        end = aspect_end.to(device=input_ids_sent.device)
+        if start.dim() == 0:
+            start = start.unsqueeze(0)
+        if end.dim() == 0:
+            end = end.unsqueeze(0)
+        L = input_ids_sent.size(1)
+        positions = torch.arange(L, device=input_ids_sent.device).unsqueeze(0)
+        mask = (positions >= start.unsqueeze(1)) & (positions < end.unsqueeze(1))
+        return mask.to(dtype=torch.long)
+
+    def _mask_from_term_match(
+        self,
+        *,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Match term tokens inside sentence content span to build aspect mask."""
 
         cls_id = getattr(self.encoder.config, "cls_token_id", None)
         sep_id = getattr(self.encoder.config, "sep_token_id", None)
@@ -506,6 +625,7 @@ class HAGMoE(nn.Module):
             valid_len = int(sum(sent_mask))
             if valid_len <= 0:
                 continue
+            # Strip [CLS] token; stop at valid_len (exclude padding).
             content_start = 1
             content_end = valid_len
             if (
@@ -513,6 +633,7 @@ class HAGMoE(nn.Module):
                 and sep_id is not None
                 and sent_ids[content_end - 1] == sep_id
             ):
+                # Strip trailing [SEP] at the end of valid content.
                 content_end -= 1
             if content_end < content_start:
                 content_end = content_start
@@ -545,7 +666,7 @@ class HAGMoE(nn.Module):
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor], list[torch.Tensor]
     ]:
-        # Soft mixture over groups; all groups contribute to h_moe.
+        """Apply grouped experts with soft routing over groups."""
         group_logits = self.route_group(h_fused) / self.group_temperature
         p_group = torch.softmax(group_logits, dim=-1)
         if self.hag_verbose_loss and self.training and not hasattr(self, "_group_temp_logged"):
@@ -560,9 +681,7 @@ class HAGMoE(nn.Module):
             p_expert = torch.softmax(logits, dim=-1)
             p_expert_list.append(p_expert)
 
-            expert_outs = []
-            for expert in self.experts[g]:
-                expert_outs.append(expert(h_expert_in))
+            expert_outs = [expert(h_expert_in) for expert in self.experts[g]]
             expert_stack = torch.stack(expert_outs, dim=1)
             expert_outs_list.append(expert_stack)
 
@@ -583,6 +702,7 @@ class HAGMoE(nn.Module):
         aspect_mask_sent: torch.Tensor | None,
         fusion_method: str,
     ):
+        """Compute fused representation and conditioned expert input."""
         out_sent = self.encoder(input_ids=input_ids_sent, attention_mask=attention_mask_sent)
 
         h_sent = out_sent.last_hidden_state[:, 0, :]
@@ -631,7 +751,8 @@ class HAGMoE(nn.Module):
         aspect_mask_sent: torch.Tensor | None = None,
         labels=None,
         fusion_method: str = "concat",
-    ):
+    ) -> Dict[str, Any]:
+        """Forward pass returning logits and loss breakdowns."""
         out_sent, h_fused, h_aspect, h_expert_in, aspect_mask = self._compute_fused_and_cond(
             input_ids_sent=input_ids_sent,
             attention_mask_sent=attention_mask_sent,
@@ -664,8 +785,12 @@ class HAGMoE(nn.Module):
             expert_outs_list=expert_outs_list,
         )
         out["group_probs"] = p_group.detach()
+        out["moe_stats"] = {
+            "group_probs": p_group.detach(),
+            "expert_probs": [p.detach() for p in p_expert_list],
+        }
 
-        if self.training and self.hag_verbose_loss and labels is not None:
+        if self.training and self.hag_verbose_loss and labels is not None and self._should_print_debug():
             if not hasattr(self, "_expert_input_logged"):
                 print("[HAGMoE] expert_input=conditioned (h_cond)")
                 self._expert_input_logged = True
@@ -686,6 +811,14 @@ class HAGMoE(nn.Module):
 
         return out
 
+    def _should_print_debug(self) -> bool:
+        step = int(getattr(self, "_dbg_step", 50) or 50)
+        if step <= 0:
+            return False
+        count = int(getattr(self, "_dbg_counter", 0)) + 1
+        self._dbg_counter = count
+        return (count % step) == 0
+
     def _compute_loss(
         self,
         logits,
@@ -695,144 +828,25 @@ class HAGMoE(nn.Module):
         p_group: torch.Tensor | None = None,
         p_expert_list: list[torch.Tensor] | None = None,
         expert_outs_list: list[torch.Tensor] | None = None,
-    ):
+    ) -> Dict[str, Any]:
+        """Compute total loss and all auxiliary loss components."""
         if labels is None:
-            return {
-                "loss": None,
-                "logits": logits,
-                "loss_main": None,
-                "aux_loss": None,
-                "loss_group": None,
-                "loss_balance": None,
-                "loss_diversity": None,
-                "loss_entropy_raw": None,
-                "loss_entropy_used": None,
-                "loss_collapse_raw": None,
-                "loss_collapse_used": None,
-                "loss_group_raw": None,
-                "loss_balance_raw": None,
-                "loss_diversity_raw": None,
-                "loss_group_used": None,
-                "loss_balance_used": None,
-                "loss_diversity_used": None,
-                "loss_lambda": None,
-                "lambda_group": float(self.hag_lambda_group),
-                "lambda_balance": float(self.hag_lambda_balance),
-                "lambda_diversity": float(self.hag_lambda_diversity),
-                "lambda_entropy": float(self.router_entropy_weight),
-                "lambda_collapse": float(self.router_collapse_weight),
-                "mean_ent": None,
-                "ent_of_mean": None,
-                "group_mean": None,
-                "min_group_mean": None,
-                "collapse_tau": float(self.router_collapse_tau),
-                "enabled_flags": {
-                    "group": False,
-                    "balance": False,
-                    "diversity": False,
-                    "entropy": False,
-                    "collapse": False,
-                },
-            }
+            return self._empty_loss_outputs(logits)
 
-        if self.loss_type == "ce":
-            loss_main = F.cross_entropy(logits, labels)
-        elif self.loss_type == "weighted_ce":
-            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
-            loss_main = F.cross_entropy(logits, labels, weight=w)
-        elif self.loss_type == "focal":
-            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
-            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
-            loss_main = loss_fn(logits, labels)
-        else:
-            raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
-
-        loss_group = None
-        group_target = None
-        if self.hag_use_group_loss and group_logits is not None:
-            if self.labelid_to_groupid is None:
-                raise RuntimeError(
-                    "hag_use_group_loss=True but labelid_to_groupid is not set. "
-                    "Provide id2label/label2id in cfg."
-                )
-            group_target = self.labelid_to_groupid[labels]
-            loss_group = F.cross_entropy(group_logits, group_target)
-            if self.hag_verbose_loss and self.training:
-                counts = torch.bincount(group_target, minlength=self.num_groups)
-                print(
-                    "[HAGMoE] group_targets "
-                    f"min={int(group_target.min().item())} "
-                    f"max={int(group_target.max().item())} "
-                    f"counts={counts.tolist()}"
-                )
-
-        loss_balance = None
-        if p_expert_list is not None and len(p_expert_list) > 0:
-            # Switch-style load balance: N * sum_i f_i * P_i
-            losses = []
-            for g, p_expert in enumerate(p_expert_list):
-                if p_expert.numel() == 0:
-                    continue
-                p_mean = p_expert.mean(dim=0)
-                assign = torch.argmax(p_expert.detach(), dim=-1)
-                f = F.one_hot(assign, num_classes=p_expert.size(1)).float().mean(dim=0)
-                n_experts = p_expert.size(1)
-                balance_g = n_experts * torch.sum(f * p_mean)
-                if p_group is not None and p_group.numel() > 0 and g < p_group.size(1):
-                    w_g = p_group[:, g].mean().detach()
-                    balance_g = w_g * balance_g
-                losses.append(balance_g)
-            if losses:
-                if p_group is not None and p_group.numel() > 0:
-                    loss_balance = sum(losses)
-                else:
-                    loss_balance = sum(losses) / len(losses)
-
-        loss_diversity = None
-        div_pair_mean = None
-        div_pair_max = None
-        div_usage_stats = []
-        if expert_outs_list is not None and p_expert_list is not None:
-            losses = []
-            pair_means = []
-            pair_maxes = []
-            for expert_stack, p_expert in zip(expert_outs_list, p_expert_list):
-                if expert_stack is None or p_expert is None:
-                    continue
-                if expert_stack.dim() != 3:
-                    continue
-                bsz, n_experts, _ = expert_stack.shape
-                if n_experts < 2 or bsz == 0:
-                    continue
-                # Expert outputs: [B, E, d] -> normalize per sample.
-                z = F.normalize(expert_stack, p=2, dim=-1)
-                dot = torch.einsum("bed,bfd->bef", z, z).mean(dim=0)
-                dot = dot.clamp(min=-0.999, max=0.999)
-                offdiag = torch.triu(dot, diagonal=1)
-                offdiag_vals = offdiag[offdiag != 0]
-                if offdiag_vals.numel() == 0:
-                    continue
-
-                w = p_expert.mean(dim=0).detach()
-                div_usage_stats.append(
-                    {
-                        "w_mean": float(w.mean().item()),
-                        "w_min": float(w.min().item()),
-                        "w_max": float(w.max().item()),
-                    }
-                )
-                w_outer = torch.outer(w, w)
-                w_offdiag = torch.triu(w_outer, diagonal=1)
-                weighted = (w_offdiag * (offdiag ** 2)).sum()
-                num_pairs = max(n_experts * (n_experts - 1) // 2, 1)
-                losses.append(weighted / float(num_pairs))
-                pair_means.append(offdiag_vals.abs().mean())
-                pair_maxes.append(offdiag_vals.abs().max())
-
-            if losses:
-                loss_diversity = sum(losses) / len(losses)
-                div_pair_mean = sum(pair_means) / len(pair_means)
-                div_pair_max = max(pair_maxes)
+        loss_main = self._loss_main(logits, labels)
+        loss_group, _ = self._loss_group(group_logits, labels)
+        loss_balance = self._loss_balance(p_expert_list, p_group)
+        loss_diversity, div_pair_mean, div_pair_max, div_usage_stats = self._loss_diversity(
+            expert_outs_list, p_expert_list
+        )
+        (
+            loss_entropy,
+            mean_ent,
+            ent_of_mean,
+            group_mean,
+            min_group_mean,
+            loss_collapse,
+        ) = self._loss_entropy_collapse(p_group)
 
         lambda_group = float(self.hag_lambda_group) if self.hag_use_group_loss else 0.0
         lambda_balance = float(self.hag_lambda_balance) if self.hag_use_balance_loss else 0.0
@@ -843,27 +857,6 @@ class HAGMoE(nn.Module):
         use_group = loss_group is not None and lambda_group > 0.0
         use_balance = loss_balance is not None and lambda_balance > 0.0
         use_diversity = loss_diversity is not None and lambda_diversity > 0.0
-        mean_ent = None
-        loss_entropy = None
-        ent_of_mean = None
-        group_mean = None
-        min_group_mean = None
-        loss_collapse = None
-        if p_group is not None and p_group.numel() > 0:
-            p = p_group.clamp_min(1e-12)
-            mean_ent = -(p * p.log()).sum(dim=-1).mean()
-            if self.router_entropy_target is None:
-                loss_entropy = -mean_ent
-            else:
-                target = torch.as_tensor(
-                    float(self.router_entropy_target), device=mean_ent.device, dtype=mean_ent.dtype
-                )
-                loss_entropy = (mean_ent - target) ** 2
-            group_mean = p_group.mean(dim=0)
-            min_group_mean = group_mean.min()
-            mean_p = group_mean.clamp_min(1e-12)
-            ent_of_mean = -(mean_p * mean_p.log()).sum()
-            loss_collapse = F.relu(self.router_collapse_tau - min_group_mean).pow(2)
         use_entropy = loss_entropy is not None and lambda_entropy > 0.0
         use_collapse = loss_collapse is not None and lambda_collapse > 0.0
 
@@ -881,6 +874,247 @@ class HAGMoE(nn.Module):
 
         loss = loss_main + aux_loss
 
+        return self._pack_loss_outputs(
+            logits=logits,
+            loss=loss,
+            loss_main=loss_main,
+            aux_loss=aux_loss,
+            loss_group=loss_group,
+            loss_balance=loss_balance,
+            loss_diversity=loss_diversity,
+            loss_entropy=loss_entropy,
+            loss_collapse=loss_collapse,
+            lambda_group=lambda_group,
+            lambda_balance=lambda_balance,
+            lambda_diversity=lambda_diversity,
+            lambda_entropy=lambda_entropy,
+            lambda_collapse=lambda_collapse,
+            use_group=use_group,
+            use_balance=use_balance,
+            use_diversity=use_diversity,
+            use_entropy=use_entropy,
+            use_collapse=use_collapse,
+            mean_ent=mean_ent,
+            ent_of_mean=ent_of_mean,
+            group_mean=group_mean,
+            min_group_mean=min_group_mean,
+            div_pair_mean=div_pair_mean,
+            div_pair_max=div_pair_max,
+            div_usage_stats=div_usage_stats,
+        )
+
+    def _empty_loss_outputs(self, logits: torch.Tensor) -> Dict[str, Any]:
+        return {
+            "loss": None,
+            "logits": logits,
+            "loss_main": None,
+            "aux_loss": None,
+            "loss_group": None,
+            "loss_balance": None,
+            "loss_diversity": None,
+            "loss_entropy_raw": None,
+            "loss_entropy_used": None,
+            "loss_collapse_raw": None,
+            "loss_collapse_used": None,
+            "loss_group_raw": None,
+            "loss_balance_raw": None,
+            "loss_diversity_raw": None,
+            "loss_group_used": None,
+            "loss_balance_used": None,
+            "loss_diversity_used": None,
+            "loss_lambda": None,
+            "lambda_group": float(self.hag_lambda_group),
+            "lambda_balance": float(self.hag_lambda_balance),
+            "lambda_diversity": float(self.hag_lambda_diversity),
+            "lambda_entropy": float(self.router_entropy_weight),
+            "lambda_collapse": float(self.router_collapse_weight),
+            "mean_ent": None,
+            "ent_of_mean": None,
+            "group_mean": None,
+            "min_group_mean": None,
+            "collapse_tau": float(self.router_collapse_tau),
+            "enabled_flags": {
+                "group": False,
+                "balance": False,
+                "diversity": False,
+                "entropy": False,
+                "collapse": False,
+            },
+        }
+
+    def _loss_main(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        if self.loss_type == "ce":
+            return F.cross_entropy(logits, labels)
+        if self.loss_type == "weighted_ce":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            return F.cross_entropy(logits, labels, weight=w)
+        if self.loss_type == "focal":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
+            return loss_fn(logits, labels)
+        raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+
+    def _loss_group(
+        self, group_logits: torch.Tensor | None, labels: torch.Tensor
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if not self.hag_use_group_loss or group_logits is None:
+            return None, None
+        if self.labelid_to_groupid is None:
+            raise RuntimeError(
+                "hag_use_group_loss=True but labelid_to_groupid is not set. "
+                "Provide id2label/label2id in cfg."
+            )
+        group_target = self.labelid_to_groupid[labels]
+        loss_group = F.cross_entropy(group_logits, group_target)
+        if self.hag_verbose_loss and self.training and not hasattr(self, "_group_targets_logged"):
+            counts = torch.bincount(group_target, minlength=self.num_groups)
+            print(
+                "[HAGMoE] group_targets "
+                f"min={int(group_target.min().item())} "
+                f"max={int(group_target.max().item())} "
+                f"counts={counts.tolist()}"
+            )
+            self._group_targets_logged = True
+        return loss_group, group_target
+
+    @staticmethod
+    def _loss_balance(
+        p_expert_list: list[torch.Tensor] | None,
+        p_group: torch.Tensor | None,
+    ) -> Optional[torch.Tensor]:
+        if p_expert_list is None or len(p_expert_list) == 0:
+            return None
+        losses = []
+        for g, p_expert in enumerate(p_expert_list):
+            if p_expert.numel() == 0:
+                continue
+            p_mean = p_expert.mean(dim=0)
+            assign = torch.argmax(p_expert.detach(), dim=-1)
+            f = F.one_hot(assign, num_classes=p_expert.size(1)).float().mean(dim=0)
+            n_experts = p_expert.size(1)
+            balance_g = n_experts * torch.sum(f * p_mean)
+            if p_group is not None and p_group.numel() > 0 and g < p_group.size(1):
+                w_g = p_group[:, g].mean().detach()
+                balance_g = w_g * balance_g
+            losses.append(balance_g)
+        if not losses:
+            return None
+        if p_group is not None and p_group.numel() > 0:
+            return sum(losses)
+        return sum(losses) / len(losses)
+
+    @staticmethod
+    def _loss_diversity(
+        expert_outs_list: list[torch.Tensor] | None,
+        p_expert_list: list[torch.Tensor] | None,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], list]:
+        loss_diversity = None
+        div_pair_mean = None
+        div_pair_max = None
+        div_usage_stats = []
+        if expert_outs_list is None or p_expert_list is None:
+            return loss_diversity, div_pair_mean, div_pair_max, div_usage_stats
+
+        losses = []
+        pair_means = []
+        pair_maxes = []
+        for expert_stack, p_expert in zip(expert_outs_list, p_expert_list):
+            if expert_stack is None or p_expert is None:
+                continue
+            if expert_stack.dim() != 3:
+                continue
+            bsz, n_experts, _ = expert_stack.shape
+            if n_experts < 2 or bsz == 0:
+                continue
+            # Expert outputs: [B, E, d] -> normalize per sample.
+            z = F.normalize(expert_stack, p=2, dim=-1)
+            dot = torch.einsum("bed,bfd->bef", z, z).mean(dim=0)
+            dot = dot.clamp(min=-0.999, max=0.999)
+            offdiag = torch.triu(dot, diagonal=1)
+            offdiag_vals = offdiag[offdiag != 0]
+            if offdiag_vals.numel() == 0:
+                continue
+
+            w = p_expert.mean(dim=0).detach()
+            div_usage_stats.append(
+                {
+                    "w_mean": float(w.mean().item()),
+                    "w_min": float(w.min().item()),
+                    "w_max": float(w.max().item()),
+                }
+            )
+            w_outer = torch.outer(w, w)
+            w_offdiag = torch.triu(w_outer, diagonal=1)
+            weighted = (w_offdiag * (offdiag ** 2)).sum()
+            num_pairs = max(n_experts * (n_experts - 1) // 2, 1)
+            losses.append(weighted / float(num_pairs))
+            pair_means.append(offdiag_vals.abs().mean())
+            pair_maxes.append(offdiag_vals.abs().max())
+
+        if losses:
+            loss_diversity = sum(losses) / len(losses)
+            div_pair_mean = sum(pair_means) / len(pair_means)
+            div_pair_max = max(pair_maxes)
+        return loss_diversity, div_pair_mean, div_pair_max, div_usage_stats
+
+    def _loss_entropy_collapse(
+        self, p_group: torch.Tensor | None
+    ) -> tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        if p_group is None or p_group.numel() == 0:
+            return None, None, None, None, None, None
+        p = p_group.clamp_min(1e-12)
+        mean_ent = -(p * p.log()).sum(dim=-1).mean()
+        if self.router_entropy_target is None:
+            loss_entropy = -mean_ent
+        else:
+            target = torch.as_tensor(
+                float(self.router_entropy_target), device=mean_ent.device, dtype=mean_ent.dtype
+            )
+            loss_entropy = (mean_ent - target) ** 2
+        group_mean = p_group.mean(dim=0)
+        min_group_mean = group_mean.min()
+        mean_p = group_mean.clamp_min(1e-12)
+        ent_of_mean = -(mean_p * mean_p.log()).sum()
+        loss_collapse = F.relu(self.router_collapse_tau - min_group_mean).pow(2)
+        return loss_entropy, mean_ent, ent_of_mean, group_mean, min_group_mean, loss_collapse
+
+    def _pack_loss_outputs(
+        self,
+        *,
+        logits: torch.Tensor,
+        loss: torch.Tensor,
+        loss_main: torch.Tensor,
+        aux_loss: torch.Tensor,
+        loss_group: torch.Tensor | None,
+        loss_balance: torch.Tensor | None,
+        loss_diversity: torch.Tensor | None,
+        loss_entropy: torch.Tensor | None,
+        loss_collapse: torch.Tensor | None,
+        lambda_group: float,
+        lambda_balance: float,
+        lambda_diversity: float,
+        lambda_entropy: float,
+        lambda_collapse: float,
+        use_group: bool,
+        use_balance: bool,
+        use_diversity: bool,
+        use_entropy: bool,
+        use_collapse: bool,
+        mean_ent: torch.Tensor | None,
+        ent_of_mean: torch.Tensor | None,
+        group_mean: torch.Tensor | None,
+        min_group_mean: torch.Tensor | None,
+        div_pair_mean: torch.Tensor | None,
+        div_pair_max: torch.Tensor | None,
+        div_usage_stats: list,
+    ) -> Dict[str, Any]:
         loss_entropy_raw = loss_entropy.detach() if loss_entropy is not None else None
         if loss_entropy is not None:
             loss_entropy_used = loss_entropy.detach() * lambda_entropy
@@ -888,6 +1122,7 @@ class HAGMoE(nn.Module):
             loss_entropy_used = None
         if loss_entropy_used is None and lambda_entropy == 0.0:
             loss_entropy_used = torch.zeros((), device=logits.device)
+
         loss_collapse_raw = loss_collapse.detach() if loss_collapse is not None else None
         if loss_collapse is not None:
             loss_collapse_used = loss_collapse.detach() * lambda_collapse
@@ -944,7 +1179,8 @@ class HAGMoE(nn.Module):
         return torch.zeros((), device=next(self.parameters()).device)
 
     @torch.no_grad()
-    def print_moe_debug(self, topn: int = 3, eps_dead: float = 1e-6):
+    def print_moe_debug(self, topn: int = 3, eps_dead: float = 1e-6) -> None:
+        """Print lightweight routing statistics for debugging."""
         if not hasattr(self, "_last_group_probs") or not hasattr(self, "_last_expert_probs"):
             print("[HAGMoE] No routing stats yet.")
             return

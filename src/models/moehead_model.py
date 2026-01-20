@@ -1,4 +1,5 @@
 import math
+from typing import Optional, Dict, Any
 
 import torch
 import torch.nn.functional as F
@@ -263,7 +264,7 @@ class MoEHead(BaseModel):
             if moe is not None:
                 moe.router_jitter = float(self._jitter())
 
-        return super().forward(
+        out = super().forward(
             input_ids_sent=input_ids_sent,
             attention_mask_sent=attention_mask_sent,
             input_ids_term=input_ids_term,
@@ -271,6 +272,19 @@ class MoEHead(BaseModel):
             labels=labels,
             fusion_method=fusion_method,
         )
+        moe_stats = self._get_moe_stats()
+        if moe_stats is not None:
+            out["moe_stats"] = moe_stats
+        return out
+
+    def _get_moe_stats(self) -> Optional[Dict[str, Any]]:
+        moe = getattr(self.encoder, "moe_ffn", None)
+        if moe is None:
+            return None
+        logits = getattr(moe, "last_router_logits", None)
+        if logits is None:
+            return None
+        return {"router_logits": logits.detach()}
 
     def _collect_aux_loss(self):
         """Load-balancing loss for single MoE head"""
