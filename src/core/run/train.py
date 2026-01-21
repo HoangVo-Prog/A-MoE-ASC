@@ -76,7 +76,7 @@ def run_single_train_eval(config, method=None):
         train_cm = confusion_matrix(train_labels, train_preds, labels=list(range(num_classes)))
 
         print("\n" + "-" * 100)
-        print(f"[Seed {seed}] Best epoch: {out.get('best_epoch')}")
+        print(f"[Seed {seed}] Best epoch: {int(out.get('best_epoch')) + 1}")
         print(f"Train acc: {train_metrics['acc']:.4f} | Train f1: {train_metrics['f1']:.4f}")
         print("Train Confusion Matrix (normalized):")
         print_confusion_matrix(
