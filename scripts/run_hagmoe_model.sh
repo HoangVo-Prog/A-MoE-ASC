@@ -7,6 +7,12 @@ set -e
 LOSS_TYPE="${1:-ce}"
 DATASET_TYPE="${2:-laptop14}"
 
+# =========================
+# Script helpers
+# =========================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/_loss_params.sh"
+
 # Only support these dataset types
 case "${DATASET_TYPE}" in
   laptop14|lap14)
@@ -35,6 +41,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/logs"
 LOG_FILE="$LOG_DIR/hagmoe_model_${LOSS_TYPE}_${DATASET_TYPE}.log"
 USE_NOHUP="${USE_NOHUP:-1}"
+MODEL_NAME="${MODEL_NAME:-bert-base-uncased}"
+MODE="HAGMoE"
 export PYTHONPATH="$ROOT_DIR/src"
 mkdir -p "$LOG_DIR"
 TRAIN_PATH="$ROOT_DIR/data/${DATASET_TAG}_Train.json"
@@ -51,29 +59,24 @@ fi
 
 # =========================
 # Dataset-specific weights/gamma (ABSA 3-class)
-# Order: (Positive, Negative, Neutral)
+# Canonical order: (pos, neg, neu)
 # =========================
-CLASS_WEIGHTS=""
-FOCAL_GAMMA=""
-
-case "${DATASET_TYPE}" in
-  laptop14|lap14)
-    CLASS_WEIGHTS="0.74,0.84,1.42"
-    FOCAL_GAMMA="2.0"
-    ;;
-  rest14)
-    CLASS_WEIGHTS="0.4,1.1,1.5"
-    FOCAL_GAMMA="2.0"
-    ;;
-  rest15)
-    CLASS_WEIGHTS="0.4,1.1,1.5"
-    FOCAL_GAMMA="2.0"
-    ;;
-  rest16)
-    CLASS_WEIGHTS="0.4,1.1,1.5"
-    FOCAL_GAMMA="2.0"
-    ;;
-esac
+FUSION_METHOD="${FUSION_METHOD:-concat}"
+OUTPUT_DIR="$ROOT_DIR/results/${DATASET_TYPE}"
+OUTPUT_NAME="hagmoe_model_${LOSS_TYPE}.json"
+dataset_loss_params "${DATASET_TYPE}"
+COMMON_ARGS=(
+  --mode "${MODE}"
+  --debug_aspect_span
+  --model_name "${MODEL_NAME}"
+  --run_mode single
+  --fusion_method "${FUSION_METHOD}"
+  --output_dir "${OUTPUT_DIR}"
+  --output_name "${OUTPUT_NAME}"
+  --train_path "${TRAIN_PATH}"
+  --test_path "${TEST_PATH}"
+)
+confirm_label_order_and_build_weights "${COMMON_ARGS[@]}"
 
 # =========================
 # Loss-specific flags
@@ -96,8 +99,6 @@ case "${LOSS_TYPE}" in
     ;;
 esac
 
-FUSION_METHOD="${FUSION_METHOD:-concat}"
-
 if [[ "${FUSION_METHOD}" == "sent" || "${FUSION_METHOD}" == "term" ]]; then
   echo "❌ HAGMoE does not support fusion_method 'sent' or 'term'."
   echo "Use one of: concat, add, mul, cross, gated_concat, bilinear, coattn, late_interaction."
@@ -112,6 +113,8 @@ fi
 echo "▶ Running HAGMoE model with:"
 echo "  dataset_type   = ${DATASET_TYPE}"
 echo "  loss_type      = ${LOSS_TYPE}"
+echo "  class_weights  = ${CLASS_WEIGHTS}"
+echo "  focal_gamma    = ${FOCAL_GAMMA}"
 echo "  loss_flags     = ${LOSS_FLAGS}"
 echo "  fusion_method  = ${FUSION_METHOD}"
 echo
@@ -124,27 +127,11 @@ echo
 #   python -m main --run_mode single --train_path ... --test_path ... --epochs 1 --seed 42 --num_seeds 3
 if [[ "$USE_NOHUP" == "1" ]]; then
   nohup python -m main \
-  --mode HAGMoE \
-  --debug_aspect_span \
-  --model_name bert-base-uncased \
-  --run_mode single \
-  --fusion_method "${FUSION_METHOD}" \
-  --output_dir "$ROOT_DIR/results/${DATASET_TYPE}" \
-  --output_name hagmoe_model_${LOSS_TYPE}.json \
-  --train_path "$TRAIN_PATH" \
-  --test_path  "$TEST_PATH" \
+  "${COMMON_ARGS[@]}" \
   ${LOSS_FLAGS} \
   > "$LOG_FILE" 2>&1 &
 else
   python -m main \
-  --mode HAGMoE \
-  --debug_aspect_span \
-  --model_name bert-base-uncased \
-  --run_mode single \
-  --fusion_method "${FUSION_METHOD}" \
-  --output_dir "$ROOT_DIR/results/${DATASET_TYPE}" \
-  --output_name hagmoe_model_${LOSS_TYPE}.json \
-  --train_path "$TRAIN_PATH" \
-  --test_path  "$TEST_PATH" \
+  "${COMMON_ARGS[@]}" \
   ${LOSS_FLAGS}
 fi
