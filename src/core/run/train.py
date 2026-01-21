@@ -46,7 +46,7 @@ def run_single_train_eval(config, method=None):
         raw = str(raw_value or "").strip()
         if raw:
             raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
-    if not:
+    if not raw_methods:
         chosen = method or getattr(config, "fusion_method", None) or "default"
         raw_methods = [chosen]
 
@@ -275,29 +275,25 @@ def run_single_train_eval(config, method=None):
             "ensemble": ensemble_block,
         }
 
-    summary_path = os.path.join(config.output_dir, config.output_name)
-    combined = {
-        "mode": config.mode,
-        "loss_type": config.loss_type,
-        "methods": method_summaries,
-        "method_summaries": method_summaries,
-        "method_order": list(raw_methods),
-    }
-
     for fusion_method in raw_methods:
         method_summaries[fusion_method] = _run_for_method(fusion_method)
-        with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(combined, f, ensure_ascii=True, indent=2)
 
     if original_fusion is not None:
         config.fusion_method = original_fusion
 
+    summary_path = os.path.join(config.output_dir, config.output_name)
     if len(raw_methods) == 1:
         summary = method_summaries[raw_methods[0]]
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=True, indent=2)
         return summary
 
+    combined = {
+        "mode": config.mode,
+        "loss_type": config.loss_type,
+        "methods": method_summaries,
+        "method_order": list(raw_methods),
+    }
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(combined, f, ensure_ascii=True, indent=2)
 
