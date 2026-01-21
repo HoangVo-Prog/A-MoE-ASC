@@ -42,9 +42,6 @@ def run_single_train_eval(config, method=None):
     if bool(getattr(config, "benchmark_fusions", False)):
         raw = str(getattr(config, "benchmark_methods", "") or "")
         raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
-    if not raw_methods:
-        chosen = method or getattr(config, "fusion_method", None) or "default"
-        raw_methods = [chosen]
 
     num_classes = len(config.label2id)
     original_fusion = getattr(config, "fusion_method", None)
