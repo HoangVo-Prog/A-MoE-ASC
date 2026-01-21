@@ -67,7 +67,7 @@ dataset_loss_params "${DATASET_TYPE}"
 COMMON_ARGS=(
   --model_name "${MODEL_NAME}"
   --run_mode single
-  --fusion_method "${FUSION_METHOD}"
+  --benchmark_methods "${FUSION_METHOD}"
   --output_dir "${OUTPUT_DIR}"
   --output_name "${OUTPUT_NAME}"
   --train_path "${TRAIN_PATH}"
