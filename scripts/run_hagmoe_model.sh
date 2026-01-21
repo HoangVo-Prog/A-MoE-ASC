@@ -61,7 +61,7 @@ fi
 # Dataset-specific weights/gamma (ABSA 3-class)
 # Canonical order: (pos, neg, neu)
 # =========================
-FUSION_METHOD="${FUSION_METHOD:-concat}"
+FUSION_METHOD="${FUSION_METHOD:-concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction}"
 OUTPUT_DIR="$ROOT_DIR/results/${DATASET_TYPE}"
 OUTPUT_NAME="hagmoe_model_${LOSS_TYPE}.json"
 dataset_loss_params "${DATASET_TYPE}"
