@@ -1,0 +1,476 @@
+from __future__ import annotations
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from src.models.base_model import BaseModel
+from src.core.loss.focal_loss import FocalLoss
+
+
+class SDModel(BaseModel):
+    """
+    SDModel: MoE Semantic Deformation (dual-encode, CLS pooling)
+
+    Invariant:
+    - Freeze toàn bộ BERT encoder cứng ở model-level
+    - Gate per-instance: g in R^{B x K}
+    - Expert bank low-rank: A[K,d,r], B[K,r,d]
+    - Deform sentence tokens H_sent và aspect vector t (CLS term)
+    - Fusion baseline giữ nguyên, chỉ thay tensor đầu vào đúng mapping
+    - Output dict tương thích MoEHead để engine log nhánh moe không gãy
+    """
+
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        num_labels: int,
+        dropout: float,
+        head_type: str,
+        loss_type: str = "ce",
+        class_weights=None,
+        focal_gamma: float = 2.0,
+        # SD params
+        num_experts: int = 4,
+        sd_rank: int = 8,
+        sd_alpha: float = 16.0,
+        sd_lambda_bal: float = 0.01,
+        sd_lambda_div: float = 0.001,
+        router_temperature: float = 1.0,
+        router_bias: bool = True,
+        router_hidden_mult: float = 1.0,
+        router_entropy_weight: float = 0.0,
+        router_jitter: float = 0.0,
+        jitter_warmup_steps: int = 0,
+        jitter_end: float = 0.0,
+    ) -> None:
+        super().__init__(
+            model_name=model_name,
+            num_labels=num_labels,
+            dropout=dropout,
+            head_type=head_type,
+            loss_type=loss_type,
+            class_weights=class_weights,
+            focal_gamma=focal_gamma,
+        )
+
+        # Store SD hyperparams
+        self.num_experts = int(num_experts)
+        self.sd_rank = int(sd_rank)
+        self.sd_alpha = float(sd_alpha)
+        self.sd_lambda_bal = float(sd_lambda_bal)
+        self.sd_lambda_div = float(sd_lambda_div)
+        self.router_temperature = float(router_temperature)
+        self.router_bias = bool(router_bias)
+        
+        self.router_entropy_weight = float(router_entropy_weight)
+        self.router_jitter = float(router_jitter)
+        self.jitter_warmup_steps = int(jitter_warmup_steps)
+        self.jitter_end = float(jitter_end)
+
+        # router step counter (không cần optimizer biết, chỉ để schedule jitter)
+        self.register_buffer("_router_step", torch.zeros((), dtype=torch.long), persistent=False)
+
+
+        # Hard-freeze BERT encoder
+        self._freeze_encoder_hard()
+
+        # Router and expert bank
+        d = int(self.encoder.config.hidden_size)
+        router_hidden = max(1, int(d * float(router_hidden_mult)))
+
+        self.router = nn.Sequential(
+            nn.Linear(2 * d, router_hidden, bias=self.router_bias),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(router_hidden, self.num_experts, bias=self.router_bias),
+        )
+
+        # A: [K, d, r] zeros init
+        self.A = nn.Parameter(torch.zeros(self.num_experts, d, self.sd_rank))
+
+        # B: [K, r, d] small random init
+        b = torch.empty(self.num_experts, self.sd_rank, d, dtype=torch.float32)
+        nn.init.normal_(b, mean=0.0, std=0.02)
+        self.B = nn.Parameter(b.to(dtype=self.A.dtype))
+
+    def _get_jitter_sigma(self) -> float:
+        """Return current jitter sigma for router logits."""
+        sigma0 = float(self.router_jitter)
+        sigma_end = float(self.jitter_end)
+
+        if sigma0 <= 0.0:
+            return 0.0
+
+        step = int(self._router_step.item())
+        warm = int(self.jitter_warmup_steps)
+
+        # Trước warmup: dùng sigma0 để tăng exploration
+        if warm <= 0:
+            return sigma0
+
+        if step < warm:
+            return sigma0
+
+        # Sau warmup: dùng sigma_end (có thể = 0.0 hoặc nhỏ)
+        return sigma_end
+
+    # Engine checks hasattr(model, "_collect_aux_loss") to enable MoE logging
+    def _collect_aux_loss(self) -> bool:
+        return True
+
+    def _freeze_encoder_hard(self) -> None:
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+        self.encoder.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if hasattr(self, "encoder"):
+            self.encoder.eval()
+        return self
+
+    def _compute_gate(self, *, t: torch.Tensor, s: torch.Tensor):
+        x = torch.cat([t, s], dim=-1)  # [B, 2d]
+        u = self.router(x)             # [B, K]
+
+        # Router jitter: chỉ bật khi training
+        if self.training:
+            sigma = self._get_jitter_sigma()
+            if sigma > 0.0:
+                u = u + torch.randn_like(u) * sigma
+            # tăng step sau mỗi forward train
+            self._router_step += 1
+
+        tau = float(self.router_temperature) if self.router_temperature is not None else 1.0
+        g = torch.softmax(u / tau, dim=-1)
+        return u, g
+
+
+
+    def _deform_sentence_tokens(self, *, H_sent: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
+        # H_sent: [B, Ls, d], g: [B, K]
+        # HB = einsum("bld,krd->blkr", H_sent, B) -> [B, Ls, K, r]
+        HB = torch.einsum("bld,krd->blkr", H_sent, self.B)
+        # delta = einsum("blkr,kdr->blkd", HB, A) -> [B, Ls, K, d]
+        delta = torch.einsum("blkr,kdr->blkd", HB, self.A)
+        # weight gate and sum over experts
+        g_exp = g[:, None, :, None]  # [B, 1, K, 1]
+        delta_w = (g_exp * delta).sum(dim=2)  # [B, Ls, d]
+        scale = float(self.sd_alpha) / float(self.sd_rank)
+        return H_sent + (scale * delta_w)
+
+    def _deform_aspect_vec(self, *, t: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
+        # t: [B, d], g: [B, K]
+        # tB = einsum("bd,krd->bkr") -> [B, K, r]
+        tB = torch.einsum("bd,krd->bkr", t, self.B)
+        # tAB = einsum("bkr,kdr->bkd") -> [B, K, d]
+        tAB = torch.einsum("bkr,kdr->bkd", tB, self.A)
+        # weight gate and sum
+        g_term = g[:, :, None]  # [B, K, 1]
+        t_delta = (g_term * tAB).sum(dim=1)  # [B, d]
+        scale = float(self.sd_alpha) / float(self.sd_rank)
+        return t + (scale * t_delta)
+
+    def _loss_balancing(self, g: torch.Tensor) -> torch.Tensor:
+        # g: [B, K]
+        p = g.mean(dim=0)  # [K]
+        target = 1.0 / float(self.num_experts)
+        return ((p - target) ** 2).sum()
+
+    def _loss_diversity(self) -> torch.Tensor:
+        # A: [K, d, r]
+        K = self.num_experts
+        A_flat = self.A.reshape(K, -1)  # [K, d*r]
+        M = A_flat @ A_flat.t()         # [K, K]
+        M_off = M - torch.diag(torch.diag(M))
+        return (M_off ** 2).sum()
+
+    def forward(
+        self,
+        input_ids_sent: torch.Tensor,
+        attention_mask_sent: torch.Tensor,
+        input_ids_term: torch.Tensor,
+        attention_mask_term: torch.Tensor,
+        labels=None,
+        fusion_method: str = "concat",
+    ):
+        # 1) Encode (frozen)
+        self.encoder.eval()
+        with torch.no_grad():
+            out_sent = self.encoder(input_ids=input_ids_sent, attention_mask=attention_mask_sent, return_dict=True)
+            out_term = self.encoder(input_ids=input_ids_term, attention_mask=attention_mask_term, return_dict=True)
+
+        H_sent = out_sent.last_hidden_state  # [B, Ls, d]
+        H_term = out_term.last_hidden_state  # [B, Lt, d]
+
+        s = H_sent[:, 0, :]  # [B, d]
+        t = H_term[:, 0, :]  # [B, d]
+
+        # 2) Gate 
+        u, g = self._compute_gate(t=t, s=s)
+        self.last_router_logits = u.detach()
+        self.last_gate = g.detach()
+        moe_stats = {"router_probs": g.detach(), "router_logits": u.detach()}
+        
+        loss_entropy = None
+        if self.router_entropy_weight > 0.0:
+            # entropy H(p) = -sum p log p
+            # muốn gate mềm hơn => maximize entropy => add (-H) vào loss (minimize)
+            eps = 1e-12
+            ent = -(g * (g + eps).log()).sum(dim=-1).mean()  # scalar
+            loss_entropy = -ent  # negative entropy so minimizing encourages higher entropy
+
+
+        # 3) Deform
+        H_sent_tilde = self._deform_sentence_tokens(H_sent=H_sent, g=g)  # [B, Ls, d]
+        t_tilde = self._deform_aspect_vec(t=t, g=g)                      # [B, d]
+
+        cls_sent_tilde = H_sent_tilde[:, 0, :]  # [B, d]
+        cls_term_tilde = t_tilde                # [B, d]
+
+        fm = fusion_method.lower().strip()
+
+        # 4) Fusion baseline mapping (match BaseModel, replace tensors)
+        if fm == "sent":
+            logits = self.head_single(self.dropout(cls_sent_tilde))
+
+        elif fm == "term":
+            logits = self.head_single(self.dropout(cls_term_tilde))
+
+        elif fm == "concat":
+            logits = self.head_concat(self.dropout(torch.cat([cls_sent_tilde, cls_term_tilde], dim=-1)))
+
+        elif fm == "add":
+            logits = self.head_single(self.dropout(cls_sent_tilde + cls_term_tilde))
+
+        elif fm == "mul":
+            logits = self.head_single(self.dropout(cls_sent_tilde * cls_term_tilde))
+
+        elif fm == "cross":
+            q = cls_term_tilde.unsqueeze(1)  # [B, 1, d]
+            kpm = attention_mask_sent.eq(0)
+            attn_out, _ = self.cross_attn(q, H_sent_tilde, H_sent_tilde, key_padding_mask=kpm)
+            logits = self.head_single(self.dropout(attn_out.squeeze(1)))
+
+        elif fm == "gated_concat":
+            gate_val = torch.sigmoid(self.gate(torch.cat([cls_sent_tilde, cls_term_tilde], dim=-1)))
+            fused = gate_val * cls_sent_tilde + (1 - gate_val) * cls_term_tilde
+            logits = self.head_single(self.dropout(fused))
+
+        elif fm == "bilinear":
+            fused = self.bilinear_out(
+                self.bilinear_proj_sent(cls_sent_tilde) * self.bilinear_proj_term(cls_term_tilde)
+            )
+            logits = self.head_single(self.dropout(fused))
+
+        elif fm == "coattn":
+            # Sentence tokens deform, term tokens keep original H_term, CLS term replaced by t_tilde
+            q_term = cls_term_tilde.unsqueeze(1)  # [B, 1, d]
+            q_sent = cls_sent_tilde.unsqueeze(1)  # [B, 1, d]
+            kpm_sent = attention_mask_sent.eq(0)
+            kpm_term = attention_mask_term.eq(0)
+
+            term_ctx, _ = self.coattn_term_to_sent(q_term, H_sent_tilde, H_sent_tilde, key_padding_mask=kpm_sent)
+            sent_ctx, _ = self.coattn_sent_to_term(q_sent, H_term, H_term, key_padding_mask=kpm_term)
+
+            logits = self.head_single(self.dropout(term_ctx.squeeze(1) + sent_ctx.squeeze(1)))
+
+        elif fm == "late_interaction":
+            # Sentence tokens deform, term tokens keep original
+            sent_tok = F.normalize(H_sent_tilde, p=2, dim=-1)
+            term_tok = F.normalize(H_term, p=2, dim=-1)
+
+            sim = torch.matmul(term_tok, sent_tok.transpose(1, 2))  # [B, Lt, Ls]
+
+            if attention_mask_sent is not None:
+                mask = attention_mask_sent.unsqueeze(1).eq(0)  # [B, 1, Ls]
+                sim = sim.masked_fill(mask.bool(), torch.finfo(sim.dtype).min)
+
+            max_sim = sim.max(dim=-1).values  # [B, Lt]
+
+            if attention_mask_term is not None:
+                term_valid = attention_mask_term.float()
+                denom = term_valid.sum(dim=1).clamp_min(1.0)
+                pooled = (max_sim * term_valid).sum(dim=1) / denom  # [B]
+            else:
+                pooled = max_sim.mean(dim=1)
+
+            cond = self.gate(torch.cat([cls_sent_tilde, cls_term_tilde], dim=-1))  # [B, d]
+            fused = cond * pooled.unsqueeze(-1)
+            logits = self.head_single(self.dropout(fused))
+
+        else:
+            raise ValueError(f"Unsupported fusion_method: {fusion_method}")
+
+        # 5) If no labels, inference only
+        if labels is None:
+            return {"loss": None, "logits": logits, "moe_stats": moe_stats}
+
+        # 6) Main loss (match BaseModel)
+        if self.loss_type == "ce":
+            loss_main = F.cross_entropy(logits, labels)
+
+        elif self.loss_type == "weighted_ce":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_main = F.cross_entropy(logits, labels, weight=w)
+
+        elif self.loss_type == "focal":
+            w = self.class_weights.to(device=logits.device, dtype=logits.dtype)
+            loss_fn = FocalLoss(gamma=self.focal_gamma, alpha=w, reduction="mean")
+            loss_main = loss_fn(logits, labels)
+
+        else:
+            raise RuntimeError(f"Unexpected loss_type: {self.loss_type}")
+
+        # 7) Aux loss (SD)
+        loss_bal = self._loss_balancing(g)
+        loss_div = self._loss_diversity()
+        aux_loss = (
+            self.sd_lambda_bal * loss_bal
+            + self.sd_lambda_div * loss_div
+        )
+
+        if loss_entropy is not None:
+            aux_loss = aux_loss + self.router_entropy_weight * loss_entropy
+
+        loss_total = loss_main + aux_loss
+
+        # 8) Debug stats
+        eps = 1e-12
+        gate_entropy_mean = (-(g.clamp_min(eps) * g.clamp_min(eps).log()).sum(dim=-1)).mean()
+        p_k = g.mean(dim=0).detach()
+
+        # 9) Output dict compatible with engine MoE logging
+        return {
+            "loss": loss_total,
+            "logits": logits,
+            "loss_main": loss_main,
+            "aux_loss": aux_loss,
+            "loss_lambda": aux_loss,
+            "loss_bal": loss_bal.detach(),
+            "loss_div": loss_div.detach(),
+            "gate_entropy_mean": gate_entropy_mean.detach(),
+            "p_k": p_k,
+            "moe_stats": moe_stats,
+        }
+            
+    def _sd_debug_stats(self):
+        if not hasattr(self, "last_gate") or self.last_gate is None:
+            return None
+        if not hasattr(self, "last_router_logits") or self.last_router_logits is None:
+            return None
+
+        probs = self.last_gate  # [B, K]
+        logits = self.last_router_logits  # [B, K]
+        B, E = probs.shape
+
+        # usage_hard: mean one-hot(argmax)
+        top1 = probs.argmax(dim=-1)  # [B]
+        usage_hard = torch.bincount(top1, minlength=E).float()
+        usage_hard = usage_hard / usage_hard.sum().clamp_min(1e-12)
+
+        # usage_soft: mean probs
+        usage_soft = probs.mean(dim=0)
+        usage_soft = usage_soft / usage_soft.sum().clamp_min(1e-12)
+
+        # entropies
+        ent_full = -(probs * (probs + 1e-12).log()).sum(dim=-1).mean()
+        ent_full_norm = ent_full / math.log(E)
+
+        ent_hard = -(usage_hard * (usage_hard + 1e-12).log()).sum()
+        ent_hard_norm = ent_hard / math.log(E)
+
+        ent_soft = -(usage_soft * (usage_soft + 1e-12).log()).sum()
+        ent_soft_norm = ent_soft / math.log(E)
+
+        # logits stats
+        logits2 = logits.float()
+        logits_std = float(logits2.std(unbiased=False).item())
+        logits_maxabs = float(logits2.abs().max().item())
+
+        # gap top1 top2 (from logits, not probs)
+        top2 = torch.topk(logits2, k=min(2, E), dim=-1).values
+        if top2.size(-1) >= 2:
+            gap = float((top2[:, 0] - top2[:, 1]).mean().item())
+        else:
+            gap = 0.0
+
+        max_hard = float(usage_hard.max().item())
+        min_hard = float(usage_hard.min().item())
+        max_soft = float(usage_soft.max().item())
+        min_soft = float(usage_soft.min().item())
+
+        def _cv(p: torch.Tensor) -> float:
+            mu = p.mean().clamp_min(1e-12)
+            return float((p.std(unbiased=False) / mu).item())
+
+        return {
+            "layer": -1,
+            "H_full_norm": float(ent_full_norm.item()),
+            "H_hard_norm": float(ent_hard_norm.item()),
+            "H_soft_norm": float(ent_soft_norm.item()),
+            "logits_std": logits_std,
+            "logits_maxabs": logits_maxabs,
+            "gap_top1_top2": gap,
+            "usage_hard": usage_hard.detach(),
+            "usage_soft": usage_soft.detach(),
+            "max_hard": max_hard,
+            "min_hard": min_hard,
+            "max_soft": max_soft,
+            "min_soft": min_soft,
+            "cv_hard": _cv(usage_hard),
+            "cv_soft": _cv(usage_soft),
+        }
+
+    def print_moe_debug(self, topn: int = 3, bottomn: int = 3, eps_dead: float = 1e-6):
+        s = self._sd_debug_stats()
+        if s is None:
+            print("[MoE] No stats yet.")
+            return
+
+        print("\n[MoE Debug - Single Head]")
+        uh = s["usage_hard"].float()
+        us = s["usage_soft"].float()
+
+        dead_h0 = int((uh == 0).sum().item())
+        dead_h = int((uh < eps_dead).sum().item())
+        dead_s0 = int((us == 0).sum().item())
+        dead_s = int((us < eps_dead).sum().item())
+
+        topk = min(topn, uh.numel())
+        botk = min(bottomn, uh.numel())
+
+        topv_h, topi_h = torch.topk(uh, k=topk, largest=True)
+        botv_h, boti_h = torch.topk(uh, k=botk, largest=False)
+        topv_s, topi_s = torch.topk(us, k=topk, largest=True)
+        botv_s, boti_s = torch.topk(us, k=botk, largest=False)
+
+        top_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_h, topi_h)])
+        bot_pairs_h = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_h, boti_h)])
+        top_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(topv_s, topi_s)])
+        bot_pairs_s = " ".join([f"e{int(i)}={float(v):.6f}" for v, i in zip(botv_s, boti_s)])
+
+        imb_h = float(s["max_hard"] / (s["min_hard"] + 1e-12))
+        imb_s = float(s["max_soft"] / (s["min_soft"] + 1e-12))
+
+        print(
+            f"MoE Head | "
+            f"H_full={s['H_full_norm']:.6f} H_soft={s['H_soft_norm']:.6f} H_hard={s['H_hard_norm']:.6f} | "
+            f"logits_std={s['logits_std']:.6f} maxabs={s['logits_maxabs']:.6f} gap12={s['gap_top1_top2']:.6f}"
+        )
+        print(
+            f"  HARD: min={s['min_hard']:.6f} max={s['max_hard']:.6f} cv={s['cv_hard']:.3f} imb={imb_h:.2f} "
+            f"dead(==0)={dead_h0} dead(<{eps_dead:g})={dead_h}"
+        )
+        print(f"    top: {top_pairs_h}")
+        print(f"    bot: {bot_pairs_h}")
+        print(
+            f"  SOFT: min={s['min_soft']:.6f} max={s['max_soft']:.6f} cv={s['cv_soft']:.3f} imb={imb_s:.2f} "
+            f"dead(==0)={dead_s0} dead(<{eps_dead:g})={dead_s}"
+        )
+        print(f"    top: {top_pairs_s}")
+        print(f"    bot: {bot_pairs_s}")
+        print()
