@@ -132,16 +132,23 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
     mode_name = mode or os.path.basename(os.path.normpath(input_dir))
     methods = _list_dirs(input_dir)
     method_summaries: Dict[str, Any] = {}
+    all_loss_types: List[str] = []
 
     for method in methods:
         method_dir = os.path.join(input_dir, method)
         loss_types = _list_dirs(method_dir)
         if not loss_types:
             continue
+        for loss_type in loss_types:
+            if loss_type not in all_loss_types:
+                all_loss_types.append(loss_type)
         if len(loss_types) == 1:
             loss_type = loss_types[0]
             loss_dir = os.path.join(method_dir, loss_type)
-            method_summaries[method] = _build_summary(mode_name, method, loss_type, loss_dir)
+            method_summaries[method] = {
+                **_build_summary(mode_name, method, loss_type, loss_dir),
+                "loss_type_order": [loss_type],
+            }
         else:
             per_loss: Dict[str, Any] = {}
             for loss_type in loss_types:
@@ -151,12 +158,14 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
                 "mode": mode_name,
                 "method": method,
                 "loss_types": per_loss,
+                "loss_type_order": loss_types,
             }
 
     combined = {
         "mode": mode_name,
         "methods": method_summaries,
         "method_order": methods,
+        "loss_type_order": all_loss_types,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:
