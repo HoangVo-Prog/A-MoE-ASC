@@ -34,7 +34,7 @@ class Config:
 
     freeze_epochs: int = 3
     rolling_k: int = 3
-    early_stop_patience: int = 5
+    early_stop_patience: int = 8
 
     # ====== Run mode ======
     mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoFModel","SDModel","SDMoEDirModel","HAGMoE"
