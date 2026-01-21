@@ -39,14 +39,24 @@ def run_single_train_eval(config, method=None):
     )
 
     raw_methods = []
-    raw = str(getattr(config, "benchmark_methods", "") or "")
-    raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
+    raw_value = getattr(config, "benchmark_methods", "")
+    if isinstance(raw_value, (list, tuple)):
+        raw_methods = [str(m).strip() for m in raw_value if str(m).strip()]
+    else:
+        raw = str(raw_value or "").strip()
+        if raw:
+            raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
+    if not:
+        chosen = method or getattr(config, "fusion_method", None) or "default"
+        raw_methods = [chosen]
 
     num_classes = len(config.label2id)
     original_fusion = getattr(config, "fusion_method", None)
     method_summaries = {}
     
     print(f"Running {raw_methods}:")
+    if not raw_methods:
+        raise ValueError("No benchmark methods resolved; check benchmark_methods input.")
 
     def _run_for_method(fusion_method: str) -> dict:
         config.fusion_method = fusion_method
@@ -174,7 +184,7 @@ def run_single_train_eval(config, method=None):
 
             del model
             cleanup_cuda()
-
+            
         accs = [float(r["acc"]) for r in per_seed_records]
         f1s = [float(r["f1"]) for r in per_seed_records]
         acc_mean, acc_std = mean_std(accs)
@@ -265,25 +275,29 @@ def run_single_train_eval(config, method=None):
             "ensemble": ensemble_block,
         }
 
+    summary_path = os.path.join(config.output_dir, config.output_name)
+    combined = {
+        "mode": config.mode,
+        "loss_type": config.loss_type,
+        "methods": method_summaries,
+        "method_summaries": method_summaries,
+        "method_order": list(raw_methods),
+    }
+
     for fusion_method in raw_methods:
         method_summaries[fusion_method] = _run_for_method(fusion_method)
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(combined, f, ensure_ascii=True, indent=2)
 
     if original_fusion is not None:
         config.fusion_method = original_fusion
 
-    summary_path = os.path.join(config.output_dir, config.output_name)
     if len(raw_methods) == 1:
         summary = method_summaries[raw_methods[0]]
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=True, indent=2)
         return summary
 
-    combined = {
-        "mode": config.mode,
-        "loss_type": config.loss_type,
-        "methods": method_summaries,
-        "method_order": list(raw_methods),
-    }
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(combined, f, ensure_ascii=True, indent=2)
 
