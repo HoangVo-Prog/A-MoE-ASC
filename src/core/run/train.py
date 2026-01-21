@@ -39,9 +39,8 @@ def run_single_train_eval(config, method=None):
     )
 
     raw_methods = []
-    if bool(getattr(config, "benchmark_fusions", False)):
-        raw = str(getattr(config, "benchmark_methods", "") or "")
-        raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
+    raw = str(getattr(config, "benchmark_methods", "") or "")
+    raw_methods = [m.strip() for m in raw.split(",") if m.strip()]
 
     num_classes = len(config.label2id)
     original_fusion = getattr(config, "fusion_method", None)
