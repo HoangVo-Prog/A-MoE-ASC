@@ -63,7 +63,7 @@ fi
 # =========================
 FUSION_METHOD="${FUSION_METHOD:-concat,add,mul,cross,gated_concat,bilinear,coattn,late_interaction}"
 OUTPUT_DIR="$ROOT_DIR/results/${DATASET_TYPE}"
-OUTPUT_NAME="hagmoe_model_${LOSS_TYPE}.json"
+OUTPUT_NAME="hagmoe_model_${DATASET_TYPE}_${LOSS_TYPE}.json"
 dataset_loss_params "${DATASET_TYPE}"
 COMMON_ARGS=(
   --mode "${MODE}"

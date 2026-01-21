@@ -156,7 +156,6 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
     combined = {
         "mode": mode_name,
         "methods": method_summaries,
-        "method_summaries": method_summaries,
         "method_order": methods,
     }
 

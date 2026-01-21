@@ -63,7 +63,7 @@ fi
 # =========================
 FUSION_METHOD="${FUSION_METHOD:-spc}"
 OUTPUT_DIR="$ROOT_DIR/results/${DATASET_TYPE}"
-OUTPUT_NAME="bert_spc_model_${LOSS_TYPE}.json"
+OUTPUT_NAME="bert_spc_model_${DATASET_TYPE}_${LOSS_TYPE}.json"
 dataset_loss_params "${DATASET_TYPE}"
 COMMON_ARGS=(
   --mode "${MODE}"
