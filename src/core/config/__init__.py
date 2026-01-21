@@ -9,8 +9,8 @@ from typing import Optional, Sequence, get_type_hints, get_origin, get_args, Uni
 class Config:
     # ====== Core / data ======
     model_name: str = "bert-base-uncased"
-    train_path: str = "dataset/atsa/laptop14/train.json"
-    test_path: str = "dataset/atsa/laptop14/test.json"
+    train_path: str = ""
+    test_path: str = ""
     max_len_sent: int = 36
     max_len_term: int = 4
     num_labels: int = 3
@@ -34,7 +34,7 @@ class Config:
 
     freeze_epochs: int = 3
     rolling_k: int = 3
-    early_stop_patience: int = 8
+    early_stop_patience: int = 5
 
     # ====== Run mode ======
     mode: str = "BaseModel"  # "BaseModel","MoEFFN","MoEHead","MultiMoe","MoESkconnection","MoFModel","SDModel","SDMoEDirModel","HAGMoE"
