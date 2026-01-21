@@ -7,3 +7,4 @@ from .mof_model import MoFModel
 from .sd_model import SDModel
 from .sdmoedir_model import SDMoEDirModel
 from .hagmoe_model import HAGMoE
+from .bert_spc_model import BERTSPCModel

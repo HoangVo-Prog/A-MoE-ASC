@@ -1,209 +1,92 @@
+# Codex Prompt: Add a New ATSC Model (Minimal Integration)
 
-# AGENTS.md
+## Goal
+Add a new model class to this repo so it can be selected by CLI via `--mode <NewModelName>`, and it trains/evals using the existing pipeline unchanged.
 
-## Role
+We only want minimal integration:
+1) Create a new model file under `src/models/` (e.g., `src/models/new_model.py`)
+2) Export the class from `src/models/__init__.py`
+No other training/engine logic should be modified unless absolutely necessary to keep compatibility.
 
-You are a Coding Agent responsible for refactoring the training pipeline of this repository.
+## Constraints
+- DO NOT change training loop logic in `src/core/run/engine.py`.
+- The new model must work with existing `helper.get_model(cfg)` behavior:
+  - `cfg.mode` is a class name exported from `src.models`
+  - kwargs are built by signature matching from Config flattened dict
+- Keep the forward contract consistent with BaseModel for non-HAG models:
+  forward(
+    input_ids_sent,
+    attention_mask_sent,
+    input_ids_term,
+    attention_mask_term,
+    labels=None,
+    fusion_method="concat",
+  ) -> Dict with keys:
+    - "loss": torch.Tensor or None
+    - "logits": torch.Tensor [B, num_labels]
+  Optional keys are allowed, but must not break the loop.
 
-The dataset format has changed: **only two splits exist (train and test)**.  
-The goal is to **unify all training modes into a single training workflow** that:
+- Loss behavior must follow existing conventions:
+  - support `loss_type in {"ce","weighted_ce","focal"}`
+  - use `class_weights` if weighted_ce/focal is selected
 
-- Trains on the train split
-- Evaluates on the test split
-- Repeats the process across multiple seeds to measure stability
-- Saves metrics and artifacts in a **benchmark-like format**
+## Implementation Steps (DO THESE IN ORDER)
 
-You must work incrementally and preserve backward compatibility where possible.
+### Step 1: Create new model file
+- Create `src/models/new_model.py`.
+- Define `class NewModel(nn.Module)` (use the exact class name you plan to pass via `--mode`).
+- Follow BaseModel-style init signature so Config can populate args automatically.
+  Recommended init signature:
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        num_labels: int,
+        dropout: float,
+        head_type: str,
+        loss_type: str = "ce",
+        class_weights=None,
+        focal_gamma: float = 2.0,
+        # plus any new params you want to introduce (must also exist in Config or have defaults)
+    ) -> None:
 
----
+- Inside init:
+  - load encoder via `AutoModel.from_pretrained(model_name)`
+  - build head(s) similarly to BaseModel (reuse build_head pattern or copy minimal)
+  - store loss configs and register_buffer("class_weights", ...) like BaseModel
+  - validate loss_type and class_weights requirements
 
-## High-Level Goal
+- In forward:
+  - run encoder on sent + term inputs
+  - compute fused representation however you want (NEW logic here)
+  - compute logits [B, num_labels]
+  - return dict: {"loss": loss or None, "logits": logits}
 
-Replace the current fragmented run logic (benchmark, kfold, full-only) with a **single multi-seed train–test pipeline**, while:
+- Implement a private `_compute_loss(logits, labels)` helper like BaseModel to support ce/weighted_ce/focal.
 
-- Reusing existing training, evaluation, logging, and artifact utilities
-- Keeping model code untouched
-- Preserving metric schemas similar to `benchmarks.py`
+### Step 2: Export in src/models/__init__.py
+- Add:
+  from .new_model import NewModel
+- Ensure the class name matches CLI usage (cfg.mode must equal "NewModel").
 
----
+### Step 3: Quick smoke checks (no training code changes)
+Add a minimal local import test (no unit tests framework needed):
+- Ensure `from src.models import NewModel` works.
+- Ensure `helper.get_model(cfg)` can instantiate when cfg.mode="NewModel".
+  - Do NOT edit helper.py unless import fails due to naming.
 
-## Non-Goals
+## Notes about Config
+- New init parameters must either:
+  (a) already exist in Config, OR
+  (b) have safe defaults in the model __init__ signature.
+- Do not add new Config fields in this task unless absolutely required.
 
-You must **NOT**:
+## Deliverables
+- `src/models/new_model.py` containing NewModel implementation
+- `src/models/__init__.py` updated to export NewModel
+- No other files changed.
 
-- Modify model architectures or forward signatures
-- Change `get_model()` logic
-- Break batch key contracts expected by `engine.py`
-- Remove legacy functions (benchmark or kfold), unless explicitly instructed
-
----
-
-## Core Design Principles
-
-1. **Single Run Path**  
-   The default execution path must be:
-
-train → test (per epoch) → best checkpoint → final test eval
-repeated across seeds
-
-
-2. **Multi-Seed Stability Evaluation**  
-All experiments must:
-- Run across multiple seeds
-- Aggregate mean and std of metrics
-- Optionally compute ensemble results by averaging logits
-
-3. **Benchmark-Style Outputs**  
-Even without kfold or val:
-- Metrics, confusion matrices, calibration, MoE metrics
-- Must follow the same structure as benchmark outputs
-- Must be saved per seed and aggregated across seeds
-
-4. **Minimal Invasiveness**  
-Prefer reuse over rewriting.
-Touch only what is necessary to support train–test-only logic.
-
----
-
-## Phased Implementation Plan
-
-### Phase 1: Configuration Cleanup
-
-- Introduce a unified run mode (e.g. `run_mode="single"` or `single_run=True`)
-- Normalize seed handling:
-- Always expose `cfg.seed_list`
-- If not provided, derive from `cfg.seed` and `cfg.num_seeds`
-- Deprecate reliance on validation- or kfold-specific flags in default runs
-- Ensure missing `val_path` does not raise errors
-
-**Definition of Done**
-- Running `main.py` without extra flags triggers single-run multi-seed training
-
----
-
-### Phase 2: Dataset and Dataloader Contract
-
-- `get_dataset()` must return only `(train_set, test_set)`
-- `get_dataloader()` must allow `val_loader=None`
-- `datasets.py` must:
-- Support the new JSON format
-- Map label fields robustly (sentiment, polarity, label, etc.)
-- Provide all required batch keys for:
- - Standard modes
- - HAGMoE (aspect spans, masks, debug fields if available)
-- Debug-only fields must be optional and safely ignored if missing
-
-**Definition of Done**
-- `engine._forward_step()` never crashes due to missing batch keys
-- HAGMoE debug utilities run without errors when enabled
-
----
-
-### Phase 3: Engine Best-Checkpoint Logic (Test-Based)
-
-Current behavior:
-- Best checkpoint is selected using validation metrics
-
-New required behavior:
-- If `val_loader is None` and `test_loader is provided`:
-- Use **test macro F1** for best checkpoint selection
-- Preserve neutral-class constraint if currently enforced
-- Allow early stopping based on test metrics
-
-This change must be implemented inside `engine.run_training_loop`.
-
-**Definition of Done**
-- `best_state_dict` and `best_epoch` are set even without validation
-- Early stopping works correctly in train–test-only mode
-
----
-
-### Phase 4: Unified Multi-Seed Runner
-
-Implement a new runner (e.g. `run_single_train_eval`) that:
-
-For each seed:
-1. Set seed
-2. Build model via `get_model()`
-3. Call `engine.run_training_loop` with:
-- `train_loader=train_loader`
-- `val_loader=None`
-- `test_loader=test_loader`
-4. Load best checkpoint
-5. Collect test logits
-6. Compute:
-- acc, macro F1, per-class F1
-- confusion matrix (raw and normalized)
-- calibration (ECE, reliability bins)
-- MoE metrics and routing summaries if available
-7. Save per-seed artifacts using `save_artifacts`
-
-After all seeds:
-- Aggregate metrics:
-- mean and std
-- aggregated confusion matrices
-- aggregated calibration and MoE metrics if supported
-- Optionally compute ensemble logits across seeds
-- Save:
-- aggregated artifacts (`seed="avg"`)
-- ensemble artifacts if enabled
-- a final summary JSON similar to benchmark output
-
-**Definition of Done**
-- Output structure mirrors benchmark runs
-- Multi-seed stability is visible in saved artifacts
-
----
-
-### Phase 5: Main Entry Simplification
-
-- Update `main.py` to:
-- Default to unified single-run pipeline
-- Keep legacy benchmark and kfold paths optional and explicit
-- Update `src/core/run/__init__.py` to export the new runner
-
-**Definition of Done**
-- Default CLI execution uses the new pipeline
-- Legacy code paths remain import-safe
-
----
-
-## Output and Artifact Requirements
-
-Each run must save:
-
-- Per-seed artifacts:
-- acc, f1, f1_per_class
-- confusion matrix (raw and normalized)
-- calibration
-- moe_metrics (if any)
-- Aggregated artifacts:
-- mean and std across seeds
-- aggregated confusion matrices
-- Optional ensemble results:
-- ensemble metrics
-- ensemble confusion matrix
-
-Directory structure must remain consistent with existing artifact conventions:
-```
-
-output_dir /
-mode /
-method /
-loss_type /
-seed_x /
-fold_full /
-test /
-
-```
-
----
-
-## Definition of Done (Global)
-
-- Single-run multi-seed pipeline works end-to-end
-- No model code changes required
-- Artifacts and summaries are comparable to previous benchmark outputs
-- HAGMoE and non-MoE modes both run without special casing
-- Codebase remains backward compatible and import-safe
-
+## Acceptance Criteria
+- Running with `--mode NewModel` builds the model successfully.
+- Forward pass returns {"loss","logits"} and training loop runs without key errors.
+- Loss_type behavior matches existing rules: ce / weighted_ce / focal.
