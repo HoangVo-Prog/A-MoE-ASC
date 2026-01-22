@@ -112,7 +112,9 @@ class SeqMoELogits(nn.Module):
                     continue
                 x_e = x[mask]
                 y_e = self.experts[e_int](x_e)  # [n_e, C]
-                out[mask] = out[mask] + y_e * w_j[mask]
+                if y_e.dtype != out.dtype:
+                    y_e = y_e.to(out.dtype)
+                out[mask] = out[mask] + y_e * w_j[mask].to(out.dtype)
 
         out = self.dropout(out)
         return out
