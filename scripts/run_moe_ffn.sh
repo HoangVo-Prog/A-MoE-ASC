@@ -74,6 +74,7 @@ COMMON_ARGS=(
   --output_name "${OUTPUT_NAME}"
   --train_path "${TRAIN_PATH}"
   --test_path "${TEST_PATH}"
+  --early_stop_patience 3
   --route_mask_pad_tokens
 )
 confirm_label_order_and_build_weights "${COMMON_ARGS[@]}"
