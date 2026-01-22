@@ -469,7 +469,7 @@ class HAGMoE(nn.Module):
             term_valid = term_attn_mask.float()
             weights = torch.softmax(max_sim, dim=-1)
             weights = weights * term_valid
-            denom = weights.sum(dim=1).clamp_min(1.0)
+            denom = weights.sum(dim=1, keepdim=True).clamp_min(1.0)
             weights = weights / denom
         else:
             weights = torch.softmax(max_sim, dim=-1)
