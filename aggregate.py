@@ -1,8 +1,9 @@
 import argparse
+import glob
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -107,9 +108,6 @@ def _build_summary(mode: str, method: str, loss_type: str, loss_dir: str) -> Dic
     ensemble_block = _collect_ensemble(loss_dir)
 
     return {
-        "mode": mode,
-        "method": method,
-        "loss_type": loss_type,
         "seeds": seeds,
         "runs": per_seed_records,
         "summary": {
@@ -146,6 +144,7 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
             loss_type = loss_types[0]
             loss_dir = os.path.join(method_dir, loss_type)
             method_summaries[method] = {
+                "loss_type": loss_type,
                 **_build_summary(mode_name, method, loss_type, loss_dir),
                 "loss_type_order": [loss_type],
             }
@@ -155,8 +154,6 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
                 loss_dir = os.path.join(method_dir, loss_type)
                 per_loss[loss_type] = _build_summary(mode_name, method, loss_type, loss_dir)
             method_summaries[method] = {
-                "mode": mode_name,
-                "method": method,
                 "loss_types": per_loss,
                 "loss_type_order": loss_types,
             }
@@ -174,26 +171,63 @@ def aggregate_results(input_dir: str, mode: Optional[str], output_path: str) -> 
     return combined
 
 
+def _is_glob(path: str) -> bool:
+    return any(ch in path for ch in ("*", "?", "["))
+
+
+def _resolve_input_dirs(input_path: str, batch: bool) -> List[str]:
+    if _is_glob(input_path):
+        candidates = glob.glob(input_path)
+        return sorted([p for p in candidates if _is_dir(p)])
+    if batch:
+        return [os.path.join(input_path, d) for d in _list_dirs(input_path)]
+    return [input_path]
+
+
+def _output_path_for_input(input_dir: str, output_path: Optional[str]) -> str:
+    if output_path:
+        return output_path
+    model_name = os.path.basename(os.path.normpath(input_dir))
+    dataset_type = os.path.basename(os.path.normpath(os.path.dirname(input_dir)))
+    filename = f"{model_name}_{dataset_type}.json"
+    return os.path.join(input_dir, filename)
+
+
+def aggregate_many(input_path: str, mode: Optional[str], output_path: Optional[str], batch: bool) -> None:
+    input_dirs = _resolve_input_dirs(input_path, batch)
+    if not input_dirs:
+        raise FileNotFoundError(f"No input directories matched: {input_path}")
+
+    for input_dir in input_dirs:
+        resolved_output = _output_path_for_input(input_dir, output_path if len(input_dirs) == 1 else None)
+        aggregate_results(input_dir, mode, resolved_output)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate per-method results into a combined JSON.")
     parser.add_argument(
         "--input",
         required=True,
-        help="Input folder (e.g., results/laptop14/HAGMoE)",
+        help="Input folder or glob (e.g., results/laptop14/HAGMoE or results/laptop14/*)",
     )
     parser.add_argument(
         "--output",
-        default="results.json",
-        help="Output JSON path (default: results.json)",
+        default=None,
+        help="Output JSON path (default: {model_name}_{dataset_type}.json in the input folder)",
     )
     parser.add_argument(
         "--mode",
         default=None,
         help="Override mode name (default: basename of input)",
     )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="Process all immediate subfolders of --input",
+    )
     args = parser.parse_args()
 
-    aggregate_results(args.input, args.mode, args.output)
+    aggregate_many(args.input, args.mode, args.output, args.batch)
 
 
 if __name__ == "__main__":
