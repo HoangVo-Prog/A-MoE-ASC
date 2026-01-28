@@ -119,6 +119,10 @@ def extract_metrics(input_root: str, dataset: Optional[str]) -> None:
         if not rows:
             continue
         output_path = os.path.join(dataset_dir, f"{dataset_name}_summary.md")
+        
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        
         _write_markdown(rows, output_path)
 
 
