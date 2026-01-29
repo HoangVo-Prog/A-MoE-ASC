@@ -52,7 +52,6 @@ def json_to_csv(json_path: Path, output_csv: Path, fields: Sequence[str] = FIELD
 
     all_methods = sort_methods(list(set(summary) | set(ensemble)))
     rows = []
-
     for method in all_methods:
         row = {"method": method}
 

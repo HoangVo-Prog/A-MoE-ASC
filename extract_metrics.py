@@ -39,12 +39,12 @@ def _format_mean_std(mean_val: Any, std_val: Any) -> str:
         std_f = float(std_val)
     except (TypeError, ValueError):
         return "NA"
-    return f"{mean_f:.3f}±{std_f:.3f}"
+    return f"{mean_f:.4f}±{std_f:.4f}"
 
 
 def _format_float(val: Any) -> str:
     try:
-        return f"{float(val):.3f}"
+        return f"{float(val):.4f}"
     except (TypeError, ValueError):
         return "NA"
 
