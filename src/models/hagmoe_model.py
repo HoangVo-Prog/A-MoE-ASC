@@ -682,6 +682,21 @@ class HAGMoE(nn.Module):
                     nonzero = (p_group > 0).sum(dim=-1)
                     if torch.any(nonzero > self.router_topk_groups):
                         raise AssertionError("HAGMoE top-k routing: more than k groups are non-zero.")
+                if self.hag_verbose_loss and not hasattr(self, "_topk_logged"):
+                    self._topk_logged = True
+                    with torch.no_grad():
+                        gm_raw = p_group_raw.mean(dim=0)
+                        gm_used = p_group.mean(dim=0)
+                        nz = (p_group > 0).sum(dim=-1).float()
+                        print(
+                            "[HAGMoE][TopK] "
+                            f"k={self.router_topk_groups} "
+                            f"group_mean_raw="
+                            f"{' '.join([f'g{i}={gm_raw[i].item():.6f}' for i in range(gm_raw.numel())])} "
+                            f"group_mean_topk="
+                            f"{' '.join([f'g{i}={gm_used[i].item():.6f}' for i in range(gm_used.numel())])} "
+                            f"nonzero_groups_mean={nz.mean().item():.2f}"
+                        )
         else:
             p_group = p_group_raw
         if self.hag_verbose_loss and self.training and not hasattr(self, "_group_temp_logged"):
