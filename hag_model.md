@@ -124,6 +124,11 @@ Mục tiêu:
 
 Group mang ý nghĩa **polarity-aware** (positive, negative, neutral).
 
+**Top-k soft routing (group-level, recommended for ATSC HAGMoE):**
+Set `cfg.model.hagmoe.router_topk_groups=2` to keep the top-2 group probabilities per sample,
+zero the rest, and renormalize so the selected groups still sum to 1. This preserves probabilistic
+mixing while preventing group routing collapse. Use `router_topk_groups=0` to disable.
+
 ### 6.2 Expert Router (per group)
 
 Với mỗi group `g`:
@@ -231,4 +236,3 @@ model.print_moe_debug()
   * Tránh uniform routing
   * Tránh expert collapse
   * Khuyến khích specialization có kiểm soát
-

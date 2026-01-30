@@ -222,6 +222,8 @@ def _map_legacy_keys(cfg: Any) -> Dict[str, Any]:
         hag["experts_per_group"] = flat.get("hag_experts_per_group")
     if "hag_router_temperature" in flat:
         hag["router_temperature"] = flat.get("hag_router_temperature")
+    if "hag_router_topk_groups" in flat:
+        hag["router_topk_groups"] = flat.get("hag_router_topk_groups")
     if "hag_group_temperature" in flat:
         hag["group_temperature"] = flat.get("hag_group_temperature")
     if "hag_group_temperature_anneal" in flat:
@@ -332,13 +334,17 @@ def validate_hagmoe(cfg: Dict[str, Any]) -> None:
     num_groups = int(hag.get("num_groups", 0))
     if num_groups < 2:
         raise ValueError("HAGMoE requires cfg.model.hagmoe.num_groups >= 2")
-    top_k = hag.get("top_k")
-    if top_k is None:
-        top_k = cfg.get("moe", {}).get("router", {}).get("top_k")
-    if top_k is not None:
-        top_k = int(top_k)
-        if top_k >= 2 and top_k > num_groups:
-            raise ValueError("HAGMoE requires top_k <= num_groups for group routing")
+    top_k_groups = hag.get("router_topk_groups")
+    if top_k_groups is None:
+        top_k_groups = hag.get("top_k")
+    if top_k_groups is None:
+        top_k_groups = cfg.get("moe", {}).get("router", {}).get("top_k")
+    if top_k_groups is not None:
+        top_k_groups = int(top_k_groups)
+        if top_k_groups < 0:
+            raise ValueError("HAGMoE requires router_topk_groups >= 0")
+        if top_k_groups > 0 and top_k_groups > num_groups:
+            raise ValueError("HAGMoE requires router_topk_groups <= num_groups for group routing")
     norm = hag.get("top_k_normalization") or cfg.get("moe", {}).get("router", {}).get(
         "top_k_normalization"
     )

@@ -12,7 +12,7 @@ from transformers import AutoModel
 from src.core.loss.focal_loss import FocalLoss
 from src.models.components.heads import build_head
 from src.models.components.experts import FFNExpert
-from src.models.components.gating import gated_fusion_three, topk_soft_routing
+from src.models.components.gating import gated_fusion_three, topk_renorm
 from src.models.components.fusion import bilinear_fusion_three
 from src.models.components.pooling import masked_mean
 
@@ -106,10 +106,13 @@ class HAGMoE(nn.Module):
         self.router_entropy_target = moe_cfg.get("router", {}).get("entropy_target")
         self.router_collapse_weight = float(moe_cfg.get("router", {}).get("collapse_weight", 0.0))
         self.router_collapse_tau = float(moe_cfg.get("router", {}).get("collapse_tau", 0.02))
-        self.hag_top_k = int(hag_cfg.get("top_k") or moe_cfg.get("router", {}).get("top_k") or 0)
-        self.hag_top_k_norm = str(
-            hag_cfg.get("top_k_normalization") or moe_cfg.get("router", {}).get("top_k_normalization") or "renorm"
-        ).strip().lower()
+        router_topk_groups = hag_cfg.get("router_topk_groups")
+        if router_topk_groups is None:
+            router_topk_groups = hag_cfg.get("top_k")
+        if router_topk_groups is None:
+            router_topk_groups = moe_cfg.get("router", {}).get("top_k")
+        self.router_topk_groups = int(router_topk_groups) if router_topk_groups is not None else 0
+        self.router_topk_apply_in_eval = bool(hag_cfg.get("router_topk_apply_in_eval", True))
         self.hag_verbose_loss = bool(hag_cfg.get("verbose_loss", False))
 
         cfg = getattr(self.encoder, "config", None)
@@ -664,14 +667,21 @@ class HAGMoE(nn.Module):
         """Apply grouped experts with soft routing over groups."""
         group_logits = self.route_group(h_fused) / self.group_temperature
         p_group_raw = torch.softmax(group_logits, dim=-1)
-        if self.hag_top_k >= 2:
-            # Enforce soft top-k routing to prevent expert collapse.
-            p_group = topk_soft_routing(
-                p_group_raw,
-                top_k=self.hag_top_k,
-                normalization=self.hag_top_k_norm,
-                logits=group_logits,
-            )
+        apply_topk = self.router_topk_groups > 0 and (self.training or self.router_topk_apply_in_eval)
+        if apply_topk:
+            # Top-k soft routing at group level: mask + renormalize to preserve probability simplex.
+            # Example (G=3, k=2): [0.6, 0.3, 0.1] -> [0.6, 0.3, 0.0] -> [0.6667, 0.3333, 0.0]
+            p_group = topk_renorm(p_group_raw, self.router_topk_groups)
+            if self.hag_verbose_loss and not hasattr(self, "_topk_checked"):
+                self._topk_checked = True
+                with torch.no_grad():
+                    sums = p_group.sum(dim=-1)
+                    ones = torch.ones_like(sums)
+                    if not torch.allclose(sums, ones, atol=1e-4, rtol=1e-4):
+                        raise AssertionError("HAGMoE top-k routing: group probs do not sum to 1.")
+                    nonzero = (p_group > 0).sum(dim=-1)
+                    if torch.any(nonzero > self.router_topk_groups):
+                        raise AssertionError("HAGMoE top-k routing: more than k groups are non-zero.")
         else:
             p_group = p_group_raw
         if self.hag_verbose_loss and self.training and not hasattr(self, "_group_temp_logged"):
