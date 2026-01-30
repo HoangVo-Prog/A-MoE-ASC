@@ -1237,6 +1237,20 @@ class HAGMoE(nn.Module):
         )
         group_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(group_mean)])
         print("\n[HAGMoE Debug - Grouped Router]")
+        if self.router_topk_groups > 0 and hasattr(self, "_last_group_probs_raw"):
+            raw = getattr(self, "_last_group_probs_raw", None)
+            if raw is not None and torch.is_tensor(raw) and raw.numel() > 0:
+                gm_raw = raw.mean(dim=0).detach().cpu()
+                gm_used = group_mean
+                nz = (group_probs > 0).sum(dim=-1).float().mean().item()
+                raw_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(gm_raw)])
+                used_pairs = " ".join([f"g{gi}={float(p):.6f}" for gi, p in enumerate(gm_used)])
+                print(
+                    f"  topk_groups={int(self.router_topk_groups)} "
+                    f"group_mean_raw: {raw_pairs} "
+                    f"group_mean_topk: {used_pairs} "
+                    f"nonzero_groups_mean={nz:.2f}"
+                )
         print(f"  group_mean: {group_pairs}")
         print(f"  ent_of_mean: {ent_of_mean:.6f}")
         print(f"  mean_ent: {mean_ent:.6f}")
