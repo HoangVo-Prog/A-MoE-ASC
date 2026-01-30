@@ -64,6 +64,9 @@ def _iter_rows(model_name: str, data: Dict[str, Any]) -> Iterable[Dict[str, str]
 def _row(model: str, method: str, loss: str, loss_data: Dict[str, Any]) -> Dict[str, str]:
     summary = loss_data.get("summary", {})
     ensemble = loss_data.get("ensemble", {}) or {}
+    f1_mean = summary.get("f1_mean")
+    f1_std = summary.get("f1_std")
+    f1_max = summary.get("f1_max")
 
     return {
         "Model": model,
@@ -77,6 +80,9 @@ def _row(model: str, method: str, loss: str, loss_data: Dict[str, Any]) -> Dict[
         "F1 max": _format_float(summary.get("f1_max")),
         "Ensemble acc": _format_float(ensemble.get("metrics", {}).get("acc")),
         "Ensemble f1": _format_float(ensemble.get("metrics", {}).get("f1")),
+        "_f1_mean": f1_mean,
+        "_f1_std": f1_std,
+        "_f1_max": f1_max,
     }
 
 
@@ -104,7 +110,7 @@ def _write_markdown(rows: List[Dict[str, str]], output_path: str) -> None:
         f.write("\n".join(lines) + "\n")
 
 
-def extract_metrics(input_root: str, dataset: Optional[str]) -> None:
+def extract_metrics(input_root: str, dataset: Optional[str], sort_f1: str) -> None:
     datasets = [dataset] if dataset else _list_dirs(input_root)
     for dataset_name in datasets:
         dataset_dir = os.path.join(input_root, dataset_name)
@@ -118,6 +124,16 @@ def extract_metrics(input_root: str, dataset: Optional[str]) -> None:
             rows.extend(_iter_rows(model_name, data))
         if not rows:
             continue
+        sort_key = "_f1_mean" if sort_f1 == "mean" else "_f1_max"
+        rows.sort(
+            key=lambda r: (
+                r.get("Model", ""),
+                -(float(r[sort_key]) if r.get(sort_key) is not None else float("-inf")),
+                float(r["_f1_std"]) if r.get("_f1_std") is not None else float("inf"),
+                r.get("Loss", ""),
+                r.get("Method", ""),
+            )
+        )
         output_path = os.path.join(dataset_dir, f"{dataset_name}_summary.md")
         
         if os.path.isfile(output_path):
@@ -138,9 +154,15 @@ def main() -> None:
         default=None,
         help="Optional dataset folder name (e.g., laptop14)",
     )
+    parser.add_argument(
+        "--sort-f1",
+        choices=["mean", "max"],
+        default="mean",
+        help="Sort rows within each Model by F1 mean or F1 max (default: mean).",
+    )
     args = parser.parse_args()
 
-    extract_metrics(args.input, args.dataset)
+    extract_metrics(args.input, args.dataset, args.sort_f1)
 
 
 if __name__ == "__main__":
